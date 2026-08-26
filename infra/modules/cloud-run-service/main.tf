@@ -34,7 +34,6 @@ resource "google_artifact_registry_repository" "repo" {
 resource "google_cloud_run_v2_service" "this" {
   name             = var.service_name
   location         = var.gcp_region
-  custom_audiences = var.custom_audiences
   deletion_protection = false
 
   template {
@@ -229,7 +228,7 @@ resource "google_service_account_iam_member" "run_sa_act_as_self" {
 # Firebase Hosting proxies the frontend's /api/** rewrites without attaching
 # credentials, so this service must accept unauthenticated invocations.
 # Authorization is enforced in the application by backend/src/auth/auth_guard.py,
-# which verifies the ID token and checks IDENTITY_PLATFORM_ALLOWED_ORGS.
+# which verifies the Okta token and derives roles from its `groups` claim.
 resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
   name     = google_cloud_run_v2_service.this.name
   location = google_cloud_run_v2_service.this.location

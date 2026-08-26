@@ -120,6 +120,7 @@ The backend follows a **Modular, Feature-Driven Architecture**, heavily inspired
 | **Cloud Provider** | Google Cloud Platform (GCP)                              |
 | **Deployment**     | Cloud Run (for backend), Firebase Hosting (for frontend) |
 | **AI Models**      | Imagen, Veo, Gemini (via Vertex AI SDK)                  |
+| **Authentication** | Okta (OIDC authorization code flow with PKCE)            |
 
 ### Dependencies
 
@@ -127,6 +128,13 @@ Regarding the dependencies of the APIs and Services we’ll use (the Google APIs
 
 - `Github Account` (You must have a Github Account to fork the repository)
 - `Google Cloud Account` (A GCP Project)
+- `Okta tenant` with an OIDC Single-Page Application for Creative Studio.
+  Access is governed by Okta app assignment and group membership rather than
+  by an email domain, so the app must be assigned to the
+  `Creative Studio Users`, `Creative Studio PortalAdmins` and
+  `Creative Studio Workflows` groups, and its ID token must carry a `groups`
+  claim filtered on `Starts with` `Creative Studio `. The bootstrap script
+  prompts for the issuer and client ID.
 
 ---
 
@@ -138,8 +146,6 @@ Regarding the dependencies of the APIs and Services we’ll use (the Google APIs
 - `firebase.googleapis.com` (Firebase)
 - `sqladmin.googleapis.com` (Cloud SQL)
 - `iamcredentials.googleapis.com` (IAM Service API)
-- `iap.googleapis.com` (Cloud Identity-Aware Proxy)
-- `identitytoolkit.googleapis.com` (Identity Platform)
 - `run.googleapis.com` (Cloud Run)
 - `secretmanager.googleapis.com` (Secret Manager)
 - `texttospeech.googleapis.com` (Text to Speech)

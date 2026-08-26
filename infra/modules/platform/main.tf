@@ -113,7 +113,6 @@ module "backend_service" {
   included_files_glob   = ["backend/**"]
   container_env_vars    = local.backend_env_vars
   runtime_secrets = var.backend_runtime_secrets
-  custom_audiences      = var.backend_custom_audiences
   scaling_min_instances = 1
   source_repository_id = google_cloudbuildv2_repository.source_repo.id
   cpu = var.be_cpu

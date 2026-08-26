@@ -49,19 +49,19 @@ module "creative_studio_platform" {
   gcp_region                = var.gcp_region
   environment               = var.environment
   backend_service_name      = var.backend_service_name
-  backend_custom_audiences  = var.backend_custom_audiences
   be_env_vars               = var.be_env_vars
   frontend_service_name     = var.frontend_service_name
-  frontend_custom_audiences = var.frontend_custom_audiences
   firebase_site_id          = var.firebase_site_id != "" ? var.firebase_site_id : var.gcp_project_id
   github_conn_name          = var.github_conn_name
   github_repo_owner         = var.github_repo_owner
   github_repo_name          = var.github_repo_name
   github_branch_name        = var.github_branch_name
 
-  frontend_secrets       = var.frontend_secrets
-  backend_secrets        = var.backend_secrets
-  fe_build_substitutions = var.fe_build_substitutions
+  frontend_secrets        = var.frontend_secrets
+  backend_secrets         = var.backend_secrets
+  # Previously declared but never passed through, so nothing was ever mounted.
+  backend_runtime_secrets = var.backend_runtime_secrets
+  fe_build_substitutions  = var.fe_build_substitutions
 
   depends_on = [ google_project_service.apis ]
 }

@@ -25,7 +25,6 @@ variable "firebase_site_id" {
 
 # Backend specific variables
 variable "backend_service_name" { type = string }
-variable "backend_custom_audiences" { type = list(string) }
 variable "be_env_vars" { type = map(map(string)) }
 
 variable "be_build_substitutions" {
@@ -36,7 +35,6 @@ variable "be_build_substitutions" {
 
 # Frontend specific variables
 variable "frontend_service_name" { type = string }
-variable "frontend_custom_audiences" { type = list(string) }
 
 variable "fe_build_substitutions" {
   type        = map(string)

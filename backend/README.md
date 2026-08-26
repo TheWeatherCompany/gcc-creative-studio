@@ -42,9 +42,17 @@ GOOGLE_CLOUD_PROJECT="creative-studio-deploy"
 PROJECT_ID="creative-studio-deploy"
 GENMEDIA_BUCKET="creative-studio-deploy-cs-development-bucket"
 SIGNING_SA_EMAIL="cs-development-read@creative-studio-deploy.iam.gserviceaccount.com"
-GOOGLE_TOKEN_AUDIENCE="XXXX-XXXXXXXXXXX.apps.googleusercontent.com"
-IDENTITY_PLATFORM_ALLOWED_ORGS=""
+OKTA_ISSUER="https://your-org.okta.com"
+OKTA_AUDIENCE="0oaXXXXXXXXXXXXXXXXX"  # The Creative Studio SPA client ID
+OKTA_GROUP_ROLE_MAP='{"Creative Studio PortalAdmins": "admin", "Creative Studio Users": "user", "Creative Studio Workflows": "workflows"}'
 ```
+
+Authentication is handled by Okta. The backend verifies the JWT the SPA
+sends against `OKTA_ISSUER` and `OKTA_AUDIENCE`, then derives roles from the
+token's `groups` claim via `OKTA_GROUP_ROLE_MAP` on every request. A user
+whose token carries no group in that map is rejected with a 403; there is no
+default role and no email-domain check. You need the Okta app assignment to
+sign in locally, exactly as in a deployed environment.
 
 ### 2. Running the Application
 

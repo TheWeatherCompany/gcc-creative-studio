@@ -13,24 +13,34 @@ github_repo_owner  = "RepoOwnerName"
 github_repo_name   = "repo-owner-gcc-creative-studio"
 github_branch_name = "develop"
 
-# --- Custom Audiences ---
-backend_custom_audiences  = ["YOUR_OAUTH_WEB_CLIENT_ID_HERE", "YOUR_GCP_PROJECT_ID"]
-frontend_custom_audiences = ["YOUR_OAUTH_WEB_CLIENT_ID_HERE", "YOUR_GCP_PROJECT_ID"]
+# Note: backend_custom_audiences / frontend_custom_audiences were removed.
+# Custom audiences only apply to IAM-authenticated Cloud Run invocations, and
+# both services grant run.invoker to allUsers because Firebase Hosting proxies
+# /api/** without attaching credentials. Authorization happens in the
+# application, so they were dead config.
 
 # --- Service-Specific Environment Variables ---
 be_env_vars = {
   common = {
     LOG_LEVEL = "INFO"
+
+    # Phase 1: the org authorization server, with the SPA client ID as the
+    # audience, because Okta API Access Management is not active yet.
+    # Phase 2 changes these two values to a custom authorization server
+    # (e.g. "https://YOUR_OKTA_DOMAIN/oauth2/creative-studio" and
+    # "api://creative-studio"). No code change is needed for that.
+    OKTA_ISSUER   = "https://YOUR_OKTA_DOMAIN"
+    OKTA_AUDIENCE = "YOUR_OKTA_SPA_CLIENT_ID"
+
+    # Okta group -> application role. A user whose token carries no group in
+    # this map is rejected with a 403; there is no default role.
+    OKTA_GROUP_ROLE_MAP = "{\"Creative Studio PortalAdmins\": \"admin\", \"Creative Studio Users\": \"user\", \"Creative Studio Workflows\": \"workflows\"}"
   }
   development = {
-    ENVIRONMENT  = "development"
-    GOOGLE_TOKEN_AUDIENCE = "YOUR_OAUTH_WEB_CLIENT_ID_HERE"
-    IDENTITY_PLATFORM_ALLOWED_ORGS = "" # If empty then any org is allowed
+    ENVIRONMENT = "development"
   }
   production = {
-    ENVIRONMENT  = "production"
-    GOOGLE_TOKEN_AUDIENCE = "YOUR_OAUTH_WEB_CLIENT_ID_HERE"
-    IDENTITY_PLATFORM_ALLOWED_ORGS = "" # If empty then any org is allowed
+    ENVIRONMENT = "production"
   }
 }
 
@@ -46,15 +56,19 @@ frontend_secrets = [
   "FIREBASE_MESSAGING_SENDER_ID", # Your Firebase Cloud Messaging Sender ID
   "FIREBASE_APP_ID",           # Your Firebase Web App ID
   "FIREBASE_MEASUREMENT_ID",   # Your Google Analytics Measurement ID
-  "GOOGLE_CLIENT_ID",          # Your Google OAuth 2.0 Client ID for web
+  "OKTA_ISSUER",               # e.g. https://your-org.okta.com
+  "OKTA_CLIENT_ID",            # The Creative Studio SPA client ID
 ]
 
 backend_secrets = [
-  "GOOGLE_TOKEN_AUDIENCE",
+  "OKTA_CLIENT_ID",
 ]
 
+# Mounted in the backend container at runtime. OKTA_ISSUER and OKTA_AUDIENCE
+# are plain env vars above; OKTA_CLIENT_ID is only used for the optional `cid`
+# cross-check on access tokens.
 backend_runtime_secrets = {
-  "GOOGLE_TOKEN_AUDIENCE" = "GOOGLE_TOKEN_AUDIENCE"
+  "OKTA_CLIENT_ID" = "OKTA_CLIENT_ID"
 }
 
 apis_to_enable = [

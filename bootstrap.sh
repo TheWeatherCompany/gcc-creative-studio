@@ -449,7 +449,7 @@ configure_environment() {
 
 handle_manual_steps() {
     step 6 "Manual Steps Required"; cd "$REPO_ROOT/infra"; TFVARS_FILE_PATH="$ENV_DIR/$ENV_NAME.tfvars"
-    info "Enabling required Google Cloud APIs..."; gcloud services enable cloudbuild.googleapis.com secretmanager.googleapis.com firebase.googleapis.com iap.googleapis.com identitytoolkit.googleapis.com texttospeech.googleapis.com workflows.googleapis.com --project="$GCP_PROJECT_ID"
+    info "Enabling required Google Cloud APIs..."; gcloud services enable cloudbuild.googleapis.com secretmanager.googleapis.com firebase.googleapis.com texttospeech.googleapis.com workflows.googleapis.com --project="$GCP_PROJECT_ID"
     if [ -z "$GITHUB_CONN_NAME" ]; then
         prompt "\nDo you already have a Cloud Build Host Connection for GitHub in this project? (y/n)"; read -r REPLY < /dev/tty
         if [[ $REPLY =~ ^[Yy]$ ]]; then prompt "Please enter the existing connection name:"; read -p "   Connection Name: " GITHUB_CONN_NAME < /dev/tty
@@ -513,55 +513,64 @@ setup_firebase_app() {
     success "Firebase secrets have been fetched and will be populated automatically after Terraform runs."
 }
 
-populate_oauth_secrets() {
-    step 8 "Automating OAuth Secret Population"
+collect_okta_config() {
+    step 8 "Collecting Okta Configuration"
     cd "$REPO_ROOT"
-    info "Looking for the OAuth 2.0 Web Client ID using the Firebase Management API..."
 
-    local AUTH_TOKEN=$(gcloud auth print-access-token)
-    local APP_ID=$( (firebase apps:list --project="$GCP_PROJECT_ID" --json 2>/dev/null || echo "{}") | jq -r --arg name "$FE_SERVICE_NAME" 'try (.result[]? | select(.displayName == $name) | .appId) catch ""' 2>/dev/null || echo "" )
+    info "Creative Studio authenticates against Okta. Access is governed by"
+    info "Okta app assignment and group membership."
+    echo
+    info "Before continuing you need an OIDC Single-Page Application in Okta with:"
+    echo "  - Grants: authorization_code, refresh_token (PKCE required)"
+    echo "  - Groups claim on the ID token: name 'groups', filter"
+    echo "    'Starts with' 'Creative Studio '"
+    echo "  - Assigned to the 'Creative Studio Users' /"
+    echo "    'Creative Studio PortalAdmins' / 'Creative Studio Workflows' groups"
+    echo "    only. Do NOT assign it to 'Everyone'."
+    echo
 
-    if [ -z "$APP_ID" ]; then
-        warn "Could not find Firebase App ID for '$FE_SERVICE_NAME'. Skipping OAuth secret population."
-        return
+    if [ -z "$AUTO_OKTA_ISSUER" ]; then
+        prompt "Enter your Okta issuer (e.g. https://your-org.okta.com):"
+        read -p "   Issuer: " AUTO_OKTA_ISSUER < /dev/tty
+    fi
+    if [ -z "$AUTO_OKTA_ISSUER" ]; then
+        fail "The Okta issuer is required. Please restart the script."
     fi
 
-    # Use the Firebase Management API to get the auth config, which includes the client ID.
-    local API_RESPONSE=$(curl -s -X GET \
-        -H "Authorization: Bearer $AUTH_TOKEN" \
-        "https://firebase.googleapis.com/v1beta1/projects/$GCP_PROJECT_ID/webApps/$APP_ID/config")
-
-    # The client ID is the one NOT associated with the API key.
-    AUTO_OAUTH_CLIENT_ID=$( (echo "$API_RESPONSE" 2>/dev/null || echo "{}") | jq -r 'try (.oauthClientId // "") catch ""' 2>/dev/null || echo "" )
-
-    if [ -z "$AUTO_OAUTH_CLIENT_ID" ] || [ "$AUTO_OAUTH_CLIENT_ID" == "null" ]; then
-        warn "Could not automatically find the OAuth Client ID via API."
-        info "Please perform the following manual steps:"
-        echo "1. Open this URL in your browser to find your OAuth Client ID:"
-        echo -e "   ${C_YELLOW}https://console.cloud.google.com/apis/credentials?project=${GCP_PROJECT_ID}${C_RESET}"
-        echo "2. Find the OAuth 2.0 Client ID of type 'Web application'."
-        prompt "Paste the OAuth Client ID here:"
-        read -p "   Client ID: " AUTO_OAUTH_CLIENT_ID < /dev/tty
-        if [ -z "$AUTO_OAUTH_CLIENT_ID" ]; then
-            fail "OAuth Client ID is required to proceed. Please restart the script."
-        fi
-    else
-        info "Found OAuth Client ID via Firebase API."
+    if [ -z "$AUTO_OKTA_CLIENT_ID" ]; then
+        prompt "Enter the Creative Studio SPA client ID:"
+        read -p "   Client ID: " AUTO_OKTA_CLIENT_ID < /dev/tty
+    fi
+    if [ -z "$AUTO_OKTA_CLIENT_ID" ]; then
+        fail "The Okta client ID is required. Please restart the script."
     fi
 
-    info "Populating secrets with Client ID: ${C_YELLOW}${AUTO_OAUTH_CLIENT_ID}${C_RESET}"
-    echo -n "$AUTO_OAUTH_CLIENT_ID" | gcloud secrets versions add GOOGLE_CLIENT_ID --data-file="-" --project="$GCP_PROJECT_ID" --quiet
-    echo -n "$AUTO_OAUTH_CLIENT_ID" | gcloud secrets versions add GOOGLE_TOKEN_AUDIENCE --data-file="-" --project="$GCP_PROJECT_ID" --quiet
-    success "Secrets 'GOOGLE_CLIENT_ID' and 'GOOGLE_TOKEN_AUDIENCE' have been populated."
+    # Phase 1 validates the ID token against the org authorization server, so
+    # the audience is the SPA client ID. Once Okta API Access Management is
+    # available, point OKTA_ISSUER at a custom authorization server and set
+    # OKTA_AUDIENCE to its audience; no code changes are needed.
+    local AUTO_OKTA_AUDIENCE="$AUTO_OKTA_CLIENT_ID"
 
-    info "Updating audiences in $TFVARS_FILE_PATH..."
-    sed -i.bak "s|your-custom-audience.apps.googleusercontent.com|$AUTO_OAUTH_CLIENT_ID|g" "$TFVARS_FILE_PATH"
+    info "Writing Okta configuration into $TFVARS_FILE_PATH..."
+    sed -i.bak "s|https://YOUR_OKTA_DOMAIN|${AUTO_OKTA_ISSUER%/}|g" "$TFVARS_FILE_PATH"
+    sed -i.bak "s|YOUR_OKTA_SPA_CLIENT_ID|$AUTO_OKTA_AUDIENCE|g" "$TFVARS_FILE_PATH"
     rm -f "$TFVARS_FILE_PATH.bak"
-    success "Audiences updated in .tfvars file."
+
+    write_state "AUTO_OKTA_ISSUER" "$AUTO_OKTA_ISSUER"
+    write_state "AUTO_OKTA_CLIENT_ID" "$AUTO_OKTA_CLIENT_ID"
+    success "Okta configuration recorded. Secrets are populated after apply."
+
+    warn "\nRemember to register these redirect URIs on the Okta app:"
+    echo "  - https://<your-deployed-host>/login/callback"
+    echo "  - http://localhost:4200/login/callback   (local development)"
+    info "And these post-logout redirect URIs:"
+    echo "  - https://<your-deployed-host>/login"
+    echo "  - http://localhost:4200/login"
+    info "The deployed host is printed at the end of this script."
 }
 
 setup_db_secrets() {
-    step 9 "Configuring Database Secrets" # Renumber subsequent steps
+    step 9 "Configuring Database Secrets"
     
     # 1. Enable required APIs first
     info "Enabling Secret Manager and SQL Admin APIs..."
@@ -601,20 +610,8 @@ run_terraform() {
     terraform apply -auto-approve -var-file="$TFVARS_FILE_PATH" -parallelism=30
 }
 
-update_oauth_client() {
-    step 11 "Configuring OAuth Client URIs"; cd "$REPO_ROOT"
-    if [ -z "$AUTO_OAUTH_CLIENT_ID" ]; then warn "Could not find OAuth Client ID automatically. Skipping URI update."; return; fi
-    info "Fetching full OAuth client name..."; local OAUTH_CLIENT_FULL_NAME=$( (gcloud iap oauth-clients list "$GCP_PROJECT_ID" --format="json" 2>/dev/null || echo "[]") | jq -r --arg clientid "$AUTO_OAUTH_CLIENT_ID" 'try (.[]? | select(.name | contains($clientid)) | .name) catch ""' 2>/dev/null || echo "" )
-    if [ -z "$OAUTH_CLIENT_FULL_NAME" ]; then warn "Could not resolve the full name for the OAuth client. Skipping URI update."; return; fi
-    info "Ensuring OAuth Client has all required origins and redirect URIs..."; local PROJECT_DOMAIN_BASE=$(gcloud projects describe "$GCP_PROJECT_ID" --format='value(projectId)')
-    local FIREBASEAPP_ORIGIN="https://${PROJECT_DOMAIN_BASE}.firebaseapp.com"; local WEBAPP_ORIGIN="https://${PROJECT_DOMAIN_BASE}.web.app"
-    local FIREBASEAPP_REDIRECT_URI="${FIREBASEAPP_ORIGIN}/__/auth/handler"; local WEBAPP_REDIRECT_URI="${WEBAPP_ORIGIN}/__/auth/handler"
-    gcloud iap oauth-clients update "$OAUTH_CLIENT_FULL_NAME" --add-javascript-origins="$FIREBASEAPP_ORIGIN" --add-javascript-origins="$WEBAPP_ORIGIN" --add-redirect-uris="$FIREBASEAPP_REDIRECT_URI" --add-redirect-uris="$WEBAPP_REDIRECT_URI" --project="$GCP_PROJECT_ID" --quiet
-    success "OAuth Client URIs configured automatically."
-}
-
 update_secrets() {
-    step 12 "Updating Remaining Secrets"; info "Navigating to $REPO_ROOT/infra/environments/$ENV_NAME..."; cd "$REPO_ROOT/infra/environments/$ENV_NAME"
+    step 11 "Updating Remaining Secrets"; info "Navigating to $REPO_ROOT/infra/environments/$ENV_NAME..."; cd "$REPO_ROOT/infra/environments/$ENV_NAME"
     info "Populating values in Secret Manager..."; local TERRAFORM_OUTPUTS=$(terraform output -json 2>/dev/null || echo "{}")
     local FRONTEND_SECRETS=$( (echo "$TERRAFORM_OUTPUTS" 2>/dev/null || echo "{}") | jq -r 'try (.frontend_secrets.value[]?) catch ""' 2>/dev/null || echo "" ); local BACKEND_SECRETS=$( (echo "$TERRAFORM_OUTPUTS" 2>/dev/null || echo "{}") | jq -r 'try (.backend_secrets.value[]?) catch ""' 2>/dev/null || echo "" )
     local ALL_SECRETS=$(echo "${FRONTEND_SECRETS} ${BACKEND_SECRETS}" | tr ' ' '\n' | sort -u | grep .)
@@ -659,13 +656,13 @@ update_secrets() {
             "FIREBASE_MESSAGING_SENDER_ID")   SECRET_VALUE=$AUTO_FIREBASE_MESSAGING_SENDER_ID; AUTO_DISCOVERED=true ;;
             "FIREBASE_APP_ID")                SECRET_VALUE=$AUTO_FIREBASE_APP_ID; AUTO_DISCOVERED=true ;;
             "FIREBASE_MEASUREMENT_ID")        SECRET_VALUE=$AUTO_FIREBASE_MEASUREMENT_ID; AUTO_DISCOVERED=true ;;
-            # GOOGLE_CLIENT_ID is handled by populate_oauth_secrets, so we skip it here
-            "GOOGLE_CLIENT_ID")               info "  Value is handled by the OAuth population step. Skipping."; continue ;;
-            "GOOGLE_TOKEN_AUDIENCE")          info "  Value is handled by the OAuth population step. Skipping."; continue ;;
+            # Collected in the Okta configuration step.
+            "OKTA_ISSUER")                    SECRET_VALUE=$AUTO_OKTA_ISSUER; AUTO_DISCOVERED=true ;;
+            "OKTA_CLIENT_ID")                 SECRET_VALUE=$AUTO_OKTA_CLIENT_ID; AUTO_DISCOVERED=true ;;
         esac
 
         if [ "$AUTO_DISCOVERED" = true ] && [ -n "$SECRET_VALUE" ]; then
-            info "  Value was auto-detected from Firebase. Populating automatically."
+            info "  Value was collected earlier. Populating automatically."
             echo -n "$SECRET_VALUE" | gcloud secrets versions add "$SECRET_NAME" --data-file="-" --project="$GCP_PROJECT_ID" --quiet
             success "  Successfully added new version for ${SECRET_NAME}."
 
@@ -683,7 +680,7 @@ update_secrets() {
 }
 
 seed_data() {
-    step 13 "Seeding Initial Data (Workspaces, Templates, Assets)"
+    step 12 "Seeding Initial Data (Workspaces, Templates, Assets)"
     cd "$REPO_ROOT"
 
     info "The user running this script will be set as the owner of initial data."
@@ -758,7 +755,7 @@ seed_data() {
 
 
 trigger_builds() {
-    step 14 "Triggering Initial Builds"; cd "$REPO_ROOT"
+    step 13 "Triggering Initial Builds"; cd "$REPO_ROOT"
     prompt "Would you like to trigger the initial builds for the frontend and backend now? (y/n)"; read -r REPLY < /dev/tty
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then info "You can trigger the builds manually later by pushing a commit or via the Cloud Build UI."; return; fi
 
@@ -809,10 +806,9 @@ main() {
         "configure_environment"
         "handle_manual_steps"
         "setup_firebase_app"
+        "collect_okta_config"
         "setup_db_secrets"
         "run_terraform"
-        "populate_oauth_secrets"
-        "update_oauth_client"
         "update_secrets"
         "seed_data"
         "trigger_builds" 

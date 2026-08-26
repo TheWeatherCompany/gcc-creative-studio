@@ -66,17 +66,6 @@ variable "github_branch_name" {
   description = "The branch name to trigger builds from."
 }
 
-# --- Custom Audiences ---
-variable "backend_custom_audiences" {
-  type        = list(string)
-  description = "List of custom audiences for the backend service."
-}
-
-variable "frontend_custom_audiences" {
-  type        = list(string)
-  description = "List of custom audiences for the frontend service."
-}
-
 # --- Service-Specific Environment Variables ---
 variable "be_env_vars" {
   type        = map(map(string))
