@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 
-import {Injectable} from '@angular/core';
 import {
-  HttpRequest,
-  HttpHandler,
-  HttpEvent,
-  HttpInterceptor,
   HttpErrorResponse,
+  HttpEvent,
+  HttpHandler,
+  HttpInterceptor,
+  HttpRequest,
 } from '@angular/common/http';
+import {Injectable} from '@angular/core';
 import {Observable, throwError} from 'rxjs';
 import {catchError, switchMap} from 'rxjs/operators';
-import {AuthService} from './common/services/auth.service';
 import {environment} from '../environments/environment';
+import {AuthService} from './common/services/auth.service';
 
 @Injectable()
 export class AuthInterceptor implements HttpInterceptor {
@@ -35,31 +35,45 @@ export class AuthInterceptor implements HttpInterceptor {
     request: HttpRequest<unknown>,
     next: HttpHandler,
   ): Observable<HttpEvent<unknown>> {
-    // Asynchronously get a valid token. This will use the cache or trigger a silent refresh.
-    return this.authService.getValidIdentityPlatformToken$().pipe(
+    // Only our own API gets the bearer token. The previous version attached
+    // it to every outbound HttpClient call, which leaked the user's token to
+    // any third-party URL the app happened to fetch.
+    if (!this.isBackendRequest(request.url)) {
+      return next.handle(request);
+    }
+
+    return this.authService.getApiToken$().pipe(
       switchMap(token => {
-        // Token was retrieved successfully. Clone the request and add the auth header.
-        const authorizedRequest = request.clone({
-          setHeaders: {Authorization: `Bearer ${token}`},
-        });
-        return next.handle(authorizedRequest);
+        const authorized = token
+          ? request.clone({
+              setHeaders: {Authorization: `Bearer ${token}`},
+            })
+          : request;
+        return next.handle(authorized);
       }),
       catchError(error => {
-        // If the error is NOT an HttpErrorResponse, it's a token refresh failure
-        // from our AuthService. In this case, the session is invalid, and we should log out.
-        if (!(error instanceof HttpErrorResponse)) {
-          console.error(
-            'AuthInterceptor: Session expired and could not be refreshed. Logging out.',
-            error,
-          );
-          void this.authService.logout();
+        // A 401 from our own API means the token is gone or no longer
+        // accepted. Re-authenticate rather than silently signing out, so the
+        // user lands back where they were instead of on an empty login page.
+        if (error instanceof HttpErrorResponse && error.status === 401) {
+          void this.authService.login(this.currentUrl());
         }
-
-        // Otherwise, it's a backend API error (e.g., 404, 500). We should NOT log out.
-        // We just re-throw the original HttpErrorResponse so the calling service
-        // (e.g., UserService) can handle it and display an appropriate error message.
         return throwError(() => error);
       }),
     );
+  }
+
+  private isBackendRequest(url: string): boolean {
+    // backendURL is absolute locally ("http://localhost:8080/api") and
+    // relative when deployed, where Firebase Hosting rewrites /api/** to
+    // Cloud Run. Request URLs come through in the same shape either way.
+    const backendUrl = environment.backendURL;
+    return !!backendUrl && url.startsWith(backendUrl);
+  }
+
+  private currentUrl(): string {
+    return typeof window === 'undefined'
+      ? '/'
+      : `${window.location.pathname}${window.location.search}`;
   }
 }

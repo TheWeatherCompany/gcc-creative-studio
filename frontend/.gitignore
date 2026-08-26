@@ -1,9 +1,15 @@
 # See http://help.github.com/ignore-files/ for more about ignoring files.
 
 .firebase/
+# Keep local .env files out, but the checked-in Angular environment files
+# hold only placeholders that Cloud Build substitutes. build-dev and
+# build-qat reference the development and test ones, so a fresh CI
+# checkout needs them present or those configurations fail to compile.
 *environment.*
 !environment.ts
 !environment.prod.ts
+!environment.development.ts
+!environment.test.ts
 proxy.conf.json
 
 # Compiled output

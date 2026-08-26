@@ -75,6 +75,7 @@ import {AppRoutingModule} from './app-routing.module';
 import {AppComponent} from './app.component';
 import {AudioComponent} from './audio/audio.component';
 import {AuthInterceptor} from './auth.interceptor';
+import {OKTA_AUTH_PROVIDER} from './common/services/okta-auth.provider';
 
 import {FlowPromptBoxComponent} from './common/components/flow-prompt-box/flow-prompt-box.component';
 import {ImageCropperDialogComponent} from './common/components/image-cropper-dialog/image-cropper-dialog.component';
@@ -90,6 +91,7 @@ import {MediaDetailComponent} from './gallery/media-detail/media-detail.componen
 import {MediaGalleryComponent} from './gallery/media-gallery/media-gallery.component';
 import {HeaderComponent} from './header/header.component';
 import {HomeComponent} from './home/home.component';
+import {AuthCallbackComponent} from './login/auth-callback.component';
 import {LoginComponent} from './login/login.component';
 import {VideoComponent} from './video/video.component';
 import {VtoComponent} from './vto/vto.component';
@@ -115,6 +117,7 @@ import {UpscaleComponent} from './upscale/upscale.component';
     FooterComponent,
     HomeComponent,
     LoginComponent,
+    AuthCallbackComponent,
     FunTemplatesComponent,
     VideoComponent,
     MediaGalleryComponent,
@@ -204,6 +207,7 @@ import {UpscaleComponent} from './upscale/upscale.component';
     {
       provide: UserTrackingService, // Automatically track user interactions
     },
+    OKTA_AUTH_PROVIDER,
     {provide: HTTP_INTERCEPTORS, useClass: AuthInterceptor, multi: true},
   ],
   bootstrap: [AppComponent],

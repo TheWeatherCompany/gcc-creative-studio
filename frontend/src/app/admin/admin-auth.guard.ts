@@ -24,7 +24,6 @@ import {
 } from '@angular/router';
 import {isPlatformBrowser} from '@angular/common';
 import {Observable} from 'rxjs';
-import {UserService} from '../common/services/user.service';
 import {MatSnackBar} from '@angular/material/snack-bar';
 import {AuthService} from '../common/services/auth.service';
 import {handleErrorSnackbar} from '../utils/handleMessageSnackbar';
@@ -40,7 +39,6 @@ export class AdminAuthGuard implements CanActivate {
   constructor(
     private authService: AuthService,
     private router: Router,
-    private userService: UserService,
     private _snackBar: MatSnackBar,
   ) {}
 
@@ -64,33 +62,28 @@ export class AdminAuthGuard implements CanActivate {
 
     // --- BROWSER SIDE ---
     if (!this.authService.isLoggedIn()) {
-      void this.router.navigate([LOGIN_ROUTE]);
-      return false;
-    }
-
-    const userDetails = this.userService.getUserDetails(); // Get user details from localStorage
-    const userEmail = userDetails?.email?.toLowerCase();
-
-    if (userEmail && this.authService.isUserAdmin()) {
-      return true; // User is authenticated and email is in the allowed list
-    } else {
-      // User is not authenticated or not an allowed admin
-      console.warn('Access denied to admin area.');
-
-      handleErrorSnackbar(
-        this._snackBar,
-        {
-          message: `Access Denied: Your email (${userEmail}) is not authorized or login session expired.`,
-        },
-        'Access Denied',
-      );
-
-      // Use async logout and navigate *after* logout completes
-      void this.authService.logout().then(() => {
-        console.log('Forced logout due to DEV email restriction complete.');
-        // Navigation is handled by the logout method itself
+      return this.router.createUrlTree([LOGIN_ROUTE], {
+        queryParams: {returnUrl: state.url},
       });
-      return false; // Prevent navigation
     }
+
+    if (this.authService.isUserAdmin()) {
+      return true;
+    }
+
+    // Authenticated but not an admin. Roles come from Okta group membership,
+    // so this is a group assignment question, not a broken session: signing
+    // the user out here would be both hostile and useless.
+    console.warn('Access denied to admin area.');
+    handleErrorSnackbar(
+      this._snackBar,
+      {
+        message:
+          'Access Denied: administrator access is granted through the ' +
+          '"Creative Studio PortalAdmins" Okta group.',
+      },
+      'Access Denied',
+    );
+    return this.router.createUrlTree(['/']);
   }
 }

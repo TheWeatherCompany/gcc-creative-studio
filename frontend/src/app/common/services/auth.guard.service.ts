@@ -61,8 +61,11 @@ export class AuthGuardService implements CanActivate {
 
     // --- BROWSER SIDE ---
     if (!this.authService.isLoggedIn()) {
-      void this.router.navigate([LOGIN_ROUTE]);
-      return false;
+      // Carry the attempted URL so the Okta round trip lands the user where
+      // they were going rather than on the home page.
+      return this.router.createUrlTree([LOGIN_ROUTE], {
+        queryParams: {returnUrl: state.url},
+      });
     }
 
     const requiredRoles = route.data?.['requiredRoles'] as UserRolesEnum[];
@@ -73,8 +76,7 @@ export class AuthGuardService implements CanActivate {
 
       if (!hasRole) {
         console.warn('Access denied. Required roles:', requiredRoles);
-        void this.router.navigate(['/']);
-        return false;
+        return this.router.createUrlTree(['/']);
       }
     }
     return true;

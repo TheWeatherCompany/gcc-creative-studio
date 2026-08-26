@@ -52,6 +52,7 @@ import {isPlatformBrowser} from '@angular/common';
 })
 export class HeaderComponent implements OnDestroy {
   currentUser: UserModel | null;
+  readonly defaultAvatarUrl = environment.defaultAvatarUrl;
   menuFixed = false;
   menuIsHovered = false;
 

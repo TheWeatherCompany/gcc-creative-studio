@@ -38,6 +38,7 @@ import {
   handleSuccessSnackbar,
 } from '../../utils/handleMessageSnackbar';
 import {ConfirmationDialogComponent} from '../../common/components/confirmation-dialog/confirmation-dialog.component';
+import {environment} from '../../../environments/environment';
 
 @Component({
   selector: 'app-users-management',
@@ -65,6 +66,7 @@ export class UsersManagementComponent implements OnInit, OnDestroy {
   limit = 10;
   currentPageIndex = 0;
   currentUserId: number | null = null;
+  readonly defaultAvatarUrl = environment.defaultAvatarUrl;
 
   // --- Filtering & Destroy State ---
   private filterSubject = new Subject<string>();

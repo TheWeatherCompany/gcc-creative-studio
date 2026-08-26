@@ -31,14 +31,10 @@
     class="user-profile-button cursor-pointer !w-14 !h-14 bg-blend-soft-light bg-white/40 !rounded-full shadow-[0px_4px_4px_0px_rgba(0,0,0,0.25)] backdrop-blur-2xl inline-flex justify-center items-center gap-2.5 overflow-hidden !aspect-square"
   >
     <img
-      *ngIf="currentUser?.picture; else placeholder"
-      [src]="currentUser?.picture"
+      [src]="currentUser?.picture || defaultAvatarUrl"
       alt="User profile"
       class="!w-14 !h-14 object-cover rounded-full"
     />
-    <ng-template #placeholder>
-      <mat-icon class="m-auto">account_circle</mat-icon>
-    </ng-template>
   </div>
 
   <div
