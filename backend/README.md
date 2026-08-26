@@ -45,7 +45,7 @@ SIGNING_SA_EMAIL="cs-development-read@creative-studio-deploy.iam.gserviceaccount
 OKTA_ISSUER="https://your-org.okta.com"
 OKTA_AUDIENCE="0oaXXXXXXXXXXXXXXXXX"   # The Creative Studio SPA client ID
 OKTA_CLIENT_ID="0oaXXXXXXXXXXXXXXXXX"  # Same value; enables the optional `cid` cross-check
-OKTA_GROUP_ROLE_MAP='{"Creative Studio PortalAdmins": "admin", "Creative Studio Users": "user", "Creative Studio Workflows": "workflows"}'
+OKTA_GROUP_ROLE_MAP='{"Creative Studio Users": "user", "Creative Studio Admins": "admin", "Creative Studio Workflow Manager": "workflows"}'
 ```
 
 Authentication is handled by Okta. The backend verifies the JWT the SPA

@@ -134,14 +134,23 @@ class TestRolesFromGroups:
     """Group claim to application role mapping."""
 
     def test_maps_known_groups(self):
-        assert okta_verifier.roles_from_groups(
-            ["Creative Studio PortalAdmins"]
-        ) == ["admin"]
+        assert okta_verifier.roles_from_groups(["Creative Studio Admins"]) == [
+            "admin"
+        ]
+
+    def test_portaladmins_is_not_an_application_role(self):
+        """PortalAdmins is an Okta approvals group. The claim filter puts it in
+        the token, but it must never grant access on its own.
+        """
+        assert (
+            okta_verifier.roles_from_groups(["Creative Studio PortalAdmins"])
+            == []
+        )
 
     def test_maps_multiple_groups_sorted_and_deduplicated(self):
         roles = okta_verifier.roles_from_groups(
             [
-                "Creative Studio Workflows",
+                "Creative Studio Workflow Manager",
                 "Creative Studio Users",
                 "Creative Studio Users",
             ],

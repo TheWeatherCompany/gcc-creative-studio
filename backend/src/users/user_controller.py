@@ -99,9 +99,9 @@ async def update_user_role(user_id: int):
         status_code=status.HTTP_410_GONE,
         detail=(
             "Editing roles here is no longer supported. Roles are derived "
-            "from Okta group membership: assign the user to 'Creative Studio "
-            "PortalAdmins', 'Creative Studio Users' or 'Creative Studio "
-            "Workflows' in Okta instead."
+            "from Okta group membership: assign the user to 'Creative "
+            "Studio Users', 'Creative Studio Admins' or 'Creative Studio "
+            "Workflow Manager' in Okta instead."
         ),
     )
 

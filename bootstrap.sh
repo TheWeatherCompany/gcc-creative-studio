@@ -524,9 +524,11 @@ collect_okta_config() {
     echo "  - Grants: authorization_code, refresh_token (PKCE required)"
     echo "  - Groups claim on the ID token: name 'groups', filter"
     echo "    'Starts with' 'Creative Studio '"
-    echo "  - Assigned to the 'Creative Studio Users' /"
-    echo "    'Creative Studio PortalAdmins' / 'Creative Studio Workflows' groups"
-    echo "    only. Do NOT assign it to 'Everyone'."
+    echo "  - Assigned to the 'Creative Studio Users', 'Creative Studio Admins'"
+    echo "    and 'Creative Studio Workflow Manager' groups only. Do NOT assign"
+    echo "    it to 'Everyone'."
+    echo "  - 'Creative Studio PortalAdmins' is an approvals group and maps to no"
+    echo "    application role, so it grants no access on its own."
     echo
 
     if [ -z "$AUTO_OKTA_ISSUER" ]; then

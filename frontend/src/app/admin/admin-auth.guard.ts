@@ -80,7 +80,7 @@ export class AdminAuthGuard implements CanActivate {
       {
         message:
           'Access Denied: administrator access is granted through the ' +
-          '"Creative Studio PortalAdmins" Okta group.',
+          '"Creative Studio Admins" Okta group.',
       },
       'Access Denied',
     );

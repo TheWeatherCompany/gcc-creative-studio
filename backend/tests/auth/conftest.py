@@ -71,9 +71,9 @@ def fixture_okta_config():
     config_service.OKTA_AUDIENCE = TEST_AUDIENCE
     config_service.OKTA_CLIENT_ID = ""
     config_service.OKTA_GROUP_ROLE_MAP_STR = (
-        '{"Creative Studio PortalAdmins": "admin", '
-        '"Creative Studio Users": "user", '
-        '"Creative Studio Workflows": "workflows"}'
+        '{"Creative Studio Users": "user", '
+        '"Creative Studio Admins": "admin", '
+        '"Creative Studio Workflow Manager": "workflows"}'
     )
 
     yield

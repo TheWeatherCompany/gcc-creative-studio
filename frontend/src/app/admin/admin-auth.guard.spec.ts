@@ -108,6 +108,6 @@ describe('AdminAuthGuard', () => {
 
     expect(notificationService.show).toHaveBeenCalled();
     const message = notificationService.show.calls.mostRecent().args[0];
-    expect(message).toContain('Creative Studio PortalAdmins');
+    expect(message).toContain('Creative Studio Admins');
   });
 });

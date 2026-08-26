@@ -62,7 +62,7 @@ class ConfigService(BaseSettings):
     # endpoint for either issuer shape.
     OKTA_JWKS_URI_OVERRIDE: str = ""
     # JSON object mapping Okta group name -> application role, e.g.
-    # {"Creative Studio PortalAdmins": "admin",
+    # {"Creative Studio Admins": "admin",
     #  "Creative Studio Users": "user"}
     OKTA_GROUP_ROLE_MAP_STR: str = Field(
         default="", alias="OKTA_GROUP_ROLE_MAP"

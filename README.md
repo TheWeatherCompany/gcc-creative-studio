@@ -131,8 +131,8 @@ Regarding the dependencies of the APIs and Services we’ll use (the Google APIs
 - `Okta tenant` with an OIDC Single-Page Application for Creative Studio.
   Access is governed by Okta app assignment and group membership rather than
   by an email domain, so the app must be assigned to the
-  `Creative Studio Users`, `Creative Studio PortalAdmins` and
-  `Creative Studio Workflows` groups, and its ID token must carry a `groups`
+  `Creative Studio Users`, `Creative Studio Admins` and `Creative Studio
+  Workflow Manager` groups, and its ID token must carry a `groups`
   claim filtered on `Starts with` `Creative Studio `. The bootstrap script
   prompts for the issuer and client ID.
 
