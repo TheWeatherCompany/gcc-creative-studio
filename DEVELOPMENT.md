@@ -57,7 +57,7 @@ SIGNING_SA_EMAIL="cs-development-read@creative-studio-deploy.iam.gserviceaccount
 OKTA_ISSUER="https://your-org.okta.com"
 OKTA_AUDIENCE="0oaXXXXXXXXXXXXXXXXX"   # The Creative Studio SPA client ID
 OKTA_CLIENT_ID="0oaXXXXXXXXXXXXXXXXX"  # Same value; enables the optional `cid` cross-check
-OKTA_GROUP_ROLE_MAP='{"Creative Studio Users": "user", "Creative Studio Admins": "admin", "Creative Studio Workflow Manager": "workflows"}'
+OKTA_GROUP_ROLE_MAP='{"<your user group>": "user", "<your admin group>": "admin", "<your workflow group>": ["user", "workflows"]}'
 
 # --- Database Configuration (Local Docker Postgres) ---
 DB_USER="studio_user"

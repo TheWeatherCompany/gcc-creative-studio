@@ -130,11 +130,12 @@ Regarding the dependencies of the APIs and Services we’ll use (the Google APIs
 - `Google Cloud Account` (A GCP Project)
 - `Okta tenant` with an OIDC Single-Page Application for Creative Studio.
   Access is governed by Okta app assignment and group membership rather than
-  by an email domain, so the app must be assigned to the
-  `Creative Studio Users`, `Creative Studio Admins` and `Creative Studio
-  Workflow Manager` groups, and its ID token must carry a `groups`
-  claim filtered on `Starts with` `Creative Studio `. The bootstrap script
-  prompts for the issuer and client ID.
+  by an email domain, so the app must be assigned to the groups that should
+  have access, and its ID token must carry a `groups` claim covering them.
+  `OKTA_GROUP_ROLE_MAP` then maps each group name to one or more application
+  roles; a user whose token carries no mapped group is refused. The group
+  names and the mapping are deployment configuration, not part of this repo.
+  The bootstrap script prompts for the issuer and client ID.
 
 ---
 

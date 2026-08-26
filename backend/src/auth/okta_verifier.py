@@ -140,6 +140,15 @@ def verify(token: str) -> dict:
     return claims
 
 
+def mapped_group_names() -> list[str]:
+    """The Okta groups that confer a role, for user-facing messages.
+
+    Derived from configuration rather than hardcoded so the application does
+    not carry any particular tenant's group names.
+    """
+    return sorted(config_service.OKTA_GROUP_ROLE_MAP)
+
+
 def roles_from_groups(groups: list[str]) -> list[str]:
     """Maps Okta group names to application role strings.
 
@@ -148,5 +157,10 @@ def roles_from_groups(groups: list[str]) -> list[str]:
     stable equality check.
     """
     role_map = config_service.OKTA_GROUP_ROLE_MAP
-    roles = {role_map[group] for group in groups if group in role_map}
+    roles = {
+        role
+        for group in groups
+        if group in role_map
+        for role in role_map[group]
+    }
     return sorted(roles)

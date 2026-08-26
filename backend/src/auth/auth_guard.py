@@ -77,16 +77,23 @@ async def get_current_user(
         # 'user' role.
         if not roles:
             logger.warning(
-                "Rejecting %s: no Creative Studio group in token groups %s",
+                "Rejecting %s: no role-conferring group in token groups %s",
                 email,
                 groups,
+            )
+            known = okta_verifier.mapped_group_names()
+            groups_hint = (
+                f" Access is granted through membership of: "
+                f"{', '.join(known)}."
+                if known
+                else ""
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
-                    "You are not a member of a Creative Studio Okta group. "
-                    "Access is granted through group membership; ask an "
-                    "administrator to add you to 'Creative Studio Users'."
+                    "You are not a member of an Okta group that grants access "
+                    "to this application. Ask an administrator to add you."
+                    + groups_hint
                 ),
             )
 

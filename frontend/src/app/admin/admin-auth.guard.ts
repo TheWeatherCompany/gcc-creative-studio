@@ -79,8 +79,9 @@ export class AdminAuthGuard implements CanActivate {
       this._snackBar,
       {
         message:
-          'Access Denied: administrator access is granted through the ' +
-          '"Creative Studio Admins" Okta group.',
+          'Access Denied: administrator access is granted through Okta ' +
+          'group membership. Ask an administrator to add you to the ' +
+          'admin group for this application.',
       },
       'Access Denied',
     );

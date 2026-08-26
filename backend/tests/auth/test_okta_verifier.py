@@ -22,7 +22,15 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from src.auth import okta_verifier
 from src.auth.okta_verifier import OktaConfigurationError
 from src.config.config_service import config_service
-from tests.auth.conftest import OMIT, TEST_AUDIENCE, TEST_ISSUER
+from tests.auth.conftest import (
+    GROUP_ADMIN,
+    GROUP_MULTI_ROLE,
+    GROUP_UNMAPPED,
+    GROUP_USER,
+    OMIT,
+    TEST_AUDIENCE,
+    TEST_ISSUER,
+)
 
 
 class TestVerify:
@@ -34,7 +42,7 @@ class TestVerify:
         assert claims["email"] == "test@example.com"
         assert claims["iss"] == TEST_ISSUER
         assert claims["aud"] == TEST_AUDIENCE
-        assert claims["groups"] == ["Creative Studio Users"]
+        assert claims["groups"] == [GROUP_USER]
 
     def test_expired_token_is_rejected(self, mint_token):
         now = int(time.time())
@@ -134,33 +142,39 @@ class TestRolesFromGroups:
     """Group claim to application role mapping."""
 
     def test_maps_known_groups(self):
-        assert okta_verifier.roles_from_groups(["Creative Studio Admins"]) == [
-            "admin"
+        assert okta_verifier.roles_from_groups([GROUP_ADMIN]) == ["admin"]
+
+    def test_a_group_may_confer_several_roles(self):
+        """Some roles gate only a narrow set of routes, so a group intended for
+        people who also need ordinary access maps to a list.
+        """
+        assert okta_verifier.roles_from_groups([GROUP_MULTI_ROLE]) == [
+            "user",
+            "workflows",
         ]
 
-    def test_portaladmins_is_not_an_application_role(self):
-        """PortalAdmins is an Okta approvals group. The claim filter puts it in
-        the token, but it must never grant access on its own.
+    def test_group_outside_the_map_confers_nothing(self):
+        """A tenant may put groups in the claim that are not application roles,
+        for example an approvals group. Those must never grant access.
         """
-        assert (
-            okta_verifier.roles_from_groups(["Creative Studio PortalAdmins"])
-            == []
-        )
+        assert okta_verifier.roles_from_groups([GROUP_UNMAPPED]) == []
 
     def test_maps_multiple_groups_sorted_and_deduplicated(self):
         roles = okta_verifier.roles_from_groups(
-            [
-                "Creative Studio Workflow Manager",
-                "Creative Studio Users",
-                "Creative Studio Users",
-            ],
+            [GROUP_ADMIN, GROUP_USER, GROUP_USER],
         )
+
+        assert roles == ["admin", "user"]
+
+    def test_overlapping_groups_do_not_duplicate_roles(self):
+        """GROUP_MULTI_ROLE and GROUP_USER both confer "user"."""
+        roles = okta_verifier.roles_from_groups([GROUP_MULTI_ROLE, GROUP_USER])
 
         assert roles == ["user", "workflows"]
 
     def test_ignores_unmapped_groups(self):
         roles = okta_verifier.roles_from_groups(
-            ["Creative Studio Users", "Some Unrelated Okta Group"],
+            [GROUP_USER, GROUP_UNMAPPED],
         )
 
         assert roles == ["user"]

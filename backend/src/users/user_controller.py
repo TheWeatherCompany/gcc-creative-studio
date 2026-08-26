@@ -14,6 +14,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from src.auth import okta_verifier
 from src.auth.auth_guard import RoleChecker, get_current_user
 from src.common.dto.pagination_response_dto import PaginationResponseDto
 from src.users.dto.user_search_dto import UserSearchDto
@@ -95,13 +96,18 @@ async def update_user_role(user_id: int):
     a cached older frontend gets a clear answer instead of a 404 that looks
     like a routing bug.
     """
+    known = okta_verifier.mapped_group_names()
+    groups_hint = (
+        f" The groups that grant a role are: {', '.join(known)}."
+        if known
+        else ""
+    )
     raise HTTPException(
         status_code=status.HTTP_410_GONE,
         detail=(
             "Editing roles here is no longer supported. Roles are derived "
-            "from Okta group membership: assign the user to 'Creative "
-            "Studio Users', 'Creative Studio Admins' or 'Creative Studio "
-            "Workflow Manager' in Okta instead."
+            "from Okta group membership on every request; change the user's "
+            "groups in Okta instead." + groups_hint
         ),
     )
 

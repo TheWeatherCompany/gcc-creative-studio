@@ -21,7 +21,12 @@ from fastapi import HTTPException
 
 from src.auth.auth_guard import RoleChecker, get_current_user
 from src.users.user_model import UserModel, UserRoleEnum
-from tests.auth.conftest import OMIT
+from tests.auth.conftest import (
+    GROUP_ADMIN,
+    GROUP_UNMAPPED,
+    GROUP_USER,
+    OMIT,
+)
 
 
 @pytest.fixture(name="mock_user_service")
@@ -67,10 +72,7 @@ class TestGetCurrentUser:
         """The whole point of the migration: the token decides the roles."""
         await get_current_user(
             token=mint_token(
-                groups=[
-                    "Creative Studio Admins",
-                    "Creative Studio Users",
-                ],
+                groups=[GROUP_ADMIN, GROUP_USER],
             ),
             user_service=mock_user_service,
         )
@@ -84,7 +86,7 @@ class TestGetCurrentUser:
     ):
         await get_current_user(
             token=mint_token(
-                groups=["Creative Studio Users", "Marketing Team"],
+                groups=[GROUP_USER, GROUP_UNMAPPED],
             ),
             user_service=mock_user_service,
         )
@@ -103,12 +105,13 @@ class TestGetCurrentUser:
         """
         with pytest.raises(HTTPException) as exc_info:
             await get_current_user(
-                token=mint_token(groups=["Some Other Group"]),
+                token=mint_token(groups=[GROUP_UNMAPPED]),
                 user_service=mock_user_service,
             )
 
         assert exc_info.value.status_code == 403
-        assert "Creative Studio Okta group" in exc_info.value.detail
+        assert "Ask an administrator" in exc_info.value.detail
+        assert GROUP_USER in exc_info.value.detail
         mock_user_service.create_or_sync_user.assert_not_called()
 
     @pytest.mark.anyio
@@ -137,16 +140,15 @@ class TestGetCurrentUser:
         assert exc_info.value.status_code == 403
 
     @pytest.mark.anyio
-    async def test_portaladmins_alone_is_rejected(
+    async def test_group_outside_the_map_alone_is_rejected(
         self, mint_token, mock_user_service
     ):
-        """PortalAdmins is an Okta approvals group, not an application role.
-        It passes the claim filter, so it reaches the guard, and must not be
-        mistaken for access.
+        """A tenant's claim filter may admit groups that are not application
+        roles, such as an approvals group. Reaching the guard is not access.
         """
         with pytest.raises(HTTPException) as exc_info:
             await get_current_user(
-                token=mint_token(groups=["Creative Studio PortalAdmins"]),
+                token=mint_token(groups=[GROUP_UNMAPPED]),
                 user_service=mock_user_service,
             )
 
@@ -158,7 +160,7 @@ class TestGetCurrentUser:
         self, mint_token, mock_user_service
     ):
         await get_current_user(
-            token=mint_token(groups=["Creative Studio Admins"]),
+            token=mint_token(groups=[GROUP_ADMIN]),
             user_service=mock_user_service,
         )
 

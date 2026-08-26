@@ -19,6 +19,7 @@ iss/aud/exp checks) is the real implementation, so a test failure means the
 verifier is wrong rather than that a mock drifted.
 """
 
+import json
 import time
 
 import jwt
@@ -37,6 +38,13 @@ TEST_KID = "test-signing-key"
 # conftest under a different module name than an explicit import of it,
 # which would give the test and the fixture two distinct sentinels.
 OMIT = "__OMIT_CLAIM__"
+
+# Deliberately generic. The real Okta group names are deployment configuration
+# and live in the Terraform environment repo, so the suite must not encode them.
+GROUP_USER = "Test Group User"
+GROUP_ADMIN = "Test Group Admin"
+GROUP_MULTI_ROLE = "Test Group Multi Role"
+GROUP_UNMAPPED = "Test Group Unmapped"
 
 
 @pytest.fixture(name="rsa_keypair", scope="session")
@@ -70,10 +78,12 @@ def fixture_okta_config():
     config_service.OKTA_ISSUER = TEST_ISSUER
     config_service.OKTA_AUDIENCE = TEST_AUDIENCE
     config_service.OKTA_CLIENT_ID = ""
-    config_service.OKTA_GROUP_ROLE_MAP_STR = (
-        '{"Creative Studio Users": "user", '
-        '"Creative Studio Admins": "admin", '
-        '"Creative Studio Workflow Manager": "workflows"}'
+    config_service.OKTA_GROUP_ROLE_MAP_STR = json.dumps(
+        {
+            GROUP_USER: "user",
+            GROUP_ADMIN: "admin",
+            GROUP_MULTI_ROLE: ["user", "workflows"],
+        }
     )
 
     yield
@@ -119,7 +129,7 @@ def fixture_mint_token(rsa_keypair):
             "email": "test@example.com",
             "name": "Test User",
             "picture": "http://example.com/pic.jpg",
-            "groups": ["Creative Studio Users"],
+            "groups": [GROUP_USER],
         }
         claims.update(claim_overrides)
         claims = {k: v for k, v in claims.items() if v != OMIT}

@@ -40,10 +40,11 @@ be_env_vars = {
     # Okta group -> application role. A user whose token carries no group in
     # this map is rejected with a 403; there is no default role.
     #
-    # "Creative Studio PortalAdmins" is deliberately absent. It is an internal
-    # Okta group used for access approvals, not an application role. The groups
-    # claim filter still puts it in the token, where it is ignored.
-    OKTA_GROUP_ROLE_MAP = "{\"Creative Studio Users\": \"user\", \"Creative Studio Admins\": \"admin\", \"Creative Studio Workflow Manager\": \"workflows\"}"
+    # A value may be a single role or a list. Some roles gate only a narrow set
+    # of routes, so a group whose members also need ordinary access must map to
+    # several. Only list groups that should confer a role: any other group the
+    # claim filter admits, such as an approvals group, is ignored.
+    OKTA_GROUP_ROLE_MAP = "{\"<your user group>\": \"user\", \"<your admin group>\": \"admin\", \"<your workflow group>\": [\"user\", \"workflows\"]}"
   }
   development = {
     ENVIRONMENT = "development"

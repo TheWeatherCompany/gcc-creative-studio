@@ -522,13 +522,13 @@ collect_okta_config() {
     echo
     info "Before continuing you need an OIDC Single-Page Application in Okta with:"
     echo "  - Grants: authorization_code, refresh_token (PKCE required)"
-    echo "  - Groups claim on the ID token: name 'groups', filter"
-    echo "    'Starts with' 'Creative Studio '"
-    echo "  - Assigned to the 'Creative Studio Users', 'Creative Studio Admins'"
-    echo "    and 'Creative Studio Workflow Manager' groups only. Do NOT assign"
-    echo "    it to 'Everyone'."
-    echo "  - 'Creative Studio PortalAdmins' is an approvals group and maps to no"
-    echo "    application role, so it grants no access on its own."
+    echo "  - A 'groups' claim on the ID token, filtered so it carries the"
+    echo "    groups you intend to grant access to."
+    echo "  - Assigned to those groups only. Do NOT assign it to 'Everyone'."
+    echo
+    info "Then set OKTA_GROUP_ROLE_MAP in your tfvars to map each group name to"
+    info "one or more roles (user, admin, workflows). A group the claim filter"
+    info "admits but the map omits, such as an approvals group, grants nothing."
     echo
 
     if [ -z "$AUTO_OKTA_ISSUER" ]; then

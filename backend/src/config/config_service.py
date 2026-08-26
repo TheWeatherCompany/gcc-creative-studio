@@ -61,9 +61,11 @@ class ConfigService(BaseSettings):
     # Optional override. Leave unset and OKTA_JWKS_URI derives the correct
     # endpoint for either issuer shape.
     OKTA_JWKS_URI_OVERRIDE: str = ""
-    # JSON object mapping Okta group name -> application role, e.g.
-    # {"Creative Studio Admins": "admin",
-    #  "Creative Studio Users": "user"}
+    # JSON object mapping Okta group name -> application role. The value may
+    # be a single role or a list, for a group that should confer several, e.g.
+    # {"<your admin group>": "admin",
+    #  "<your user group>": "user",
+    #  "<your workflow group>": ["user", "workflows"]}
     OKTA_GROUP_ROLE_MAP_STR: str = Field(
         default="", alias="OKTA_GROUP_ROLE_MAP"
     )
@@ -178,12 +180,16 @@ class ConfigService(BaseSettings):
 
     @computed_field
     @property
-    def OKTA_GROUP_ROLE_MAP(self) -> dict[str, str]:
+    def OKTA_GROUP_ROLE_MAP(self) -> dict[str, list[str]]:
         """Parsed group-to-role mapping.
 
         A malformed value is a deployment error, not something to paper over
         at request time, so this raises rather than silently returning {} and
         locking every user out with an empty role set.
+
+        Each value may be a single role or a list of roles. Some roles gate
+        only a narrow set of routes, so a group meant for people who also need
+        ordinary access has to confer more than one.
         """
         raw = self.OKTA_GROUP_ROLE_MAP_STR.strip()
         if not raw:
@@ -193,9 +199,22 @@ class ConfigService(BaseSettings):
         if not isinstance(parsed, dict):
             raise ValueError(
                 "OKTA_GROUP_ROLE_MAP must be a JSON object mapping group "
-                "name to role name.",
+                "name to a role or list of roles.",
             )
-        return {str(k): str(v) for k, v in parsed.items()}
+
+        mapping: dict[str, list[str]] = {}
+        for group, value in parsed.items():
+            if isinstance(value, str):
+                roles = [value]
+            elif isinstance(value, list):
+                roles = [str(role) for role in value]
+            else:
+                raise ValueError(
+                    f"OKTA_GROUP_ROLE_MAP value for {group!r} must be a role "
+                    "name or a list of role names.",
+                )
+            mapping[str(group)] = roles
+        return mapping
 
     @computed_field
     @property
