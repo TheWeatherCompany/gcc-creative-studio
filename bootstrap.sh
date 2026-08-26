@@ -25,7 +25,7 @@
 set -e
 
 # --- Configuration ---
-REQUIRED_TERRAFORM_VERSION="1.14.1"
+REQUIRED_TERRAFORM_VERSION="1.15.8"
 UPSTREAM_REPO_URL="https://github.com/GoogleCloudPlatform/gcc-creative-studio"
 TEMPLATE_ENV_DIR="environments/dev-infra-example"
 DEFAULT_ENV_NAME="dev-infra"
@@ -152,7 +152,7 @@ start_sql_proxy() {
 
     # 2. Download Proxy (if missing)
     if [ ! -f "cloud-sql-proxy" ]; then
-        curl -o cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.8.0/cloud-sql-proxy.linux.amd64
+        curl -o cloud-sql-proxy "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.8.0/cloud-sql-proxy.$(get_platform_arch | tr '_' '.')"
         chmod +x cloud-sql-proxy
     fi
 
