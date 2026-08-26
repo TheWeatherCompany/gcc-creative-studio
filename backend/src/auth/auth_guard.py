@@ -17,6 +17,7 @@
 import asyncio
 import logging
 
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from firebase_admin import auth
@@ -25,6 +26,7 @@ from firebase_admin import auth
 from google.auth.transport import requests as google_auth_requests
 from google.oauth2 import id_token
 
+from src.auth import okta_verifier
 from src.config.config_service import config_service
 from src.users.user_model import UserModel, UserRoleEnum
 from src.users.user_service import UserService
@@ -56,7 +58,16 @@ async def get_current_user(
     """
     try:
         decoded_token = {}
-        if config_service.ENVIRONMENT == "local":
+        if config_service.AUTH_PROVIDERS == "okta":
+            # --- Okta ---
+            # Verifies whatever JWT the SPA sent against the configured
+            # issuer and audience. See src/auth/okta_verifier.py for why
+            # this is deliberately token-agnostic.
+            logger.info("Verifying token using Okta JWKS...")
+            decoded_token = await asyncio.to_thread(
+                okta_verifier.verify, token
+            )
+        elif config_service.ENVIRONMENT == "local":
             # --- Local: Use Firebase Auth ---
             # Verifies the token using the standard Firebase Admin SDK method.
             logger.info("Verifying token using Firebase Admin SDK...")
@@ -127,6 +138,18 @@ async def get_current_user(
 
         return user_doc
 
+    except jwt.ExpiredSignatureError as exc:
+        logger.error("[get_current_user] Okta token expired.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication token has expired.",
+        ) from exc
+    except jwt.PyJWTError as exc:
+        logger.error("[get_current_user] Invalid Okta token: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid authentication token: {exc}",
+        ) from exc
     except auth.ExpiredIdTokenError as exc:
         logger.error(
             "[get_current_user - auth.ExpiredIdTokenError] for %s", email

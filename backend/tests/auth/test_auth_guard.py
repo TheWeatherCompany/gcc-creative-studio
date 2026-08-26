@@ -12,14 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 
 from src.auth.auth_guard import RoleChecker, get_current_user
 from src.config.config_service import config_service
 from src.users.user_model import UserModel, UserRoleEnum
+from tests.auth.conftest import OMIT
 
 
 @pytest.fixture(name="mock_user_service")
@@ -138,3 +141,99 @@ class TestRoleChecker:
 
         assert exc_info.value.status_code == 403
         assert "do not have sufficient permissions" in exc_info.value.detail
+
+
+class TestGetCurrentUserOkta:
+    """Tests for the Okta branch of get_current_user.
+
+    These drive real signed tokens through the real verifier; only the JWKS
+    fetch and the user service are stubbed.
+    """
+
+    @pytest.fixture(autouse=True)
+    def use_okta_provider(self):
+        config_service.AUTH_PROVIDERS = "okta"
+        config_service.ALLOWED_ORGS_STR = ""
+
+    @pytest.mark.anyio
+    async def test_valid_token_provisions_user(
+        self, mint_token, mock_user_service
+    ):
+        user = await get_current_user(
+            token=mint_token(),
+            user_service=mock_user_service,
+        )
+
+        assert user.email == "test@example.com"
+        mock_user_service.create_user_if_not_exists.assert_called_once_with(
+            email="test@example.com",
+            name="Test User",
+            picture="http://example.com/pic.jpg",
+        )
+
+    @pytest.mark.anyio
+    async def test_expired_token_returns_401(
+        self, mint_token, mock_user_service
+    ):
+        now = int(time.time())
+        token = mint_token(iat=now - 7200, exp=now - 3600)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(token=token, user_service=mock_user_service)
+
+        assert exc_info.value.status_code == 401
+        assert "expired" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_wrong_audience_returns_401(
+        self, mint_token, mock_user_service
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(aud="0oaSomeOtherApp"),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 401
+        assert "Invalid authentication token" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_wrong_issuer_returns_401(
+        self, mint_token, mock_user_service
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(iss="https://attacker.okta.com"),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.anyio
+    async def test_bad_signature_returns_401(
+        self, mint_token, mock_user_service
+    ):
+        attacker_key = rsa.generate_private_key(
+            public_exponent=65537, key_size=2048
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(key=attacker_key),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.anyio
+    async def test_missing_email_returns_403(
+        self, mint_token, mock_user_service
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(email=OMIT),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "User identity could not be confirmed" in exc_info.value.detail
