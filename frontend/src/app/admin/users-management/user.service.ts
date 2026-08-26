@@ -85,15 +85,6 @@ export class UserService {
       .pipe(catchError(this.handleError));
   }
 
-  // PUT: Update an existing user
-  updateUser(user: UserModel): Observable<any> {
-    const url = `${this.usersApiUrl}/${user.id}`;
-    const payload = {roles: user.roles};
-    return this.http
-      .put(url, payload, this.httpOptions)
-      .pipe(catchError(this.handleError));
-  }
-
   // DELETE: Delete a user
   deleteUser(id: number | string): Observable<UserModel> {
     const url = `${this.usersApiUrl}/${id}`;

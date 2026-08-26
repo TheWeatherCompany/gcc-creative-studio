@@ -15,8 +15,6 @@
 
 from pydantic import BaseModel, EmailStr, Field
 
-from src.users.user_model import UserRoleEnum
-
 
 class UserCreateDto(BaseModel):
     """Data Transfer Object for creating a new user."""
@@ -24,13 +22,5 @@ class UserCreateDto(BaseModel):
     email: EmailStr
     name: str = Field(..., min_length=2)
     picture: str | None = None
-    # The role will be set to 'user' by default in the service
-    # Admins can change it later via the update endpoint
-
-
-class UserUpdateRoleDto(BaseModel):
-    """Data Transfer Object for updating a user's role."""
-
-    roles: list[UserRoleEnum] = Field(
-        description="A list of new roles to assign to the user.",
-    )
+    # Roles are derived from the caller's Okta groups and passed in
+    # separately; there is nothing for an admin to edit here.

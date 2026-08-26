@@ -161,28 +161,32 @@ class TestDeleteUser:
 
 
 class TestUpdateUserRole:
-    """Tests for PUT /api/users/{id}."""
+    """Tests for the retired PUT /api/users/{id}."""
 
-    def test_update_user_role_admin_success(
+    def test_returns_410_gone_with_the_okta_groups_named(
         self,
         admin_client,
         mock_user_service,
-        mock_user,
     ):
-        mock_user_service.update_user_role.return_value = mock_user
-
+        """A stale cached frontend should get a clear answer, not a 404."""
         response = admin_client.put("/api/users/1", json={"roles": ["admin"]})
 
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        assert data["id"] == 1
+        assert response.status_code == status.HTTP_410_GONE
+        assert "Okta group membership" in response.json()["detail"]
 
-    def test_update_user_role_not_found(self, admin_client, mock_user_service):
-        mock_user_service.update_user_role.return_value = None
+    def test_does_not_touch_the_database(
+        self,
+        admin_client,
+        mock_user_service,
+    ):
+        admin_client.put("/api/users/1", json={"roles": ["admin"]})
 
-        response = admin_client.put("/api/users/999", json={"roles": ["admin"]})
+        mock_user_service.update_user_role.assert_not_called()
 
-        assert response.status_code == status.HTTP_404_NOT_FOUND
+    def test_regular_user_still_forbidden(self, api_client):
+        response = api_client.put("/api/users/1", json={"roles": ["admin"]})
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
 class TestRestoreUser:

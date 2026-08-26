@@ -60,13 +60,11 @@ def fixture_jwks_document(rsa_keypair):
 def fixture_okta_config():
     """Points config at the test issuer and restores it afterwards."""
     original = (
-        config_service.AUTH_PROVIDERS,
         config_service.OKTA_ISSUER,
         config_service.OKTA_AUDIENCE,
         config_service.OKTA_CLIENT_ID,
         config_service.OKTA_GROUP_ROLE_MAP_STR,
         config_service.ENVIRONMENT,
-        config_service.ALLOWED_ORGS_STR,
     )
 
     config_service.OKTA_ISSUER = TEST_ISSUER
@@ -81,13 +79,11 @@ def fixture_okta_config():
     yield
 
     (
-        config_service.AUTH_PROVIDERS,
         config_service.OKTA_ISSUER,
         config_service.OKTA_AUDIENCE,
         config_service.OKTA_CLIENT_ID,
         config_service.OKTA_GROUP_ROLE_MAP_STR,
         config_service.ENVIRONMENT,
-        config_service.ALLOWED_ORGS_STR,
     ) = original
     okta_verifier.reset_jwks_client()
 

@@ -175,32 +175,12 @@ export class UsersManagementComponent implements OnInit, OnDestroy {
     }
   }
 
+  /** Opens the read-only user detail dialog. Roles come from Okta. */
   openUserForm(user: UserModel): void {
-    const dialogRef = this.dialog.open(UserFormComponent, {
+    this.dialog.open(UserFormComponent, {
       width: '450px',
-      data: {user: user, isEditMode: true},
+      data: {user},
     });
-
-    dialogRef
-      .afterClosed()
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(async (result: UserModel | undefined) => {
-        if (result) {
-          this.isLoading = true;
-          try {
-            // The form returns the full user object with updated roles
-            await firstValueFrom(this.userService.updateUser(result));
-            handleSuccessSnackbar(this._snackBar, 'User updated successfully!');
-            // Refetch to show updated data on the current page.
-            await this.fetchPage(this.currentPageIndex);
-          } catch (err) {
-            console.error(`Error updating user ${result.id}:`, err);
-            handleErrorSnackbar(this._snackBar, err, 'Update user');
-          } finally {
-            this.isLoading = false;
-          }
-        }
-      });
   }
 
   deleteUser(userId: string): void {

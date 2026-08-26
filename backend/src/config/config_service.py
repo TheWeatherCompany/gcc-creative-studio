@@ -48,18 +48,6 @@ class ConfigService(BaseSettings):
     LOG_LEVEL: str = "INFO"
     INIT_VERTEX: bool = True
 
-    # --- Auth provider selection ---
-    # "google" keeps the legacy Identity Platform path; "okta" switches to
-    # Okta JWT verification. Kept as a setting so the Okta verifier can be
-    # deployed and smoke-tested before it becomes the only path.
-    AUTH_PROVIDERS: str = "google"
-
-    # --- Google Identity ---
-    GOOGLE_TOKEN_AUDIENCE: str = ""
-    ALLOWED_ORGS_STR: str = Field(
-        default="", alias="IDENTITY_PLATFORM_ALLOWED_ORGS"
-    )
-
     # --- Okta ---
     # Phase 1 (no API Access Management): the org authorization server, e.g.
     # "https://weather.okta.com", with the SPA client ID as the audience.
@@ -165,16 +153,6 @@ class ConfigService(BaseSettings):
             self.GENMEDIA_BUCKET = f"{self.PROJECT_ID}-assets"
 
         return self
-
-    # This computed field cleanly separates the raw string from the processed set.
-    @computed_field
-    @property
-    def ALLOWED_ORGS(self) -> set[str]:
-        return set(
-            org.strip()
-            for org in self.ALLOWED_ORGS_STR.split(",")
-            if org.strip()
-        )
 
     @computed_field
     @property

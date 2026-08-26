@@ -13,14 +13,13 @@
 # limitations under the License.
 
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 
 from src.auth.auth_guard import RoleChecker, get_current_user
-from src.config.config_service import config_service
 from src.users.user_model import UserModel, UserRoleEnum
 from tests.auth.conftest import OMIT
 
@@ -28,8 +27,7 @@ from tests.auth.conftest import OMIT
 @pytest.fixture(name="mock_user_service")
 def fixture_mock_user_service():
     service = AsyncMock()
-    # Mock create_user_if_not_exists to return a user
-    service.create_user_if_not_exists.return_value = UserModel(
+    service.create_or_sync_user.return_value = UserModel(
         id=1,
         email="test@example.com",
         roles=["user"],
@@ -39,121 +37,11 @@ def fixture_mock_user_service():
 
 
 class TestGetCurrentUser:
-    """Tests for get_current_user dependency."""
-
-    @pytest.mark.anyio
-    @patch("src.auth.auth_guard.auth.verify_id_token")
-    async def test_get_current_user_local_success(
-        self, mock_verify, mock_user_service
-    ):
-        # Setup: Local environment
-        config_service.ENVIRONMENT = "local"
-        config_service.ALLOWED_ORGS_STR = ""
-
-        # Mock token verification
-        mock_verify.return_value = {
-            "email": "test@example.com",
-            "name": "Test User",
-            "picture": "http://example.com/pic.jpg",
-            "hd": "example.com",
-        }
-
-        user = await get_current_user(
-            token="valid_token",
-            user_service=mock_user_service,
-        )
-
-        assert user.email == "test@example.com"
-        assert user.name == "Test User"
-        mock_user_service.create_user_if_not_exists.assert_called_once_with(
-            email="test@example.com",
-            name="Test User",
-            picture="http://example.com/pic.jpg",
-        )
-
-    @pytest.mark.anyio
-    @patch("src.auth.auth_guard.auth.verify_id_token")
-    async def test_get_current_user_no_email(
-        self, mock_verify, mock_user_service
-    ):
-        config_service.ENVIRONMENT = "local"
-        mock_verify.return_value = {"name": "Test User"}  # Missing email
-
-        with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(
-                token="valid_token", user_service=mock_user_service
-            )
-
-        assert exc_info.value.status_code == 403
-        assert "User identity could not be confirmed" in exc_info.value.detail
-
-    @pytest.mark.anyio
-    @patch("src.auth.auth_guard.auth.verify_id_token")
-    async def test_get_current_user_allowed_orgs_fail(
-        self,
-        mock_verify,
-        mock_user_service,
-    ):
-        config_service.ENVIRONMENT = "local"
-        config_service.ALLOWED_ORGS_STR = "allowed.com"
-
-        mock_verify.return_value = {
-            "email": "test@example.com",
-            "name": "Test User",
-            "hd": "forbidden.com",
-        }
-
-        with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(
-                token="valid_token", user_service=mock_user_service
-            )
-
-        assert exc_info.value.status_code == 401
-        assert "not part of an allowed organization" in exc_info.value.detail
-
-
-class TestRoleChecker:
-    """Tests for RoleChecker class."""
-
-    def test_role_checker_authorized(self):
-        checker = RoleChecker(allowed_roles=[UserRoleEnum.ADMIN])
-        user = UserModel(
-            id=1,
-            email="admin@example.com",
-            roles=["admin"],
-            name="Admin User",
-        )
-
-        # Should not raise exception
-        checker(user=user)
-
-    def test_role_checker_forbidden(self):
-        checker = RoleChecker(allowed_roles=[UserRoleEnum.ADMIN])
-        user = UserModel(
-            id=1,
-            email="user@example.com",
-            roles=["user"],
-            name="Regular User",
-        )
-
-        with pytest.raises(HTTPException) as exc_info:
-            checker(user=user)
-
-        assert exc_info.value.status_code == 403
-        assert "do not have sufficient permissions" in exc_info.value.detail
-
-
-class TestGetCurrentUserOkta:
-    """Tests for the Okta branch of get_current_user.
+    """Tests for get_current_user.
 
     These drive real signed tokens through the real verifier; only the JWKS
     fetch and the user service are stubbed.
     """
-
-    @pytest.fixture(autouse=True)
-    def use_okta_provider(self):
-        config_service.AUTH_PROVIDERS = "okta"
-        config_service.ALLOWED_ORGS_STR = ""
 
     @pytest.mark.anyio
     async def test_valid_token_provisions_user(
@@ -165,11 +53,100 @@ class TestGetCurrentUserOkta:
         )
 
         assert user.email == "test@example.com"
-        mock_user_service.create_user_if_not_exists.assert_called_once_with(
+        mock_user_service.create_or_sync_user.assert_called_once_with(
             email="test@example.com",
             name="Test User",
             picture="http://example.com/pic.jpg",
+            roles=["user"],
         )
+
+    @pytest.mark.anyio
+    async def test_roles_come_from_the_groups_claim(
+        self, mint_token, mock_user_service
+    ):
+        """The whole point of the migration: the token decides the roles."""
+        await get_current_user(
+            token=mint_token(
+                groups=[
+                    "Creative Studio PortalAdmins",
+                    "Creative Studio Users",
+                ],
+            ),
+            user_service=mock_user_service,
+        )
+
+        _, kwargs = mock_user_service.create_or_sync_user.call_args
+        assert kwargs["roles"] == ["admin", "user"]
+
+    @pytest.mark.anyio
+    async def test_unmapped_groups_are_ignored(
+        self, mint_token, mock_user_service
+    ):
+        await get_current_user(
+            token=mint_token(
+                groups=["Creative Studio Users", "Marketing Team"],
+            ),
+            user_service=mock_user_service,
+        )
+
+        _, kwargs = mock_user_service.create_or_sync_user.call_args
+        assert kwargs["roles"] == ["user"]
+
+    @pytest.mark.anyio
+    async def test_no_matching_group_returns_403(
+        self, mint_token, mock_user_service
+    ):
+        """The backstop that replaces the old hosted-domain check.
+
+        Reachable by assigning the Okta app to an individual rather than to a
+        group. It must not fall through to a default 'user' role.
+        """
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(groups=["Some Other Group"]),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "Creative Studio Okta group" in exc_info.value.detail
+        mock_user_service.create_or_sync_user.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_empty_groups_claim_returns_403(
+        self, mint_token, mock_user_service
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(groups=[]),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 403
+        mock_user_service.create_or_sync_user.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_absent_groups_claim_returns_403(
+        self, mint_token, mock_user_service
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(groups=OMIT),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.anyio
+    async def test_admin_group_grants_admin(
+        self, mint_token, mock_user_service
+    ):
+        await get_current_user(
+            token=mint_token(groups=["Creative Studio PortalAdmins"]),
+            user_service=mock_user_service,
+        )
+
+        _, kwargs = mock_user_service.create_or_sync_user.call_args
+        assert kwargs["roles"] == ["admin"]
 
     @pytest.mark.anyio
     async def test_expired_token_returns_401(
@@ -237,3 +214,46 @@ class TestGetCurrentUserOkta:
 
         assert exc_info.value.status_code == 403
         assert "User identity could not be confirmed" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_hosted_domain_claim_is_not_consulted(
+        self, mint_token, mock_user_service
+    ):
+        """A foreign `hd` must not matter: Okta assignment is the gate now."""
+        user = await get_current_user(
+            token=mint_token(hd="some-other-company.com"),
+            user_service=mock_user_service,
+        )
+
+        assert user.email == "test@example.com"
+
+
+class TestRoleChecker:
+    """Tests for RoleChecker class."""
+
+    def test_role_checker_authorized(self):
+        checker = RoleChecker(allowed_roles=[UserRoleEnum.ADMIN])
+        user = UserModel(
+            id=1,
+            email="admin@example.com",
+            roles=["admin"],
+            name="Admin User",
+        )
+
+        # Should not raise exception
+        checker(user=user)
+
+    def test_role_checker_forbidden(self):
+        checker = RoleChecker(allowed_roles=[UserRoleEnum.ADMIN])
+        user = UserModel(
+            id=1,
+            email="user@example.com",
+            roles=["user"],
+            name="Regular User",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            checker(user=user)
+
+        assert exc_info.value.status_code == 403
+        assert "do not have sufficient permissions" in exc_info.value.detail

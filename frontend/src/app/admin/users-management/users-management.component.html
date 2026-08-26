@@ -124,9 +124,9 @@
             mat-icon-button
             color="primary"
             (click)="openUserForm(user)"
-            matTooltip="Edit User"
+            matTooltip="View User"
           >
-            <mat-icon>edit</mat-icon>
+            <mat-icon>visibility</mat-icon>
           </button>
           <button
             *ngIf="!user.deletedAt && user.id !== currentUserId"

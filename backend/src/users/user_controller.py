@@ -16,7 +16,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from src.auth.auth_guard import RoleChecker, get_current_user
 from src.common.dto.pagination_response_dto import PaginationResponseDto
-from src.users.dto.user_create_dto import UserUpdateRoleDto
 from src.users.dto.user_search_dto import UserSearchDto
 from src.users.user_model import UserModel, UserRoleEnum
 from src.users.user_service import UserService
@@ -85,22 +84,26 @@ async def get_user_by_id(user_id: int, user_service: UserService = Depends()):
 
 @router.put(
     "/{user_id}",
-    response_model=UserModel,
-    summary="Update a User's Role (Admin Only)",
+    status_code=status.HTTP_410_GONE,
+    summary="Retired: roles come from Okta groups",
     dependencies=[admin_only],
 )
-async def update_user_role(
-    user_id: int,
-    role_data: UserUpdateRoleDto,
-    user_service: UserService = Depends(),
-):
-    """Updates the role of a specific user (e.g., promote to 'admin' or 'creator').
-    This functionality is restricted to administrators.
+async def update_user_role(user_id: int):
+    """Retired. Roles are derived from Okta group membership on every request.
+
+    Kept as an explicit 410 for one release rather than deleted outright, so
+    a cached older frontend gets a clear answer instead of a 404 that looks
+    like a routing bug.
     """
-    updated_user = await user_service.update_user_role(user_id, role_data)
-    if not updated_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return updated_user
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Editing roles here is no longer supported. Roles are derived "
+            "from Okta group membership: assign the user to 'Creative Studio "
+            "PortalAdmins', 'Creative Studio Users' or 'Creative Studio "
+            "Workflows' in Okta instead."
+        ),
+    )
 
 
 @router.delete(

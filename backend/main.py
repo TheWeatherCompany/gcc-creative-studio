@@ -99,14 +99,14 @@ async def lifespan(app: FastAPI):
     # --- Startup ---
     logger.info("Starting up application...")
 
-    # Initialize Firebase Admin SDK (Auth only)
+    # Fail loudly at startup if GCP credentials are dead, rather than at the
+    # first Vertex or Storage call.
     try:
-        from src.auth.firebase_client_service import firebase_client
+        from src.common.adc_health_check import check_adc_authentication
 
-        # Trigger initialization
-        _ = firebase_client
+        check_adc_authentication()
     except Exception as e:
-        logger.error(f"Failed to initialize Firebase: {e}")
+        logger.error(f"ADC authentication check failed: {e}")
 
     # Run Database Migrations
     try:
