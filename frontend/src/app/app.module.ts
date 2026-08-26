@@ -16,7 +16,6 @@
 
 import {importProvidersFrom, Injector, NgModule} from '@angular/core';
 import {initializeApp, provideFirebaseApp} from '@angular/fire/app';
-import {getAuth, provideAuth} from '@angular/fire/auth';
 import {getFirestore, provideFirestore} from '@angular/fire/firestore';
 import {MatButtonModule} from '@angular/material/button';
 import {MatChipsModule} from '@angular/material/chips';
@@ -52,7 +51,6 @@ import {
   ScreenTrackingService,
   UserTrackingService,
 } from '@angular/fire/compat/analytics';
-import {AngularFireAuthModule} from '@angular/fire/compat/auth';
 import {AngularFireDatabaseModule} from '@angular/fire/compat/database';
 import {AngularFirestoreModule} from '@angular/fire/compat/firestore';
 import {FormsModule, ReactiveFormsModule} from '@angular/forms';
@@ -191,12 +189,10 @@ import {UpscaleComponent} from './upscale/upscale.component';
     provideClientHydration(),
     provideHttpClient(withInterceptorsFromDi()),
     provideFirebaseApp(() => initializeApp(environment.firebase)),
-    provideAuth(() => getAuth()),
     provideFirestore(() => getFirestore()),
     provideAnalytics(() => getAnalytics()),
     importProvidersFrom([
       AngularFireModule.initializeApp(environment.firebase),
-      AngularFireAuthModule,
       AngularFirestoreModule,
       AngularFireDatabaseModule,
       AngularFireAnalyticsModule,

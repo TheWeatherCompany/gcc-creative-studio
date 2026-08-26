@@ -168,28 +168,28 @@ class TestJwksUriDerivation:
     """Phase 1 and phase 2 issuers put the keys in different places."""
 
     def test_org_authorization_server(self):
-        config_service.OKTA_ISSUER = "https://weather.okta.com"
+        config_service.OKTA_ISSUER = "https://your-org.okta.com"
 
         assert (
             config_service.OKTA_JWKS_URI
-            == "https://weather.okta.com/oauth2/v1/keys"
+            == "https://your-org.okta.com/oauth2/v1/keys"
         )
 
     def test_trailing_slash_is_tolerated(self):
-        config_service.OKTA_ISSUER = "https://weather.okta.com/"
+        config_service.OKTA_ISSUER = "https://your-org.okta.com/"
 
         assert (
             config_service.OKTA_JWKS_URI
-            == "https://weather.okta.com/oauth2/v1/keys"
+            == "https://your-org.okta.com/oauth2/v1/keys"
         )
 
     def test_custom_authorization_server(self):
         config_service.OKTA_ISSUER = (
-            "https://weather.okta.com/oauth2/creative-studio"
+            "https://your-org.okta.com/oauth2/creative-studio"
         )
 
         assert config_service.OKTA_JWKS_URI == (
-            "https://weather.okta.com/oauth2/creative-studio/v1/keys"
+            "https://your-org.okta.com/oauth2/creative-studio/v1/keys"
         )
 
     def test_explicit_override_wins(self):

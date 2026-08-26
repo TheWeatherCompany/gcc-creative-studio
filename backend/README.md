@@ -43,7 +43,8 @@ PROJECT_ID="creative-studio-deploy"
 GENMEDIA_BUCKET="creative-studio-deploy-cs-development-bucket"
 SIGNING_SA_EMAIL="cs-development-read@creative-studio-deploy.iam.gserviceaccount.com"
 OKTA_ISSUER="https://your-org.okta.com"
-OKTA_AUDIENCE="0oaXXXXXXXXXXXXXXXXX"  # The Creative Studio SPA client ID
+OKTA_AUDIENCE="0oaXXXXXXXXXXXXXXXXX"   # The Creative Studio SPA client ID
+OKTA_CLIENT_ID="0oaXXXXXXXXXXXXXXXXX"  # Same value; enables the optional `cid` cross-check
 OKTA_GROUP_ROLE_MAP='{"Creative Studio PortalAdmins": "admin", "Creative Studio Users": "user", "Creative Studio Workflows": "workflows"}'
 ```
 

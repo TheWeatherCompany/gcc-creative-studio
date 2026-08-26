@@ -31,6 +31,13 @@ You can connect to your new GCP Argolis Account by setting a `backend/.env` file
 > registered as a redirect URI on that app. Sign-in fails with a 403 if you
 > are not in one of the `Creative Studio *` Okta groups, since roles are
 > derived from the token's `groups` claim rather than stored in the database.
+>
+> The issuer and client ID are configuration, not secrets: a PKCE public
+> client ships its client ID in the JS bundle and in the `client_id` of every
+> `/authorize` redirect. They are deliberately not checked in. Deployed builds
+> receive them as the `_OKTA_ISSUER` and `_OKTA_CLIENT_ID` Cloud Build
+> substitutions, which the Terraform environment repo owns. For local work,
+> fill them into the two files below and leave that change uncommitted.
 
 Add the following env variables in your cloned repo “gcc-creative-studio” modifying the corresponding locations, and replacing with your env values:
 
@@ -48,7 +55,8 @@ PROJECT_ID="creative-studio-deploy"
 GENMEDIA_BUCKET="creative-studio-deploy-cs-development-bucket"
 SIGNING_SA_EMAIL="cs-development-read@creative-studio-deploy.iam.gserviceaccount.com"
 OKTA_ISSUER="https://your-org.okta.com"
-OKTA_AUDIENCE="0oaXXXXXXXXXXXXXXXXX"  # The Creative Studio SPA client ID
+OKTA_AUDIENCE="0oaXXXXXXXXXXXXXXXXX"   # The Creative Studio SPA client ID
+OKTA_CLIENT_ID="0oaXXXXXXXXXXXXXXXXX"  # Same value; enables the optional `cid` cross-check
 OKTA_GROUP_ROLE_MAP='{"Creative Studio PortalAdmins": "admin", "Creative Studio Users": "user", "Creative Studio Workflows": "workflows"}'
 
 # --- Database Configuration (Local Docker Postgres) ---

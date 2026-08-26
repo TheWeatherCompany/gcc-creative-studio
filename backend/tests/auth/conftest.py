@@ -28,7 +28,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from src.auth import okta_verifier
 from src.config.config_service import config_service
 
-TEST_ISSUER = "https://weather.okta.com"
+TEST_ISSUER = "https://your-org.okta.com"
 TEST_AUDIENCE = "0oaTestClientId123"
 TEST_KID = "test-signing-key"
 

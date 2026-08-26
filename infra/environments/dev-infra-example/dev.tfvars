@@ -32,6 +32,11 @@ be_env_vars = {
     OKTA_ISSUER   = "https://YOUR_OKTA_DOMAIN"
     OKTA_AUDIENCE = "YOUR_OKTA_SPA_CLIENT_ID"
 
+    # Enables the optional `cid` cross-check in okta_verifier. Same value as
+    # OKTA_AUDIENCE in phase 1; in phase 2 the audience becomes an API
+    # identifier while this stays the SPA client ID, so they are kept separate.
+    OKTA_CLIENT_ID = "YOUR_OKTA_SPA_CLIENT_ID"
+
     # Okta group -> application role. A user whose token carries no group in
     # this map is rejected with a 403; there is no default role.
     OKTA_GROUP_ROLE_MAP = "{\"Creative Studio PortalAdmins\": \"admin\", \"Creative Studio Users\": \"user\", \"Creative Studio Workflows\": \"workflows\"}"
@@ -46,6 +51,13 @@ be_env_vars = {
 
 fe_build_substitutions = {
   _ANGULAR_BUILD_COMMAND = "build-dev"
+
+  # Substituted into environment.prod.ts at build time. Not secrets: a PKCE
+  # public client ships its client ID in the JS bundle and in the client_id of
+  # every /authorize redirect. Kept here rather than in the application repo so
+  # a fork can point at its own Okta tenant without editing any source.
+  _OKTA_ISSUER    = "https://YOUR_OKTA_DOMAIN"
+  _OKTA_CLIENT_ID = "YOUR_OKTA_SPA_CLIENT_ID"
 }
 
 frontend_secrets = [
@@ -56,20 +68,15 @@ frontend_secrets = [
   "FIREBASE_MESSAGING_SENDER_ID", # Your Firebase Cloud Messaging Sender ID
   "FIREBASE_APP_ID",           # Your Firebase Web App ID
   "FIREBASE_MEASUREMENT_ID",   # Your Google Analytics Measurement ID
-  "OKTA_ISSUER",               # e.g. https://your-org.okta.com
-  "OKTA_CLIENT_ID",            # The Creative Studio SPA client ID
 ]
 
-backend_secrets = [
-  "OKTA_CLIENT_ID",
-]
+# No backend build-time secrets. Every Okta value is public config and travels
+# as a plain env var in be_env_vars above.
+backend_secrets = []
 
-# Mounted in the backend container at runtime. OKTA_ISSUER and OKTA_AUDIENCE
-# are plain env vars above; OKTA_CLIENT_ID is only used for the optional `cid`
-# cross-check on access tokens.
-backend_runtime_secrets = {
-  "OKTA_CLIENT_ID" = "OKTA_CLIENT_ID"
-}
+# Mounted in the backend container at runtime. Empty because no Okta value is
+# secret; the wiring stays in place for genuine secrets later.
+backend_runtime_secrets = {}
 
 apis_to_enable = [
   "serviceusage.googleapis.com",     # Required to enable other APIs

@@ -35,7 +35,11 @@ export const environment = {
   // avatars, so in practice this is every user.
   defaultAvatarUrl: 'assets/images/default-profile-picture.svg',
   okta: {
-    issuer: 'https://weather.okta.com',
+    // Your Okta org, e.g. 'https://your-org.okta.com'. Left blank so a fork
+    // does not inherit someone else's tenant. Deployed builds get this from
+    // the _OKTA_ISSUER build substitution; for local development, fill both
+    // values in here and leave the change uncommitted. See DEVELOPMENT.md.
+    issuer: '',
     clientId: '',
     // Relative paths are resolved against window.location.origin at runtime,
     // so the same value works for localhost and every deployed host.

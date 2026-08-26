@@ -29,9 +29,11 @@ steps:
       - |
         # Inject into Angular app (environment.prod.ts)
         sed -i "s|BACKEND_URL_PLACEHOLDER|$${_BACKEND_URL}/api|g" src/environments/environment.prod.ts
-        # Inject Okta config
-        sed -i "s|OKTA_ISSUER_PLACEHOLDER|$${OKTA_ISSUER}|g" src/environments/environment.prod.ts
-        sed -i "s|OKTA_CLIENT_ID_PLACEHOLDER|$${OKTA_CLIENT_ID}|g" src/environments/environment.prod.ts
+        # Inject Okta config. Neither value is a secret (a PKCE public client
+        # ships its client ID in the bundle), so both arrive as ordinary
+        # build substitutions owned by the Terraform environment repo.
+        sed -i "s|OKTA_ISSUER_PLACEHOLDER|$${_OKTA_ISSUER}|g" src/environments/environment.prod.ts
+        sed -i "s|OKTA_CLIENT_ID_PLACEHOLDER|$${_OKTA_CLIENT_ID}|g" src/environments/environment.prod.ts
         # Inject Firebase config
         sed -i "s|FIREBASE_API_KEY_PLACEHOLDER|$${FIREBASE_API_KEY}|g" src/environments/environment.prod.ts
         sed -i "s|FIREBASE_AUTH_DOMAIN_PLACEHOLDER|$${FIREBASE_AUTH_DOMAIN}|g" src/environments/environment.prod.ts
@@ -50,6 +52,8 @@ steps:
       - '_FE_SERVICE_NAME=${_FE_SERVICE_NAME}'
       - '_BACKEND_SERVICE_ID=${_BACKEND_SERVICE_ID}'
       - '_FIREBASE_SITE_ID=${_FIREBASE_SITE_ID}'
+      - '_OKTA_ISSUER=${_OKTA_ISSUER}'
+      - '_OKTA_CLIENT_ID=${_OKTA_CLIENT_ID}'
     secretEnv:
       - FIREBASE_API_KEY
       - FIREBASE_AUTH_DOMAIN
@@ -58,8 +62,6 @@ steps:
       - FIREBASE_MESSAGING_SENDER_ID
       - FIREBASE_APP_ID
       - FIREBASE_MEASUREMENT_ID
-      - OKTA_ISSUER
-      - OKTA_CLIENT_ID
 
   # 3. Build the application
   - name: 'node:20-alpine' # Use the same version
@@ -89,13 +91,6 @@ steps:
 # This section makes the secrets available as environment variables during the build
 availableSecrets:
   secretManager:
-    # Okta secrets. Neither value is truly secret (the issuer is a public
-    # hostname and a PKCE client ID is public by design), but they live in
-    # Secret Manager so they stay out of the repo and can differ per project.
-    - versionName: projects/${PROJECT_ID}/secrets/OKTA_ISSUER/versions/latest
-      env: 'OKTA_ISSUER'
-    - versionName: projects/${PROJECT_ID}/secrets/OKTA_CLIENT_ID/versions/latest
-      env: 'OKTA_CLIENT_ID'
     # Firebase secrets
     - versionName: projects/${PROJECT_ID}/secrets/FIREBASE_API_KEY/versions/latest
       env: 'FIREBASE_API_KEY'

@@ -558,7 +558,7 @@ collect_okta_config() {
 
     write_state "AUTO_OKTA_ISSUER" "$AUTO_OKTA_ISSUER"
     write_state "AUTO_OKTA_CLIENT_ID" "$AUTO_OKTA_CLIENT_ID"
-    success "Okta configuration recorded. Secrets are populated after apply."
+    success "Okta configuration written to tfvars as plain build substitutions\n   and backend env vars. Nothing Okta-related goes into Secret Manager:\n   a PKCE client ID is public by design."
 
     warn "\nRemember to register these redirect URIs on the Okta app:"
     echo "  - https://<your-deployed-host>/login/callback"
@@ -656,9 +656,6 @@ update_secrets() {
             "FIREBASE_MESSAGING_SENDER_ID")   SECRET_VALUE=$AUTO_FIREBASE_MESSAGING_SENDER_ID; AUTO_DISCOVERED=true ;;
             "FIREBASE_APP_ID")                SECRET_VALUE=$AUTO_FIREBASE_APP_ID; AUTO_DISCOVERED=true ;;
             "FIREBASE_MEASUREMENT_ID")        SECRET_VALUE=$AUTO_FIREBASE_MEASUREMENT_ID; AUTO_DISCOVERED=true ;;
-            # Collected in the Okta configuration step.
-            "OKTA_ISSUER")                    SECRET_VALUE=$AUTO_OKTA_ISSUER; AUTO_DISCOVERED=true ;;
-            "OKTA_CLIENT_ID")                 SECRET_VALUE=$AUTO_OKTA_CLIENT_ID; AUTO_DISCOVERED=true ;;
         esac
 
         if [ "$AUTO_DISCOVERED" = true ] && [ -n "$SECRET_VALUE" ]; then
