@@ -43,6 +43,10 @@ export class FakeOktaAuth {
   refreshToken: {refreshToken: string} | undefined = undefined;
   expired = false;
   originalUri: string | undefined = undefined;
+  /** True while the current URL is an Okta callback, as during handleCallback. */
+  loginRedirect = false;
+
+  isLoginRedirect = () => this.loginRedirect;
 
   tokenManager = {
     getTokens: () => Promise.resolve(this.tokens()),
@@ -124,6 +128,140 @@ describe('AuthService', () => {
 
   it('should be created', () => {
     expect(service).toBeTruthy();
+  });
+
+  // Components in the app shell fetch from ngOnInit, which Angular runs while
+  // handleCallback() is still exchanging the code. Before this signal existed
+  // those fetches went out with no token, drew a 401, and the interceptor read
+  // the 401 as an expired session and started a second redirect to Okta.
+  describe('sessionReady$', () => {
+    it('is true on a plain reload, where tokens are already stored', () => {
+      let ready = false;
+      service.sessionReady$.subscribe(value => (ready = value));
+
+      expect(ready).toBeTrue();
+    });
+
+    // The stale-token case, and the reason this signal cannot simply ask
+    // isLoggedIn(). During a callback the outgoing session's tokens are still
+    // in storage, so they look perfectly usable. They verify, they name the
+    // right user, and they carry whatever scopes the *old* sign-in was granted.
+    it('is false mid-callback, though the previous tokens are still stored', () => {
+      TestBed.resetTestingModule();
+      const midCallback = new FakeOktaAuth();
+      midCallback.loginRedirect = true;
+      TestBed.configureTestingModule({
+        imports: [HttpClientTestingModule],
+        providers: [
+          AuthService,
+          {provide: Router, useValue: router},
+          {provide: UserService, useValue: {getUserDetails: () => userDetails}},
+          {provide: OKTA_AUTH, useValue: midCallback},
+        ],
+      });
+
+      let ready = true;
+      TestBed.inject(AuthService).sessionReady$.subscribe(
+        value => (ready = value),
+      );
+
+      expect(ready).toBeFalse();
+    });
+
+    it('is false when there are no tokens at all', () => {
+      TestBed.resetTestingModule();
+      const signedOut = new FakeOktaAuth();
+      signedOut.idToken = undefined;
+      signedOut.accessToken = undefined;
+      TestBed.configureTestingModule({
+        imports: [HttpClientTestingModule],
+        providers: [
+          AuthService,
+          {provide: Router, useValue: router},
+          {provide: UserService, useValue: {getUserDetails: () => userDetails}},
+          {provide: OKTA_AUTH, useValue: signedOut},
+        ],
+      });
+
+      let ready = true;
+      TestBed.inject(AuthService).sessionReady$.subscribe(
+        value => (ready = value),
+      );
+
+      expect(ready).toBeFalse();
+    });
+
+    /** A service mid-callback, so sessionReady$ starts false. */
+    function midCallbackService(): {
+      auth: AuthService;
+      backend: HttpTestingController;
+    } {
+      TestBed.resetTestingModule();
+      const fake = new FakeOktaAuth();
+      fake.loginRedirect = true;
+      TestBed.configureTestingModule({
+        imports: [HttpClientTestingModule],
+        providers: [
+          AuthService,
+          {provide: Router, useValue: router},
+          {provide: UserService, useValue: {getUserDetails: () => userDetails}},
+          {provide: OKTA_AUTH, useValue: fake},
+        ],
+      });
+      return {
+        auth: TestBed.inject(AuthService),
+        backend: TestBed.inject(HttpTestingController),
+      };
+    }
+
+    it('flips to true once the backend has accepted the token', done => {
+      const {auth, backend} = midCallbackService();
+      const emitted: boolean[] = [];
+      auth.sessionReady$.subscribe(ready => emitted.push(ready));
+
+      auth.syncUserWithBackend$('a-token').subscribe(() => {
+        expect(emitted).toEqual([false, true]);
+        done();
+      });
+
+      backend
+        .expectOne(`${environment.backendURL}/users/me`)
+        .flush({id: 1, email: 'someone@example.com', roles: ['user']});
+    });
+
+    it('stays false when the backend refuses the token', done => {
+      const {auth, backend} = midCallbackService();
+      const emitted: boolean[] = [];
+      auth.sessionReady$.subscribe(ready => emitted.push(ready));
+
+      auth.syncUserWithBackend$('a-token').subscribe({
+        error: () => {
+          expect(emitted).toEqual([false]);
+          done();
+        },
+      });
+
+      backend
+        .expectOne(`${environment.backendURL}/users/me`)
+        .flush({detail: 'no'}, {status: 403, statusText: 'Forbidden'});
+    });
+
+    // A component whose ngOnInit runs after the callback finished must still
+    // get an answer, or it waits forever for an emission already gone by.
+    it('replays the current value to a late subscriber', done => {
+      const {auth, backend} = midCallbackService();
+
+      auth.syncUserWithBackend$('a-token').subscribe(() => {
+        auth.sessionReady$.subscribe(ready => {
+          expect(ready).toBeTrue();
+          done();
+        });
+      });
+
+      backend
+        .expectOne(`${environment.backendURL}/users/me`)
+        .flush({id: 1, email: 'someone@example.com', roles: ['user']});
+    });
   });
 
   describe('login', () => {

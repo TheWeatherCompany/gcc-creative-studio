@@ -18,7 +18,7 @@ import {isPlatformBrowser} from '@angular/common';
 import {HttpClient, HttpErrorResponse, HttpHeaders} from '@angular/common/http';
 import {Injectable, PLATFORM_ID, inject} from '@angular/core';
 import {Router} from '@angular/router';
-import {Observable, from, of, throwError} from 'rxjs';
+import {BehaviorSubject, Observable, from, of, throwError} from 'rxjs';
 import {catchError, map, switchMap, tap} from 'rxjs/operators';
 import {environment} from '../../../environments/environment';
 import {UserModel, UserRolesEnum} from '../models/user.model';
@@ -39,11 +39,46 @@ export class AuthService {
 
   private started = false;
 
+  private readonly sessionReady = new BehaviorSubject<boolean>(false);
+
+  /**
+   * Emits true once an authenticated request will actually carry a token.
+   *
+   * Components that fetch on init need this. Angular builds the app shell
+   * while `handleCallback()` is still exchanging the code, so a component
+   * that calls the API from `ngOnInit` races the token write and loses: the
+   * interceptor finds nothing in the token manager, sends the request bare,
+   * and the API answers 401. Worse, the interceptor treats that 401 as an
+   * expired session and starts another redirect to Okta.
+   *
+   * A BehaviorSubject rather than an event, so a late subscriber on a plain
+   * page reload (tokens already in storage, no callback to wait for) gets the
+   * current answer immediately instead of hanging for an emission that
+   * already happened.
+   */
+  readonly sessionReady$ = this.sessionReady.asObservable();
+
   constructor(
     private router: Router,
     private httpClient: HttpClient,
     private userService: UserService,
-  ) {}
+  ) {
+    // Seeds the reload case, where tokens are already in storage and there is
+    // no callback to wait for.
+    //
+    // `isLoginRedirect()` is the important half. Mid-callback the *previous*
+    // session's tokens are usually still in storage, so `isLoggedIn()` alone
+    // says yes and a component would fetch with the outgoing token. That is
+    // how a stale token produced a 403 rather than a clean 401: the token was
+    // real and verifiable, just issued before the current sign-in.
+    if (
+      isPlatformBrowser(this.platformId) &&
+      !this.oktaAuth?.isLoginRedirect() &&
+      this.isLoggedIn()
+    ) {
+      this.sessionReady.next(true);
+    }
+  }
 
   /**
    * Sends the browser to Okta to authenticate.
@@ -249,6 +284,9 @@ export class AuthService {
           if (isPlatformBrowser(this.platformId)) {
             localStorage.setItem(USER_DETAILS, JSON.stringify(userDetails));
           }
+          // The backend has accepted the token and returned roles, so this is
+          // the earliest point at which another API call is certain to work.
+          this.sessionReady.next(true);
         }),
         catchError((error: HttpErrorResponse) => {
           console.error('Failed to sync user with backend', error);
@@ -266,6 +304,7 @@ export class AuthService {
   private clearLocalSession(): void {
     if (!isPlatformBrowser(this.platformId)) return;
 
+    this.sessionReady.next(false);
     localStorage.removeItem(USER_DETAILS);
     localStorage.removeItem('showTooltip');
   }
