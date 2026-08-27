@@ -23,9 +23,21 @@ Before you begin, ensure you have the following tools installed on your system:
 
 ## 3. Add env variables to repo where we’ll work
 
-You can connect to your new GCP Argolis Account by setting a `backend/.env` file for the backend and a `frontend/src/environments/development.environment.ts` file for the frontend.
+You can connect to your new GCP Argolis Account by setting a `backend/.env` file for the backend and a `frontend/src/environments/environment.development.ts` file for the frontend.
 
-> **Important!!!** set `isLocal = True`, in both frontend and backend, this is so that instead of loggin in with Identity Platform, we login with Firebase, and we keep Identity Platform Authorized Javascript origins clean, without the need to whitelist localhost.
+> **Authentication.** Local development uses the same Okta authorization code
+> flow as a deployed environment. There is no local bypass: you need the
+> Creative Studio Okta app assigned to you, and `http://localhost:4200/login/callback`
+> registered as a redirect URI on that app. Sign-in fails with a 403 if you
+> are not in one of the `Creative Studio *` Okta groups, since roles are
+> derived from the token's `groups` claim rather than stored in the database.
+>
+> The issuer and client ID are configuration, not secrets: a PKCE public
+> client ships its client ID in the JS bundle and in the `client_id` of every
+> `/authorize` redirect. They are deliberately not checked in. Deployed builds
+> receive them as the `_OKTA_ISSUER` and `_OKTA_CLIENT_ID` Cloud Build
+> substitutions, which the Terraform environment repo owns. For local work,
+> fill them into the two files below and leave that change uncommitted.
 
 Add the following env variables in your cloned repo “gcc-creative-studio” modifying the corresponding locations, and replacing with your env values:
 
@@ -42,8 +54,10 @@ GOOGLE_CLOUD_PROJECT="creative-studio-deploy"
 PROJECT_ID="creative-studio-deploy"
 GENMEDIA_BUCKET="creative-studio-deploy-cs-development-bucket"
 SIGNING_SA_EMAIL="cs-development-read@creative-studio-deploy.iam.gserviceaccount.com"
-GOOGLE_TOKEN_AUDIENCE="XXXX-XXXXXXXXXXX.apps.googleusercontent.com"
-IDENTITY_PLATFORM_ALLOWED_ORGS=""
+OKTA_ISSUER="https://your-org.okta.com"
+OKTA_AUDIENCE="0oaXXXXXXXXXXXXXXXXX"   # The Creative Studio SPA client ID
+OKTA_CLIENT_ID="0oaXXXXXXXXXXXXXXXXX"  # Same value; enables the optional `cid` cross-check
+OKTA_GROUP_ROLE_MAP='{"<your user group>": "user", "<your admin group>": "admin", "<your workflow group>": ["user", "workflows"]}'
 
 # --- Database Configuration (Local Docker Postgres) ---
 DB_USER="studio_user"
@@ -62,7 +76,7 @@ ADMIN_USER_EMAIL="your-user-email"
 > - **Safe Experimentation**: Clear volume bindings locally without risking production states or accidental cloud data drops.
 > - **Instant Migrations Validation**: Speed runs Alembic updates completely isolated and offline.
 
-### `frontend/src/environments/development.environment.ts` file
+### `frontend/src/environments/environment.development.ts` file
 
 ```typescript
 export const environment = {
@@ -78,8 +92,20 @@ export const environment = {
   },
   production: false,
   isLocal: true,
-  GOOGLE_CLIENT_ID: "XXXX-XXXXXXXXXXX.apps.googleusercontent.com",
   backendURL: "http://localhost:8080/api",
+  defaultAvatarUrl: "assets/images/default-profile-picture.svg",
+  okta: {
+    issuer: "https://your-org.okta.com",
+    clientId: "0oaXXXXXXXXXXXXXXXXX",
+    redirectUri: "/login/callback",
+    postLogoutRedirectUri: "/login",
+    scopes: ["openid", "profile", "email", "offline_access"],
+    pkce: true,
+    // Phase 1 sends the ID token: Okta API Access Management is not active
+    // yet, so there is no custom authorization server to issue an
+    // audience-scoped access token. Phase 2 flips this to "access".
+    tokenForApi: "id" as "id" | "access",
+  },
 
   // Common env vars
   EMAIL_REGEX:

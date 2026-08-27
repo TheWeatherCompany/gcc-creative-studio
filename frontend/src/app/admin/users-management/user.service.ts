@@ -85,31 +85,6 @@ export class UserService {
       .pipe(catchError(this.handleError));
   }
 
-  // PUT: Update an existing user
-  updateUser(user: UserModel): Observable<any> {
-    const url = `${this.usersApiUrl}/${user.id}`;
-    const payload = {roles: user.roles};
-    return this.http
-      .put(url, payload, this.httpOptions)
-      .pipe(catchError(this.handleError));
-  }
-
-  // DELETE: Delete a user
-  deleteUser(id: number | string): Observable<UserModel> {
-    const url = `${this.usersApiUrl}/${id}`;
-    return this.http
-      .delete<UserModel>(url, this.httpOptions)
-      .pipe(catchError(this.handleError));
-  }
-
-  // POST: Restore a deleted user
-  restoreUser(id: number | string): Observable<UserModel> {
-    const url = `${this.usersApiUrl}/${id}/restore`;
-    return this.http
-      .post<UserModel>(url, {}, this.httpOptions)
-      .pipe(catchError(this.handleError));
-  }
-
   // Basic error handling
   private handleError(error: HttpErrorResponse) {
     let errorMessage = 'An unknown error occurred!';

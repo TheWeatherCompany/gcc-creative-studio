@@ -12,21 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import AsyncMock, patch
+import time
+from unittest.mock import AsyncMock
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 
 from src.auth.auth_guard import RoleChecker, get_current_user
 from src.config.config_service import config_service
 from src.users.user_model import UserModel, UserRoleEnum
+from tests.auth.conftest import (
+    GROUP_ADMIN,
+    GROUP_UNMAPPED,
+    GROUP_USER,
+    OMIT,
+)
 
 
 @pytest.fixture(name="mock_user_service")
 def fixture_mock_user_service():
     service = AsyncMock()
-    # Mock create_user_if_not_exists to return a user
-    service.create_user_if_not_exists.return_value = UserModel(
+    service.create_or_sync_user.return_value = UserModel(
         id=1,
         email="test@example.com",
         roles=["user"],
@@ -36,77 +43,306 @@ def fixture_mock_user_service():
 
 
 class TestGetCurrentUser:
-    """Tests for get_current_user dependency."""
+    """Tests for get_current_user.
+
+    These drive real signed tokens through the real verifier; only the JWKS
+    fetch and the user service are stubbed.
+    """
 
     @pytest.mark.anyio
-    @patch("src.auth.auth_guard.auth.verify_id_token")
-    async def test_get_current_user_local_success(
-        self, mock_verify, mock_user_service
+    async def test_valid_token_provisions_user(
+        self, mint_token, mock_user_service
     ):
-        # Setup: Local environment
-        config_service.ENVIRONMENT = "local"
-        config_service.ALLOWED_ORGS_STR = ""
-
-        # Mock token verification
-        mock_verify.return_value = {
-            "email": "test@example.com",
-            "name": "Test User",
-            "picture": "http://example.com/pic.jpg",
-            "hd": "example.com",
-        }
-
         user = await get_current_user(
-            token="valid_token",
+            token=mint_token(),
             user_service=mock_user_service,
         )
 
         assert user.email == "test@example.com"
-        assert user.name == "Test User"
-        mock_user_service.create_user_if_not_exists.assert_called_once_with(
+        mock_user_service.create_or_sync_user.assert_called_once_with(
             email="test@example.com",
             name="Test User",
             picture="http://example.com/pic.jpg",
+            roles=["user"],
         )
 
     @pytest.mark.anyio
-    @patch("src.auth.auth_guard.auth.verify_id_token")
-    async def test_get_current_user_no_email(
-        self, mock_verify, mock_user_service
+    async def test_roles_come_from_the_groups_claim(
+        self, mint_token, mock_user_service
     ):
-        config_service.ENVIRONMENT = "local"
-        mock_verify.return_value = {"name": "Test User"}  # Missing email
+        """The whole point of the migration: the token decides the roles."""
+        await get_current_user(
+            token=mint_token(
+                groups=[GROUP_ADMIN, GROUP_USER],
+            ),
+            user_service=mock_user_service,
+        )
+
+        _, kwargs = mock_user_service.create_or_sync_user.call_args
+        assert kwargs["roles"] == ["admin", "user"]
+
+    @pytest.mark.anyio
+    async def test_unmapped_groups_are_ignored(
+        self, mint_token, mock_user_service
+    ):
+        await get_current_user(
+            token=mint_token(
+                groups=[GROUP_USER, GROUP_UNMAPPED],
+            ),
+            user_service=mock_user_service,
+        )
+
+        _, kwargs = mock_user_service.create_or_sync_user.call_args
+        assert kwargs["roles"] == ["user"]
+
+    @pytest.mark.anyio
+    async def test_no_matching_group_returns_403(
+        self, mint_token, mock_user_service
+    ):
+        """The backstop that replaces the old hosted-domain check.
+
+        Reachable by assigning the Okta app to an individual rather than to a
+        group. It must not fall through to a default 'user' role.
+        """
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(groups=[GROUP_UNMAPPED]),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "Ask an administrator" in exc_info.value.detail
+        assert GROUP_USER in exc_info.value.detail
+        mock_user_service.create_or_sync_user.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_empty_groups_claim_returns_403(
+        self, mint_token, mock_user_service
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(groups=[]),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 403
+        mock_user_service.create_or_sync_user.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_absent_groups_claim_returns_403(
+        self, mint_token, mock_user_service
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(groups=OMIT),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.anyio
+    async def test_group_outside_the_map_alone_is_rejected(
+        self, mint_token, mock_user_service
+    ):
+        """A tenant's claim filter may admit groups that are not application
+        roles, such as an approvals group. Reaching the guard is not access.
+        """
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(groups=[GROUP_UNMAPPED]),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 403
+        mock_user_service.create_or_sync_user.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_admin_group_grants_admin(
+        self, mint_token, mock_user_service
+    ):
+        await get_current_user(
+            token=mint_token(groups=[GROUP_ADMIN]),
+            user_service=mock_user_service,
+        )
+
+        _, kwargs = mock_user_service.create_or_sync_user.call_args
+        assert kwargs["roles"] == ["admin"]
+
+    @pytest.mark.anyio
+    async def test_expired_token_returns_401(
+        self, mint_token, mock_user_service
+    ):
+        now = int(time.time())
+        token = mint_token(iat=now - 7200, exp=now - 3600)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(token=token, user_service=mock_user_service)
+
+        assert exc_info.value.status_code == 401
+        assert "expired" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_wrong_audience_returns_401(
+        self, mint_token, mock_user_service
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(aud="0oaSomeOtherApp"),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 401
+        assert "Invalid authentication token" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_wrong_issuer_returns_401(
+        self, mint_token, mock_user_service
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(iss="https://attacker.okta.com"),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.anyio
+    async def test_bad_signature_returns_401(
+        self, mint_token, mock_user_service
+    ):
+        attacker_key = rsa.generate_private_key(
+            public_exponent=65537, key_size=2048
+        )
 
         with pytest.raises(HTTPException) as exc_info:
             await get_current_user(
-                token="valid_token", user_service=mock_user_service
+                token=mint_token(key=attacker_key),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.anyio
+    async def test_missing_email_returns_403(
+        self, mint_token, mock_user_service
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(email=OMIT),
+                user_service=mock_user_service,
             )
 
         assert exc_info.value.status_code == 403
         assert "User identity could not be confirmed" in exc_info.value.detail
 
     @pytest.mark.anyio
-    @patch("src.auth.auth_guard.auth.verify_id_token")
-    async def test_get_current_user_allowed_orgs_fail(
-        self,
-        mock_verify,
-        mock_user_service,
+    async def test_hosted_domain_claim_is_not_consulted(
+        self, mint_token, mock_user_service
     ):
-        config_service.ENVIRONMENT = "local"
-        config_service.ALLOWED_ORGS_STR = "allowed.com"
+        """A foreign `hd` must not matter: Okta assignment is the gate now."""
+        user = await get_current_user(
+            token=mint_token(hd="some-other-company.com"),
+            user_service=mock_user_service,
+        )
 
-        mock_verify.return_value = {
-            "email": "test@example.com",
-            "name": "Test User",
-            "hd": "forbidden.com",
-        }
+        assert user.email == "test@example.com"
+
+
+class TestEmailNormalisation:
+    """The email claim is lowercased once, at the guard.
+
+    Anything less lets Okta's casing and the stored row's casing disagree,
+    and the unique index on users.email compares exact strings, so one
+    person would end up as two rows.
+    """
+
+    @pytest.mark.anyio
+    async def test_mixed_case_claim_is_lowercased(
+        self, mint_token, mock_user_service
+    ):
+        await get_current_user(
+            token=mint_token(email="Test.User@Example.COM"),
+            user_service=mock_user_service,
+        )
+
+        kwargs = mock_user_service.create_or_sync_user.call_args.kwargs
+        assert kwargs["email"] == "test.user@example.com"
+
+    @pytest.mark.anyio
+    async def test_surrounding_whitespace_is_stripped(
+        self, mint_token, mock_user_service
+    ):
+        await get_current_user(
+            token=mint_token(email="  test@example.com  "),
+            user_service=mock_user_service,
+        )
+
+        kwargs = mock_user_service.create_or_sync_user.call_args.kwargs
+        assert kwargs["email"] == "test@example.com"
+
+
+class TestUnexpectedFailures:
+    """Nothing internal reaches the response body.
+
+    This endpoint is reachable without credentials, so the exception text
+    (which names unset settings, database instances and hostnames) has to
+    stay in the log.
+    """
+
+    @pytest.mark.anyio
+    async def test_provisioning_failure_returns_an_opaque_500(
+        self, mint_token, mock_user_service
+    ):
+        mock_user_service.create_or_sync_user.side_effect = RuntimeError(
+            "connection to db-instance-prod-7f3a failed: password auth",
+        )
 
         with pytest.raises(HTTPException) as exc_info:
             await get_current_user(
-                token="valid_token", user_service=mock_user_service
+                token=mint_token(),
+                user_service=mock_user_service,
             )
 
-        assert exc_info.value.status_code == 401
-        assert "not part of an allowed organization" in exc_info.value.detail
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == (
+            "Authentication is temporarily unavailable."
+        )
+        assert "db-instance-prod-7f3a" not in str(exc_info.value.detail)
+
+    @pytest.mark.anyio
+    async def test_a_status_code_attribute_cannot_set_the_response_status(
+        self, mint_token, mock_user_service
+    ):
+        """An arbitrary exception used to be able to pick its own status."""
+
+        class WeirdError(RuntimeError):
+            status_code = 204
+
+        mock_user_service.create_or_sync_user.side_effect = WeirdError("nope")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 500
+
+    @pytest.mark.anyio
+    async def test_missing_okta_config_does_not_leak_the_setting_names(
+        self, mint_token, mock_user_service
+    ):
+        token = mint_token()
+        config_service.OKTA_AUDIENCE = ""
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=token,
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 500
+        assert "OKTA_AUDIENCE" not in exc_info.value.detail
 
 
 class TestRoleChecker:

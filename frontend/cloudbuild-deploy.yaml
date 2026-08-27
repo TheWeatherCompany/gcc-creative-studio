@@ -27,9 +27,31 @@ steps:
     args:
       - '-c'
       - |
-        # Inject into Angular app (environment.prod.ts)
-        sed -i "s|BACKEND_URL_PLACEHOLDER|$${_BACKEND_URL}/api|g" src/environments/environment.prod.ts
-        sed -i "s|GOOGLE_CLIENT_ID_PLACEHOLDER|$${GOOGLE_CLIENT_ID}|g" src/environments/environment.prod.ts
+        # The API path is relative (/api) so the SPA calls whichever host
+        # served it, via the Firebase Hosting rewrite. Nothing to substitute:
+        # this only records the origin Terraform derived, which it also uses
+        # for the backend's CORS_ORIGINS. The reference keeps the trigger's
+        # _BACKEND_URL substitution matched, which Cloud Build requires.
+        echo "Frontend origin per Terraform: $${_BACKEND_URL} (API path is relative: /api)"
+        # Inject Okta config. Neither value is a secret (a PKCE public client
+        # ships its client ID in the bundle), so both arrive as ordinary
+        # build substitutions owned by the Terraform environment repo.
+        #
+        # Checked first, because an empty substitution is not a build error:
+        # sed would replace the placeholder with nothing and the bundle would
+        # deploy with issuer: '', where OktaAuth throws on construction and
+        # every user gets a blank page. Fail the build instead.
+        set -e
+        : "$${_OKTA_ISSUER:?_OKTA_ISSUER substitution is empty. Terraform owns this; check fe_build_substitutions in the environment repo.}"
+        : "$${_OKTA_CLIENT_ID:?_OKTA_CLIENT_ID substitution is empty. Terraform owns this; check fe_build_substitutions in the environment repo.}"
+        sed -i "s|OKTA_ISSUER_PLACEHOLDER|$${_OKTA_ISSUER}|g" src/environments/environment.prod.ts
+        sed -i "s|OKTA_CLIENT_ID_PLACEHOLDER|$${_OKTA_CLIENT_ID}|g" src/environments/environment.prod.ts
+
+        # Nothing should still be carrying a placeholder at this point.
+        if grep -q "OKTA_ISSUER_PLACEHOLDER\|OKTA_CLIENT_ID_PLACEHOLDER" src/environments/environment.prod.ts; then
+          echo "ERROR: an Okta placeholder survived substitution." >&2
+          exit 1
+        fi
         # Inject Firebase config
         sed -i "s|FIREBASE_API_KEY_PLACEHOLDER|$${FIREBASE_API_KEY}|g" src/environments/environment.prod.ts
         sed -i "s|FIREBASE_AUTH_DOMAIN_PLACEHOLDER|$${FIREBASE_AUTH_DOMAIN}|g" src/environments/environment.prod.ts
@@ -48,6 +70,8 @@ steps:
       - '_FE_SERVICE_NAME=${_FE_SERVICE_NAME}'
       - '_BACKEND_SERVICE_ID=${_BACKEND_SERVICE_ID}'
       - '_FIREBASE_SITE_ID=${_FIREBASE_SITE_ID}'
+      - '_OKTA_ISSUER=${_OKTA_ISSUER}'
+      - '_OKTA_CLIENT_ID=${_OKTA_CLIENT_ID}'
     secretEnv:
       - FIREBASE_API_KEY
       - FIREBASE_AUTH_DOMAIN
@@ -56,7 +80,6 @@ steps:
       - FIREBASE_MESSAGING_SENDER_ID
       - FIREBASE_APP_ID
       - FIREBASE_MEASUREMENT_ID
-      - GOOGLE_CLIENT_ID
 
   # 3. Build the application
   - name: 'node:20-alpine' # Use the same version
@@ -86,8 +109,6 @@ steps:
 # This section makes the secrets available as environment variables during the build
 availableSecrets:
   secretManager:
-    - versionName: projects/${PROJECT_ID}/secrets/GOOGLE_CLIENT_ID/versions/latest
-      env: 'GOOGLE_CLIENT_ID'
     # Firebase secrets
     - versionName: projects/${PROJECT_ID}/secrets/FIREBASE_API_KEY/versions/latest
       env: 'FIREBASE_API_KEY'

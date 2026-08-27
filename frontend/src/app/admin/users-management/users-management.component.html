@@ -19,6 +19,25 @@
     <h1 class="text-3xl font-semibold">User Management</h1>
   </div>
 
+  <!--
+    Read-only on purpose. Deleting a row here never removed anyone's access:
+    the user could still sign in, and their roles were rewritten from their
+    Okta groups on the next request. Access is granted and revoked in Okta.
+  -->
+  <div
+    class="flex gap-3 items-start bg-slate-800/60 border border-slate-700 rounded-lg px-4 py-3 mb-4"
+    role="note"
+  >
+    <mat-icon class="!text-blue-300 shrink-0">info</mat-icon>
+    <p class="text-sm m-0 opacity-90">
+      This list is read-only. Access is granted and revoked in Okta, by
+      application assignment and group membership: removing someone from this
+      application's Okta groups takes effect on their next request, and
+      unassigning the application stops them signing in at all. Roles shown here
+      are derived from each user's Okta groups.
+    </p>
+  </div>
+
   <!-- Filter & Include Deleted -->
   <div class="flex gap-4 items-center mb-4">
     <mat-form-field appearance="outline" class="flex-grow !mb-0">
@@ -32,8 +51,9 @@
       <mat-icon matSuffix>search</mat-icon>
     </mat-form-field>
 
+    <!-- Retained to surface rows soft-deleted before delete was retired. -->
     <mat-checkbox (change)="onIncludeDeletedChange($event.checked)">
-      Include Deleted
+      Include previously deleted
     </mat-checkbox>
   </div>
 
@@ -63,7 +83,7 @@
         <th mat-header-cell *matHeaderCellDef class="!pl-4">Picture</th>
         <td mat-cell *matCellDef="let user" class="!pl-4">
           <img
-            [src]="user?.picture || 'assets/images/default-avatar.png'"
+            [src]="user?.picture || defaultAvatarUrl"
             alt="User Picture"
             class="w-10 h-10 rounded-full object-cover"
           />
@@ -124,27 +144,9 @@
             mat-icon-button
             color="primary"
             (click)="openUserForm(user)"
-            matTooltip="Edit User"
+            matTooltip="View User"
           >
-            <mat-icon>edit</mat-icon>
-          </button>
-          <button
-            *ngIf="!user.deletedAt && user.id !== currentUserId"
-            mat-icon-button
-            color="warn"
-            (click)="deleteUser(user.id!)"
-            matTooltip="Delete User"
-          >
-            <mat-icon>delete</mat-icon>
-          </button>
-          <button
-            *ngIf="user.deletedAt"
-            mat-icon-button
-            color="accent"
-            (click)="restoreUser(user.id!)"
-            matTooltip="Restore User"
-          >
-            <mat-icon>restore_from_trash</mat-icon>
+            <mat-icon>visibility</mat-icon>
           </button>
         </td>
       </ng-container>

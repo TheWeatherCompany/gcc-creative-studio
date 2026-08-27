@@ -45,6 +45,12 @@ variable "firebase_site_id" {
   default     = ""
 }
 
+variable "frontend_custom_domain" {
+  type        = string
+  description = "(Optional) Vanity hostname for the frontend, e.g. \"studio.example.com\". Empty keeps the default *.web.app address."
+  default     = ""
+}
+
 # --- GitHub Repo Details ---
 variable "github_conn_name" {
   type        = string
@@ -64,17 +70,6 @@ variable "github_repo_name" {
 variable "github_branch_name" {
   type        = string
   description = "The branch name to trigger builds from."
-}
-
-# --- Custom Audiences ---
-variable "backend_custom_audiences" {
-  type        = list(string)
-  description = "List of custom audiences for the backend service."
-}
-
-variable "frontend_custom_audiences" {
-  type        = list(string)
-  description = "List of custom audiences for the frontend service."
 }
 
 # --- Service-Specific Environment Variables ---

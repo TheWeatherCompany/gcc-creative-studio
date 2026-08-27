@@ -23,6 +23,7 @@ import {FunTemplatesComponent} from './fun-templates/fun-templates.component';
 import {MediaDetailComponent} from './gallery/media-detail/media-detail.component';
 import {MediaGalleryComponent} from './gallery/media-gallery/media-gallery.component';
 import {HomeComponent} from './home/home.component';
+import {AuthCallbackComponent} from './login/auth-callback.component';
 import {LoginComponent} from './login/login.component';
 import {VideoComponent} from './video/video.component';
 import {VtoComponent} from './vto/vto.component';
@@ -35,6 +36,7 @@ import {UserRolesEnum} from './common/models/user.model';
 
 const routes: Routes = [
   {path: 'login', component: LoginComponent},
+  {path: 'login/callback', component: AuthCallbackComponent},
   {path: '', component: HomeComponent, canActivate: [AuthGuardService]},
   {
     path: 'fun-templates',

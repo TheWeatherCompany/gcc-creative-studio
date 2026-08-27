@@ -16,7 +16,8 @@
 
 export const environment = {
   firebase: {
-    // Analytics only. Firebase Auth is no longer used.
+    // Analytics only. Firebase Auth is no longer used. Left blank locally so
+    // dev traffic does not land in the production Analytics property.
     apiKey: '',
     authDomain: '',
     projectId: '',
@@ -25,8 +26,8 @@ export const environment = {
     appId: '',
     measurementId: '',
   },
-  production: true,
-  isLocal: false,
+  production: false,
+  isLocal: true,
   backendURL: 'http://localhost:8080/api',
   EMAIL_REGEX:
     /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/,

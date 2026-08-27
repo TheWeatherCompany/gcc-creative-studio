@@ -56,3 +56,24 @@ resource "google_project_iam_member" "logging_writer" {
   role    = "roles/logging.logWriter"
   member  = "serviceAccount:${google_service_account.trigger_sa.email}"
 }
+
+# 6. Optionally serve the site from a vanity hostname.
+#
+# Creating this resource does not make the domain live. Firebase responds with
+# the DNS records it wants (a TXT challenge to prove ownership, then A records
+# pointing at its edge), which are surfaced in the `custom_domain_dns_updates`
+# output for whoever administers the zone. Provisioning finishes on Google's
+# side once those records resolve.
+resource "google_firebase_hosting_custom_domain" "this" {
+  count = var.custom_domain != "" ? 1 : 0
+
+  provider      = google-beta
+  project       = var.firebase_project_id
+  site_id       = google_firebase_hosting_site.this.site_id
+  custom_domain = var.custom_domain
+
+  # The zone is administered outside Terraform, so the records cannot exist
+  # yet on the first apply. Waiting would just burn the 20 minute create
+  # timeout and then fail, leaving the domain half-registered.
+  wait_dns_verification = false
+}

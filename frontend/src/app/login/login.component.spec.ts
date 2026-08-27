@@ -14,64 +14,36 @@
  * limitations under the License.
  */
 
-import {
-  ComponentFixture,
-  TestBed,
-  fakeAsync,
-  tick,
-} from '@angular/core/testing';
-import {RouterTestingModule} from '@angular/router/testing';
-import {of, throwError, NEVER} from 'rxjs';
-import {LoginComponent} from './login.component';
-import {AuthService} from './../common/services/auth.service';
-import {UserModel} from './../common/models/user.model';
-import {MatSnackBar} from '@angular/material/snack-bar';
-import {Router} from '@angular/router';
-import {Injector, NgZone} from '@angular/core';
-import {environment} from '../../environments/environment';
+import {Injector} from '@angular/core';
+import {ComponentFixture, TestBed} from '@angular/core/testing';
 import {MatCardModule} from '@angular/material/card';
 import {MatFormFieldModule} from '@angular/material/form-field';
 import {MatInputModule} from '@angular/material/input';
+import {MatSnackBar} from '@angular/material/snack-bar';
 import {NoopAnimationsModule} from '@angular/platform-browser/animations';
-import {AppInjector, setAppInjector} from '../app-injector';
+import {ActivatedRoute} from '@angular/router';
+import {RouterTestingModule} from '@angular/router/testing';
+import {setAppInjector} from '../app-injector';
 import {NotificationService} from '../common/services/notification.service';
-
-// Define a MockAuthService class
-class MockAuthService {
-  signInWithGoogleFirebase = jasmine.createSpy('signInWithGoogleFirebase');
-  signInForGoogleIdentityPlatform = jasmine.createSpy(
-    'signInForGoogleIdentityPlatform',
-  );
-  // Add any other methods from AuthService that are called in LoginComponent
-}
+import {AuthService} from './../common/services/auth.service';
+import {LoginComponent} from './login.component';
 
 describe('LoginComponent', () => {
   let component: LoginComponent;
   let fixture: ComponentFixture<LoginComponent>;
-  let authService: MockAuthService; // Use the mocked service
-  let router: Router;
-  let ngZone: NgZone;
-  let snackBar: jasmine.SpyObj<MatSnackBar>;
+  let authService: jasmine.SpyObj<AuthService>;
   let notificationService: jasmine.SpyObj<NotificationService>;
-  let consoleErrorSpy: jasmine.Spy;
-
-  const mockUser: UserModel = {
-    id: '123',
-    name: 'Test User',
-    email: 'test@example.com',
-    picture:
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
-  };
+  let queryParams: Record<string, string>;
 
   beforeEach(async () => {
-    const snackBarSpy = jasmine.createSpyObj('MatSnackBar', ['open']);
-    const notificationServiceSpy = jasmine.createSpyObj('NotificationService', [
-      'show',
-    ]);
+    queryParams = {};
+    authService = jasmine.createSpyObj('AuthService', ['login']);
+    authService.login.and.returnValue(Promise.resolve());
+    notificationService = jasmine.createSpyObj('NotificationService', ['show']);
 
     await TestBed.configureTestingModule({
       imports: [
-        RouterTestingModule.withRoutes([{path: '', component: LoginComponent}]),
+        RouterTestingModule,
         MatCardModule,
         MatFormFieldModule,
         MatInputModule,
@@ -79,9 +51,20 @@ describe('LoginComponent', () => {
       ],
       declarations: [LoginComponent],
       providers: [
-        {provide: AuthService, useClass: MockAuthService}, // Use useClass for the mock
-        {provide: MatSnackBar, useValue: snackBarSpy},
-        {provide: NotificationService, useValue: notificationServiceSpy},
+        {provide: AuthService, useValue: authService},
+        {
+          provide: MatSnackBar,
+          useValue: jasmine.createSpyObj('MatSnackBar', ['open']),
+        },
+        {provide: NotificationService, useValue: notificationService},
+        {
+          provide: ActivatedRoute,
+          useValue: {
+            snapshot: {
+              queryParamMap: {get: (key: string) => queryParams[key] ?? null},
+            },
+          },
+        },
       ],
     }).compileComponents();
 
@@ -89,182 +72,79 @@ describe('LoginComponent', () => {
 
     fixture = TestBed.createComponent(LoginComponent);
     component = fixture.componentInstance;
-    // fixture.detectChanges(); // No longer needed with autoDetectChanges
-    fixture.autoDetectChanges(true); // Enable auto-detection of changes
-    authService = TestBed.inject(AuthService) as unknown as MockAuthService; // Inject the mock instance
-    router = TestBed.inject(Router);
-    ngZone = TestBed.inject(NgZone);
-    snackBar = TestBed.inject(MatSnackBar) as jasmine.SpyObj<MatSnackBar>;
-    notificationService = TestBed.inject(
-      NotificationService,
-    ) as jasmine.SpyObj<NotificationService>;
+    fixture.detectChanges();
   });
 
   it('should create the component', () => {
     expect(component).toBeTruthy();
   });
 
-  describe('loginWithGoogle', () => {
-    beforeEach(() => {
-      consoleErrorSpy = spyOn(console, 'error');
-    });
-    it('should show loader and reset error flags', fakeAsync(() => {
-      authService.signInWithGoogleFirebase.and.returnValue(NEVER); // Use NEVER to prevent completion or error
-      authService.signInForGoogleIdentityPlatform.and.returnValue(NEVER); // Use NEVER
-      component.loader = false;
-      component.invalidLogin = true;
-      component.errorMessage = 'Old error';
-
-      component.loginWithGoogle();
-      // fixture.detectChanges(); // autoDetectChanges is true
+  describe('login', () => {
+    it('shows the loader and hands off to Okta', () => {
+      component.login();
 
       expect(component.loader).toBeTrue();
-      expect(component.invalidLogin).toBeFalse();
-      expect(component.errorMessage).toBe('');
-    }));
-    describe('in local environment', () => {
-      beforeEach(() => {
-        (environment as any).isLocal = true;
-      });
-
-      it('should call signInWithGoogleFirebase and navigate on success', fakeAsync(() => {
-        authService.signInWithGoogleFirebase.and.returnValue(of('test-token'));
-        spyOn(router, 'navigate');
-
-        component.loginWithGoogle();
-        tick();
-
-        expect(authService.signInWithGoogleFirebase).toHaveBeenCalled();
-        expect(component.loader).toBeFalse();
-        expect(router.navigate).toHaveBeenCalledWith(['/']);
-      }));
-
-      it('should handle error from signInWithGoogleFirebase', fakeAsync(() => {
-        consoleErrorSpy.and.stub();
-        const error = new Error('Access Denied');
-        authService.signInWithGoogleFirebase.and.returnValue(
-          throwError(() => error),
-        );
-        spyOn(component, 'handleLoginError' as any);
-
-        component.loginWithGoogle();
-        tick();
-
-        expect(component.loader).toBeFalse();
-        expect((component as any).handleLoginError).toHaveBeenCalledWith(error);
-      }));
-
-      it('should handle string error from signInWithGoogleFirebase', fakeAsync(() => {
-        consoleErrorSpy.and.stub();
-        const error = 'An unexpected error occurred';
-        authService.signInWithGoogleFirebase.and.returnValue(
-          throwError(() => error),
-        );
-        spyOn(component, 'handleLoginError' as any);
-
-        component.loginWithGoogle();
-        tick();
-
-        expect(component.loader).toBeFalse();
-        expect((component as any).handleLoginError).toHaveBeenCalledWith(error);
-      }));
+      expect(authService.login).toHaveBeenCalledWith('/');
     });
 
-    describe('in non-local environment', () => {
-      beforeEach(() => {
-        (environment as any).isLocal = false;
-      });
+    it('forwards the returnUrl query param so deep links survive', () => {
+      queryParams = {returnUrl: '/workflows/edit/7'};
 
-      it('should call signInForGoogleIdentityPlatform and navigate on success', fakeAsync(() => {
-        authService.signInForGoogleIdentityPlatform.and.returnValue(
-          of('test-token'),
-        );
-        spyOn(router, 'navigate');
+      component.login();
 
-        component.loginWithGoogle();
-        tick();
-
-        expect(authService.signInForGoogleIdentityPlatform).toHaveBeenCalled();
-        expect(component.loader).toBeFalse();
-        expect(router.navigate).toHaveBeenCalledWith(['/']);
-      }));
-
-      it('should handle error from signInForGoogleIdentityPlatform', fakeAsync(() => {
-        consoleErrorSpy.and.stub();
-        const error = new Error(
-          'An unexpected error occurred during sign-in. Please try again.',
-        );
-        authService.signInForGoogleIdentityPlatform.and.returnValue(
-          throwError(() => error),
-        );
-        spyOn(component, 'handleLoginError' as any);
-
-        component.loginWithGoogle();
-        tick();
-
-        expect(component.loader).toBeFalse();
-        expect((component as any).handleLoginError).toHaveBeenCalledWith(error);
-      }));
-
-      it('should handle string error from signInForGoogleIdentityPlatform', fakeAsync(() => {
-        consoleErrorSpy.and.stub();
-        const error = 'An unexpected error occurred';
-        authService.signInForGoogleIdentityPlatform.and.returnValue(
-          throwError(() => error),
-        );
-        spyOn(component, 'handleLoginError' as any);
-
-        component.loginWithGoogle();
-        tick();
-
-        expect(component.loader).toBeFalse();
-        expect((component as any).handleLoginError).toHaveBeenCalledWith(error);
-      }));
+      expect(authService.login).toHaveBeenCalledWith('/workflows/edit/7');
     });
-  });
 
-  describe('handleLoginError', () => {
-    beforeEach(() => {
-      consoleErrorSpy = spyOn(console, 'error');
+    it('rejects an absolute returnUrl and falls back home', () => {
+      queryParams = {returnUrl: 'https://evil.example.com/phish'};
+
+      component.login();
+
+      expect(authService.login).toHaveBeenCalledWith('/');
     });
-    it('should hide loader and show snackbar', () => {
-      component.loader = true;
-      const errorMessage = {message: 'Test error message'};
 
-      component['handleLoginError'](errorMessage);
+    it('rejects a protocol-relative returnUrl', () => {
+      queryParams = {returnUrl: '//evil.example.com'};
+
+      component.login();
+
+      expect(authService.login).toHaveBeenCalledWith('/');
+    });
+
+    it('rejects a backslash-smuggled returnUrl', () => {
+      queryParams = {returnUrl: '/\\evil.example.com'};
+
+      component.login();
+
+      expect(authService.login).toHaveBeenCalledWith('/');
+    });
+
+    it('keeps the query string on an in-app returnUrl', () => {
+      queryParams = {returnUrl: '/galleries?page=2'};
+
+      component.login();
+
+      expect(authService.login).toHaveBeenCalledWith('/galleries?page=2');
+    });
+
+    it('drops the loader and reports a failure to reach Okta', async () => {
+      spyOn(console, 'error');
+      authService.login.and.returnValue(
+        Promise.reject(new Error('Okta is unreachable')),
+      );
+
+      component.login();
+      await Promise.resolve().then(() => {});
+      await Promise.resolve();
 
       expect(component.loader).toBeFalse();
       expect(notificationService.show).toHaveBeenCalledWith(
-        errorMessage.message,
+        'Okta is unreachable',
         'error',
         'cross-in-circle-white',
         undefined,
         5000,
       );
-    });
-
-    it('should execute postErrorAction if provided', () => {
-      const postErrorAction = jasmine.createSpy('postErrorAction');
-      const errorMessage = {message: 'Test error'};
-      component['handleLoginError'](errorMessage, postErrorAction);
-      expect(postErrorAction).toHaveBeenCalled();
-    });
-  });
-
-  describe('redirect', () => {
-    it('should store user details in localStorage, hide loader and navigate', () => {
-      spyOn(localStorage, 'setItem');
-      spyOn(router, 'navigate');
-      component.loader = true;
-
-      component.redirect(mockUser);
-
-      expect(localStorage.setItem).toHaveBeenCalledWith(
-        'USER_DETAILS',
-        JSON.stringify(mockUser),
-      );
-      expect(component.loader).toBeFalse();
-      expect(router.navigate).toHaveBeenCalledWith(['/']);
     });
   });
 });

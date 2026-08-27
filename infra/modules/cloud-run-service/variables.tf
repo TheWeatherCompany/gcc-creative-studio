@@ -79,12 +79,6 @@ variable "build_substitutions" {
   default     = {}
 }
 
-variable "custom_audiences" {
-  type        = list(string)
-  description = "List of custom audiences for the Cloud Run service."
-  default     = []
-}
-
 variable "scaling_min_instances" {
   type        = number
   description = "Minimum number of container instances."

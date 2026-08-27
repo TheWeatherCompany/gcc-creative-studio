@@ -14,9 +14,9 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from src.auth import okta_verifier
 from src.auth.auth_guard import RoleChecker, get_current_user
 from src.common.dto.pagination_response_dto import PaginationResponseDto
-from src.users.dto.user_create_dto import UserUpdateRoleDto
 from src.users.dto.user_search_dto import UserSearchDto
 from src.users.user_model import UserModel, UserRoleEnum
 from src.users.user_service import UserService
@@ -85,61 +85,80 @@ async def get_user_by_id(user_id: int, user_service: UserService = Depends()):
 
 @router.put(
     "/{user_id}",
-    response_model=UserModel,
-    summary="Update a User's Role (Admin Only)",
+    status_code=status.HTTP_410_GONE,
+    summary="Retired: roles come from Okta groups",
     dependencies=[admin_only],
 )
-async def update_user_role(
-    user_id: int,
-    role_data: UserUpdateRoleDto,
-    user_service: UserService = Depends(),
-):
-    """Updates the role of a specific user (e.g., promote to 'admin' or 'creator').
-    This functionality is restricted to administrators.
+async def update_user_role(user_id: int):
+    """Retired. Roles are derived from Okta group membership on every request.
+
+    Kept as an explicit 410 for one release rather than deleted outright, so
+    a cached older frontend gets a clear answer instead of a 404 that looks
+    like a routing bug.
     """
-    updated_user = await user_service.update_user_role(user_id, role_data)
-    if not updated_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return updated_user
+    known = okta_verifier.mapped_group_names()
+    groups_hint = (
+        f" The groups that grant a role are: {', '.join(known)}."
+        if known
+        else ""
+    )
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Editing roles here is no longer supported. Roles are derived "
+            "from Okta group membership on every request; change the user's "
+            "groups in Okta instead." + groups_hint
+        ),
+    )
+
+
+# Soft delete never revoked anything. `get_by_email` does not filter
+# `deleted_at` and no guard consults it, so a deleted user carrying a token
+# still authenticated, and provisioning then rewrote their roles from the
+# `groups` claim on the very next request. Rather than start enforcing a
+# second, weaker source of truth alongside Okta, the endpoints are retired:
+# access is granted and revoked by Okta app assignment and group membership,
+# in Okta. Both return 410 for one release so a cached older frontend gets an
+# explanation instead of a 404 that reads like a routing bug.
+_ACCESS_IS_IN_OKTA = (
+    "Access is granted and revoked in Okta, by app assignment and group "
+    "membership. Removing a user from the application's Okta groups takes "
+    "effect on their next request; unassigning the application stops them "
+    "signing in at all."
+)
 
 
 @router.delete(
     "/{user_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a User (Admin Only)",
+    status_code=status.HTTP_410_GONE,
+    summary="Retired: access is revoked in Okta",
     dependencies=[admin_only],
 )
-async def delete_user(
-    user_id: int,
-    current_user: UserModel = Depends(get_current_user),
-    user_service: UserService = Depends(),
-):
-    """Soft deletes a user from the database.
-    This functionality is restricted to administrators.
-    """
-    if user_id == current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You cannot delete yourself.",
-        )
-    success = await user_service.delete_user(
-        user_id, deleted_by=current_user.id
+async def delete_user(user_id: int):
+    """Retired. Deleting the row never removed the user's access."""
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Deleting a user here is no longer supported. It only hid the "
+            "row: the user could still sign in, and their roles were "
+            "rewritten from their Okta groups on the next request. "
+            + _ACCESS_IS_IN_OKTA
+        ),
     )
-    if not success:
-        raise HTTPException(status_code=404, detail="User not found")
 
 
 @router.post(
     "/{user_id}/restore",
-    status_code=status.HTTP_200_OK,
-    summary="Restore a User (Admin Only)",
+    status_code=status.HTTP_410_GONE,
+    summary="Retired: access is revoked in Okta",
     dependencies=[admin_only],
 )
-async def restore_user(user_id: int, user_service: UserService = Depends()):
-    """Restores a soft-deleted user.
-    This functionality is restricted to administrators.
-    """
-    success = await user_service.restore_user(user_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {"message": "User restored successfully"}
+async def restore_user(user_id: int):
+    """Retired alongside delete; there is nothing left to restore from."""
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Restoring a user here is no longer supported, because deleting "
+            "one is not either. " + _ACCESS_IS_IN_OKTA
+        ),
+    )

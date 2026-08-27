@@ -14,365 +14,271 @@
  * limitations under the License.
  */
 
+import {isPlatformBrowser} from '@angular/common';
+import {HttpClient, HttpErrorResponse, HttpHeaders} from '@angular/common/http';
 import {Injectable, PLATFORM_ID, inject} from '@angular/core';
 import {Router} from '@angular/router';
-import {UserModel, UserRolesEnum} from '../models/user.model';
-import {HttpClient, HttpHeaders, HttpErrorResponse} from '@angular/common/http';
+import {Observable, from, of, throwError} from 'rxjs';
+import {catchError, map, switchMap, tap} from 'rxjs/operators';
 import {environment} from '../../../environments/environment';
-import {Auth, IdTokenResult} from '@angular/fire/auth';
-import {UserService} from '../services/user.service';
-import {
-  GoogleAuthProvider,
-  signInWithPopup,
-  UserCredential,
-} from '@angular/fire/auth';
-import {Observable, from, throwError, of} from 'rxjs';
-import {catchError, tap, map, switchMap} from 'rxjs/operators';
-import {isPlatformBrowser} from '@angular/common';
+import {UserModel, UserRolesEnum} from '../models/user.model';
+import {OKTA_AUTH} from './okta-auth.provider';
+import {UserService} from './user.service';
 
-// Declare the 'google' global object from the Google Identity Services script
-declare const google: any;
-
-const FIREBASE_SESSION_KEY = 'firebase_session';
 const USER_DETAILS = 'USER_DETAILS';
 const LOGIN_ROUTE = '/login';
-
-interface FirebaseSession {
-  token: string;
-  expiry: number; // Expiration timestamp in milliseconds
-}
+const HOME_ROUTE = '/';
 
 @Injectable({
   providedIn: 'root',
 })
 export class AuthService {
-  private readonly auth: Auth = inject(Auth);
-  private platformId = inject(PLATFORM_ID);
-  private readonly provider: GoogleAuthProvider = new GoogleAuthProvider();
+  /** Null during server-side rendering. See OKTA_AUTH. */
+  private readonly oktaAuth = inject(OKTA_AUTH, {optional: true});
+  private readonly platformId = inject(PLATFORM_ID);
 
-  // Store token temporarily in memory for the session
-  private currentOAuthAccessToken: string | null = null;
-  private firebaseIdToken: string | null = null; // To store the Firebase token for the test
-  private firebaseTokenExpiry: number | null = null; // To store token expiration time (in ms)
+  private started = false;
 
   constructor(
     private router: Router,
     private httpClient: HttpClient,
     private userService: UserService,
-  ) {
-    this.provider.setCustomParameters({
-      // Set custom params for the provider
-      prompt: 'select_account',
-    });
-    this.loadSessionFromStorage();
+  ) {}
+
+  /**
+   * Sends the browser to Okta to authenticate.
+   *
+   * `returnUrl` is stashed by okta-auth-js and handed back to
+   * `handleCallback()` so a deep link survives the round trip.
+   */
+  async login(returnUrl: string = HOME_ROUTE): Promise<void> {
+    if (!this.oktaAuth) return;
+
+    this.oktaAuth.setOriginalUri(returnUrl);
+    await this.oktaAuth.signInWithRedirect();
   }
 
   /**
-   * A test sign-in method to get a Google ID token compatible with Firebase.
+   * Completes the redirect: exchanges the authorization code for tokens,
+   * stores them, then syncs the profile with the backend.
    *
-   * @returns An Observable that emits the Firebase-compatible ID token.
+   * Emits the URL the user was originally headed for. The caller navigates;
+   * doing it here would make this method impossible to test without a router.
    */
-  signInWithGoogleFirebase(): Observable<string> {
-    return from(signInWithPopup(this.auth, this.provider)).pipe(
-      // Step 1: Get the Firebase ID token from the successful sign-in.
-      switchMap((userCredential: UserCredential) => {
-        if (!userCredential.user) {
+  handleCallback(): Observable<string> {
+    if (!this.oktaAuth) {
+      return throwError(
+        () => new Error('Okta is not available outside the browser.'),
+      );
+    }
+    const oktaAuth = this.oktaAuth;
+
+    return from(oktaAuth.storeTokensFromRedirect()).pipe(
+      switchMap(() => this.getApiToken$()),
+      switchMap(token => {
+        if (!token) {
           return throwError(
-            () => new Error('Firebase user not found after sign-in.'),
+            () =>
+              new Error(
+                'Okta returned no usable token. Please try signing in again.',
+              ),
           );
         }
-        return from(userCredential.user.getIdTokenResult());
+        return this.syncUserWithBackend$(token);
       }),
-      // Step 2: Save the session and sync with the backend.
-      switchMap((idTokenResult: IdTokenResult) => {
-        const token = idTokenResult.token;
-        const expirationTime = Date.parse(idTokenResult.expirationTime);
-
-        // Save session details to memory and local storage.
-        this.firebaseIdToken = token;
-        this.firebaseTokenExpiry = expirationTime;
-        const session: FirebaseSession = {token, expiry: expirationTime};
-        localStorage.setItem(FIREBASE_SESSION_KEY, JSON.stringify(session));
-
-        // Call the backend to get or create the user profile.
-        return this.syncUserWithBackend$(token).pipe(
-          map(() => token), // Pass the token along for the final result.
-        );
-      }),
-      catchError((error: any) => {
-        console.error('An error occurred during the sign-in process:', error);
-        return throwError(
-          () => new Error(`Sign-in failed. Please try again. ${error}`),
-        );
-      }),
+      map(() => oktaAuth.getOriginalUri() || HOME_ROUTE),
+      tap(() => oktaAuth.removeOriginalUri()),
     );
   }
 
   /**
-   * Asynchronously gets a valid Firebase token.
-   * 1. Checks for a valid, non-expired token in memory/cache.
-   * 2. If expired or missing, attempts a silent refresh.
-   * 3. If silent refresh fails, it emits an error, signaling a required re-login.
-   */
-  getValidFirebaseToken$(): Observable<string> {
-    // First, check our own session info which is loaded from localStorage.
-    // This is synchronous and tells us if we have a valid, non-expired token.
-    if (!this.isLoggedIn()) {
-      return throwError(
-        () => new Error('User session is not valid or has expired. 1'),
-      );
-    }
-
-    // If we have a valid session, check if the Firebase Auth instance is ready.
-    const currentUser = this.auth.currentUser;
-    if (currentUser) {
-      // Ideal case: Auth is ready, so we can force a token refresh to ensure it's fresh.
-      return from(currentUser.getIdToken(true)).pipe(
-        tap((token: string) => {
-          // Update the in-memory cache and localStorage with the refreshed token info.
-          const payload = JSON.parse(atob(token.split('.')[1]));
-          const expiry = payload.exp * 1000;
-
-          this.firebaseIdToken = token;
-          this.firebaseTokenExpiry = expiry;
-
-          const session: FirebaseSession = {token, expiry};
-          localStorage.setItem(FIREBASE_SESSION_KEY, JSON.stringify(session));
-        }),
-      );
-    }
-
-    // Fallback case: The Firebase Auth instance is not yet initialized, but we
-    // have a valid token from localStorage. We can use this for the current
-    // request. The next request will likely hit the ideal case above.
-    return of(this.firebaseIdToken!);
-  }
-
-  /**
-   * A test sign-in method to get a Google ID token compatible with Identity Platform.
+   * The token to put in the Authorization header, renewing it if needed.
    *
-   * @returns An Observable that emits the Identity Platform-compatible ID token.
+   * Which token that is comes from `environment.okta.tokenForApi`. Phase 1
+   * sends the ID token because the tenant has no custom authorization server
+   * yet; phase 2 sends the access token. Emits null when there is no session.
    */
-  signInForGoogleIdentityPlatform(): Observable<string> {
-    return this.promptForIdentityPlatformToken$().pipe(
-      switchMap(idToken => {
-        const payload = JSON.parse(atob(idToken.split('.')[1]));
-        const userEmail = payload.email?.toLowerCase();
+  getApiToken$(): Observable<string | null> {
+    if (!this.oktaAuth || !isPlatformBrowser(this.platformId)) {
+      return of(null);
+    }
+    const oktaAuth = this.oktaAuth;
 
-        // If allowed, proceed to save session and return token
-        this.firebaseIdToken = idToken;
-        this.firebaseTokenExpiry = payload.exp * 1000;
+    this.ensureStarted();
 
-        const session: FirebaseSession = {
-          token: idToken,
-          expiry: this.firebaseTokenExpiry,
-        };
-        localStorage.setItem(FIREBASE_SESSION_KEY, JSON.stringify(session));
+    if (environment.okta.tokenForApi === 'access') {
+      return from(oktaAuth.getOrRenewAccessToken()).pipe(
+        catchError(error => this.noSession('access token renewal', error)),
+      );
+    }
 
-        // Call the backend to get or create the user profile.
-        return this.syncUserWithBackend$(idToken).pipe(
-          map(() => idToken), // Pass the token along for the final result.
+    // There is no getOrRenewIdToken(), so renew explicitly when the stored
+    // ID token has expired.
+    return from(oktaAuth.tokenManager.getTokens()).pipe(
+      switchMap(tokens => {
+        const idToken = tokens.idToken;
+        if (!idToken) return of(null);
+        if (!oktaAuth.tokenManager.hasExpired(idToken)) {
+          return of(idToken.idToken);
+        }
+        return from(oktaAuth.tokenManager.renew('idToken')).pipe(
+          map(renewed => (renewed as {idToken?: string})?.idToken ?? null),
         );
       }),
+      catchError(error => this.noSession('ID token renewal', error)),
     );
   }
 
-  private promptForIdentityPlatformToken$(): Observable<string> {
-    const GOOGLE_CLIENT_ID = environment.GOOGLE_CLIENT_ID;
-
-    return new Observable<string>(observer => {
-      if (typeof google === 'undefined') {
-        return observer.error(
-          new Error(
-            'Google Identity Services script not loaded. Add it to index.html',
-          ),
-        );
-      }
-
-      const loginTimeout = setTimeout(() => {
-        observer.error(
-          new Error(
-            'Login timed out or third party sign-in may be disabled. Please try again and enable third party sign-in by clicking on the information button at the top left side of the browser.',
-          ),
-        );
-      }, 15000);
-
-      try {
-        google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
-          callback: (response: any) => {
-            clearTimeout(loginTimeout);
-            const idToken = response.credential;
-            if (idToken) {
-              observer.next(idToken);
-              observer.complete();
-            } else {
-              observer.error(
-                new Error(
-                  'Google Sign-In response did not contain a credential.',
-                ),
-              );
-            }
-          },
-        });
-
-        // Trigger the One Tap prompt.
-        // Per new docs, we don't use the notification object for flow control.
-        google.accounts.id.prompt();
-      } catch (error) {
-        clearTimeout(loginTimeout);
-        console.error(
-          'Error during Google Identity Platform sign-in initialization:',
-          error,
-        );
-        observer.error(error);
-      }
-    });
+  /**
+   * Reports a token failure as "no session", but noisily.
+   *
+   * Returning null is right: the interceptor sends the request unauthorized,
+   * the API answers 401, and the user is sent back through Okta. Swallowing
+   * the cause silently is not. An expired refresh token, an Okta outage and a
+   * missing CORS Trusted Origin all land here and are otherwise
+   * indistinguishable from simply being signed out, which makes the
+   * silent-renewal failures the hardest thing here to diagnose in production.
+   */
+  private noSession(operation: string, error: unknown): Observable<null> {
+    console.error(
+      `Okta ${operation} failed; continuing without a token. If this repeats ` +
+        `for signed-in users, check that this origin is a Trusted Origin ` +
+        `with CORS enabled in Okta.`,
+      error,
+    );
+    return of(null);
   }
 
   /**
-   * Asynchronously gets a valid Identity Platform token.
-   * 1. Checks for a valid, non-expired token in memory/cache.
-   * 2. If expired or missing, attempts a silent refresh.
-   * 3. If silent refresh fails, it emits an error, signaling a required re-login.
+   * The current API token without attempting a renewal.
+   *
+   * Convenience for callers that cannot await; prefer `getApiToken$()`.
    */
-  getValidIdentityPlatformToken$(): Observable<string> {
-    // First, check our own session info which is loaded from localStorage.
-    // This is synchronous and tells us if we have a valid, non-expired token.
-    if (!this.isLoggedIn()) {
-      return of();
-    }
+  getAccessToken(): string | null {
+    if (!this.oktaAuth || !isPlatformBrowser(this.platformId)) return null;
 
-    // Fallback case: The Firebase Auth instance is not yet initialized, but we
-    // have a valid token from localStorage. We can use this for the current
-    // request. The next request will likely hit the ideal case above.
-    return of(this.firebaseIdToken!);
+    return environment.okta.tokenForApi === 'access'
+      ? (this.oktaAuth.getAccessToken() ?? null)
+      : (this.oktaAuth.getIdToken() ?? null);
   }
 
-  private syncUserWithBackend$(token: string): Observable<UserModel> {
+  /**
+   * Whether there is a live, unexpired session.
+   *
+   * A pure predicate on purpose. The previous version navigated to /login as
+   * a side effect, which meant merely asking the question could move the
+   * user; the guards now own that decision.
+   */
+  isLoggedIn(): boolean {
+    if (!this.oktaAuth || !isPlatformBrowser(this.platformId)) return false;
+
+    const tokens = this.oktaAuth.tokenManager.getTokensSync();
+    const token =
+      environment.okta.tokenForApi === 'access'
+        ? tokens.accessToken
+        : tokens.idToken;
+
+    if (!token) return false;
+
+    // An expired token is still a session if a refresh token can renew it.
+    if (this.oktaAuth.tokenManager.hasExpired(token)) {
+      return !!tokens.refreshToken;
+    }
+    return true;
+  }
+
+  /** Alias retained for existing call sites. */
+  isUserLoggedIn(): boolean {
+    return this.isLoggedIn();
+  }
+
+  /**
+   * Clears local tokens and the cached profile, then redirects through Okta's
+   * logout so the Okta session ends too, not just this app's copy of it.
+   */
+  async logout(route: string = LOGIN_ROUTE): Promise<void> {
+    this.clearLocalSession();
+
+    if (!this.oktaAuth) {
+      await this.router.navigateByUrl(route);
+      return;
+    }
+
+    try {
+      await this.oktaAuth.signOut({
+        postLogoutRedirectUri: this.oktaAuth.options.postLogoutRedirectUri,
+      });
+    } catch (error) {
+      console.error('Okta sign-out failed; clearing local session.', error);
+      this.oktaAuth.tokenManager.clear();
+      await this.router.navigateByUrl(route);
+    }
+  }
+
+  isUserAdmin(): boolean {
+    if (!isPlatformBrowser(this.platformId)) return false;
+
+    return (
+      this.userService.getUserDetails()?.roles?.includes(UserRolesEnum.ADMIN) ||
+      false
+    );
+  }
+
+  isUserWorkflows(): boolean {
+    if (!isPlatformBrowser(this.platformId)) return false;
+
+    return (
+      this.userService
+        .getUserDetails()
+        ?.roles?.includes(UserRolesEnum.WORKFLOWS) || false
+    );
+  }
+
+  /**
+   * Fetches the profile the backend derives from the token and caches it.
+   *
+   * The backend is the source of truth for roles, so this runs on every
+   * login rather than trusting whatever is already in localStorage.
+   */
+  syncUserWithBackend$(token: string): Observable<UserModel> {
     const headers = new HttpHeaders().set('Authorization', `Bearer ${token}`);
     return this.httpClient
       .get<UserModel>(`${environment.backendURL}/users/me`, {headers})
       .pipe(
         tap((userDetails: UserModel) => {
-          // The backend is the source of truth. Save the returned profile to local storage.
-          localStorage.setItem(USER_DETAILS, JSON.stringify(userDetails));
-          console.log('User profile successfully synced with backend.');
+          if (isPlatformBrowser(this.platformId)) {
+            localStorage.setItem(USER_DETAILS, JSON.stringify(userDetails));
+          }
         }),
         catchError((error: HttpErrorResponse) => {
           console.error('Failed to sync user with backend', error);
-          // This is a critical error, so we should propagate it.
           return throwError(
             () =>
               new Error(
                 error?.error?.detail ||
-                  `Could not synchronize user profile with the server. ${error?.error?.detail}`,
+                  'Could not synchronize your user profile with the server.',
               ),
           );
         }),
       );
   }
 
-  async logout(route: string = LOGIN_ROUTE) {
-    return this.auth
-      .signOut()
-      .then(() => {
-        this.currentOAuthAccessToken = null; // Clear stored token on logout
-        // Clear Firebase session data
-        this.firebaseIdToken = null;
-        this.firebaseTokenExpiry = null;
-        localStorage.removeItem(FIREBASE_SESSION_KEY);
-        localStorage.removeItem(USER_DETAILS);
-        localStorage.removeItem('showTooltip');
-        void this.router.navigateByUrl(route);
-      })
-      .catch(e => {
-        console.error('Sign Out Error', e);
-        localStorage.removeItem(FIREBASE_SESSION_KEY);
-        localStorage.removeItem(USER_DETAILS);
-        localStorage.removeItem('showTooltip');
-        void this.router.navigate([LOGIN_ROUTE]);
-      });
-  }
-
-  isLoggedIn() {
-    if (!isPlatformBrowser(this.platformId)) return false;
-
-    // Check if the in-memory token is valid
-    const now = Date.now();
-    const isTokenValid = !!(
-      this.firebaseIdToken &&
-      this.firebaseTokenExpiry &&
-      this.firebaseTokenExpiry > now
-    );
-
-    if (!isTokenValid && this.router.url !== LOGIN_ROUTE) {
-      void this.router.navigate([LOGIN_ROUTE]);
-    }
-
-    return isTokenValid;
-  }
-
-  private loadSessionFromStorage(): void {
+  private clearLocalSession(): void {
     if (!isPlatformBrowser(this.platformId)) return;
 
-    const sessionStr = localStorage.getItem(FIREBASE_SESSION_KEY);
-    if (sessionStr) {
-      const session: FirebaseSession = JSON.parse(sessionStr);
-      // Check if the stored session is still valid
-      if (session.expiry > Date.now()) {
-        this.firebaseIdToken = session.token;
-        this.firebaseTokenExpiry = session.expiry;
-      } else {
-        // If expired, remove it from storage.
-        localStorage.removeItem(FIREBASE_SESSION_KEY);
-      }
-    }
-  }
-
-  isUserLoggedIn() {
-    if (!isPlatformBrowser(this.platformId)) return false;
-
-    const isUserLoggedIn = localStorage.getItem(FIREBASE_SESSION_KEY) !== null;
-    return isUserLoggedIn;
-  }
-
-  isUserAdmin() {
-    if (!isPlatformBrowser(this.platformId)) return false;
-
-    const user_role = this.userService.getUserDetails()?.roles;
-    return user_role?.includes(UserRolesEnum.ADMIN) || false;
-  }
-
-  isUserWorkflows() {
-    if (!isPlatformBrowser(this.platformId)) return false;
-
-    const user_role = this.userService.getUserDetails()?.roles;
-    return user_role?.includes(UserRolesEnum.WORKFLOWS) || false;
-  }
-
-  getToken() {
-    return this.firebaseIdToken;
-  }
-
-  setOAuthAccessToken(token: string | null): void {
-    this.currentOAuthAccessToken = token;
-  }
-
-  getOAuthAccessToken(): string | null {
-    // Renamed from getAccessToken for clarity
-    return this.currentOAuthAccessToken;
+    localStorage.removeItem(USER_DETAILS);
+    localStorage.removeItem('showTooltip');
   }
 
   /**
-   * Retrieves the currently stored access token.
+   * Starts the token auto-renew service exactly once.
+   *
+   * Deferred rather than done in the constructor because AuthService is
+   * constructed during SSR hydration too, and start() schedules timers.
    */
-  getAccessToken(): string | null {
-    // Note: Tokens expire (usually after 1 hour).
-    // A robust implementation would check expiry or refresh the token.
-    // Firebase Auth automatically handles ID token refresh, but OAuth access token
-    // refresh requires re-authentication or more complex flows not covered here.
-    // For a simple deploy button click, getting a fresh token on sign-in might suffice.
-    return this.currentOAuthAccessToken;
+  private ensureStarted(): void {
+    if (this.started || !this.oktaAuth) return;
+    this.started = true;
+    void this.oktaAuth.start();
   }
 }

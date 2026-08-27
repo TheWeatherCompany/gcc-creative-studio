@@ -14,31 +14,92 @@
  * limitations under the License.
  */
 
-import {TestBed} from '@angular/core/testing';
 import {HttpClientTestingModule} from '@angular/common/http/testing';
-import {Router} from '@angular/router';
-
+import {TestBed} from '@angular/core/testing';
+import {
+  ActivatedRouteSnapshot,
+  Router,
+  RouterStateSnapshot,
+  UrlTree,
+} from '@angular/router';
+import {RouterTestingModule} from '@angular/router/testing';
+import {UserRolesEnum} from '../models/user.model';
 import {AuthGuardService} from './auth.guard.service';
 import {AuthService} from './auth.service';
 import {UserService} from './user.service';
 
 describe('AuthGuardService', () => {
-  let service: AuthGuardService;
+  let guard: AuthGuardService;
+  let router: Router;
+  let loggedIn: boolean;
+  let roles: UserRolesEnum[];
+
+  const snapshot = (requiredRoles?: UserRolesEnum[]) =>
+    ({
+      data: requiredRoles ? {requiredRoles} : {},
+    }) as unknown as ActivatedRouteSnapshot;
+
+  const state = (url: string) => ({url}) as unknown as RouterStateSnapshot;
 
   beforeEach(() => {
+    loggedIn = true;
+    roles = [UserRolesEnum.USER];
+
     TestBed.configureTestingModule({
-      imports: [HttpClientTestingModule],
+      imports: [HttpClientTestingModule, RouterTestingModule],
       providers: [
         AuthGuardService,
-        {provide: AuthService, useValue: {isLoggedIn: () => true}},
-        {provide: Router, useValue: {navigate: jasmine.createSpy('navigate')}},
-        {provide: UserService, useValue: {getUserDetails: () => null}},
+        {provide: AuthService, useValue: {isLoggedIn: () => loggedIn}},
+        {
+          provide: UserService,
+          useValue: {getUserDetails: () => ({roles})},
+        },
       ],
     });
-    service = TestBed.inject(AuthGuardService);
+    guard = TestBed.inject(AuthGuardService);
+    router = TestBed.inject(Router);
   });
 
   it('should be created', () => {
-    expect(service).toBeTruthy();
+    expect(guard).toBeTruthy();
+  });
+
+  it('allows an authenticated user through a route with no role requirement', () => {
+    expect(guard.canActivate(snapshot(), state('/'))).toBeTrue();
+  });
+
+  it('redirects an anonymous user to login, carrying the attempted URL', () => {
+    loggedIn = false;
+
+    const result = guard.canActivate(snapshot(), state('/workflows/new'));
+
+    expect(result).toBeInstanceOf(UrlTree);
+    expect(router.serializeUrl(result as UrlTree)).toBe(
+      '/login?returnUrl=%2Fworkflows%2Fnew',
+    );
+  });
+
+  it('allows a user holding one of the required roles', () => {
+    roles = [UserRolesEnum.WORKFLOWS];
+
+    const result = guard.canActivate(
+      snapshot([UserRolesEnum.WORKFLOWS, UserRolesEnum.ADMIN]),
+      state('/workflows'),
+    );
+
+    expect(result).toBeTrue();
+  });
+
+  it('sends a user lacking the required role home rather than to login', () => {
+    spyOn(console, 'warn');
+    roles = [UserRolesEnum.USER];
+
+    const result = guard.canActivate(
+      snapshot([UserRolesEnum.WORKFLOWS]),
+      state('/workflows'),
+    );
+
+    expect(result).toBeInstanceOf(UrlTree);
+    expect(router.serializeUrl(result as UrlTree)).toBe('/');
   });
 });

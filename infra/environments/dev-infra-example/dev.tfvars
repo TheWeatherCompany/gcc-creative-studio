@@ -7,35 +7,70 @@ backend_service_name  = "cstudio-backend-dev"
 frontend_service_name = "cstudio-frontend-dev" # This is the Cloud Run service name
 firebase_site_id      = "YOUR_FIREBASE_SITE_ID" # (Optional) Custom Firebase Hosting Site ID, defaults to the gcp_project_id
 
+# (Optional) Vanity hostname to serve the frontend from. Leave empty to stay on
+# the default <site-id>.web.app address. The zone must be publicly resolvable
+# for Firebase to verify ownership and issue a certificate, and after the first
+# apply you have to add the records from the frontend_custom_domain_dns_updates
+# output before the domain goes live. Setting this also moves the SPA's API base
+# URL and the backend CORS allowlist onto the same hostname.
+frontend_custom_domain = ""
+
 # --- GitHub Repo Details ---
 github_conn_name   = "gh-repo-owner-con"
 github_repo_owner  = "RepoOwnerName"
 github_repo_name   = "repo-owner-gcc-creative-studio"
 github_branch_name = "develop"
 
-# --- Custom Audiences ---
-backend_custom_audiences  = ["YOUR_OAUTH_WEB_CLIENT_ID_HERE", "YOUR_GCP_PROJECT_ID"]
-frontend_custom_audiences = ["YOUR_OAUTH_WEB_CLIENT_ID_HERE", "YOUR_GCP_PROJECT_ID"]
+# Note: backend_custom_audiences / frontend_custom_audiences were removed.
+# Custom audiences only apply to IAM-authenticated Cloud Run invocations, and
+# both services grant run.invoker to allUsers because Firebase Hosting proxies
+# /api/** without attaching credentials. Authorization happens in the
+# application, so they were dead config.
 
 # --- Service-Specific Environment Variables ---
 be_env_vars = {
   common = {
     LOG_LEVEL = "INFO"
+
+    # Phase 1: the org authorization server, with the SPA client ID as the
+    # audience, because Okta API Access Management is not active yet.
+    # Phase 2 changes these two values to a custom authorization server
+    # (e.g. "https://YOUR_OKTA_DOMAIN/oauth2/creative-studio" and
+    # "api://creative-studio"). No code change is needed for that.
+    OKTA_ISSUER   = "https://YOUR_OKTA_DOMAIN"
+    OKTA_AUDIENCE = "YOUR_OKTA_SPA_CLIENT_ID"
+
+    # Enables the optional `cid` cross-check in okta_verifier. Same value as
+    # OKTA_AUDIENCE in phase 1; in phase 2 the audience becomes an API
+    # identifier while this stays the SPA client ID, so they are kept separate.
+    OKTA_CLIENT_ID = "YOUR_OKTA_SPA_CLIENT_ID"
+
+    # Okta group -> application role. A user whose token carries no group in
+    # this map is rejected with a 403; there is no default role.
+    #
+    # A value may be a single role or a list. Some roles gate only a narrow set
+    # of routes, so a group whose members also need ordinary access must map to
+    # several. Only list groups that should confer a role: any other group the
+    # claim filter admits, such as an approvals group, is ignored.
+    OKTA_GROUP_ROLE_MAP = "{\"<your user group>\": \"user\", \"<your admin group>\": \"admin\", \"<your workflow group>\": [\"user\", \"workflows\"]}"
   }
   development = {
-    ENVIRONMENT  = "development"
-    GOOGLE_TOKEN_AUDIENCE = "YOUR_OAUTH_WEB_CLIENT_ID_HERE"
-    IDENTITY_PLATFORM_ALLOWED_ORGS = "" # If empty then any org is allowed
+    ENVIRONMENT = "development"
   }
   production = {
-    ENVIRONMENT  = "production"
-    GOOGLE_TOKEN_AUDIENCE = "YOUR_OAUTH_WEB_CLIENT_ID_HERE"
-    IDENTITY_PLATFORM_ALLOWED_ORGS = "" # If empty then any org is allowed
+    ENVIRONMENT = "production"
   }
 }
 
 fe_build_substitutions = {
   _ANGULAR_BUILD_COMMAND = "build-dev"
+
+  # Substituted into environment.prod.ts at build time. Not secrets: a PKCE
+  # public client ships its client ID in the JS bundle and in the client_id of
+  # every /authorize redirect. Kept here rather than in the application repo so
+  # a fork can point at its own Okta tenant without editing any source.
+  _OKTA_ISSUER    = "https://YOUR_OKTA_DOMAIN"
+  _OKTA_CLIENT_ID = "YOUR_OKTA_SPA_CLIENT_ID"
 }
 
 frontend_secrets = [
@@ -46,16 +81,15 @@ frontend_secrets = [
   "FIREBASE_MESSAGING_SENDER_ID", # Your Firebase Cloud Messaging Sender ID
   "FIREBASE_APP_ID",           # Your Firebase Web App ID
   "FIREBASE_MEASUREMENT_ID",   # Your Google Analytics Measurement ID
-  "GOOGLE_CLIENT_ID",          # Your Google OAuth 2.0 Client ID for web
 ]
 
-backend_secrets = [
-  "GOOGLE_TOKEN_AUDIENCE",
-]
+# No backend build-time secrets. Every Okta value is public config and travels
+# as a plain env var in be_env_vars above.
+backend_secrets = []
 
-backend_runtime_secrets = {
-  "GOOGLE_TOKEN_AUDIENCE" = "GOOGLE_TOKEN_AUDIENCE"
-}
+# Mounted in the backend container at runtime. Empty because no Okta value is
+# secret; the wiring stays in place for genuine secrets later.
+backend_runtime_secrets = {}
 
 apis_to_enable = [
   "serviceusage.googleapis.com",     # Required to enable other APIs

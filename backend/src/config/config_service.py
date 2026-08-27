@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from typing import Any
 
 import google.auth
@@ -47,10 +48,26 @@ class ConfigService(BaseSettings):
     LOG_LEVEL: str = "INFO"
     INIT_VERTEX: bool = True
 
-    # --- Google Identity ---
-    GOOGLE_TOKEN_AUDIENCE: str = ""
-    ALLOWED_ORGS_STR: str = Field(
-        default="", alias="IDENTITY_PLATFORM_ALLOWED_ORGS"
+    # --- Okta ---
+    # Phase 1 (no API Access Management): the org authorization server, e.g.
+    # "https://your-org.okta.com", with the SPA client ID as the audience.
+    # Phase 2: a custom authorization server, e.g.
+    # "https://your-org.okta.com/oauth2/creative-studio" with audience
+    # "api://creative-studio". Nothing but these two values changes.
+    OKTA_ISSUER: str = ""
+    OKTA_AUDIENCE: str = ""
+    # Optional. When set, a `cid` claim present on the token must match.
+    OKTA_CLIENT_ID: str = ""
+    # Optional override. Leave unset and OKTA_JWKS_URI derives the correct
+    # endpoint for either issuer shape.
+    OKTA_JWKS_URI_OVERRIDE: str = ""
+    # JSON object mapping Okta group name -> application role. The value may
+    # be a single role or a list, for a group that should confer several, e.g.
+    # {"<your admin group>": "admin",
+    #  "<your user group>": "user",
+    #  "<your workflow group>": ["user", "workflows"]}
+    OKTA_GROUP_ROLE_MAP_STR: str = Field(
+        default="", alias="OKTA_GROUP_ROLE_MAP"
     )
 
     # --- Storage ---
@@ -139,15 +156,65 @@ class ConfigService(BaseSettings):
 
         return self
 
-    # This computed field cleanly separates the raw string from the processed set.
     @computed_field
     @property
-    def ALLOWED_ORGS(self) -> set[str]:
-        return set(
-            org.strip()
-            for org in self.ALLOWED_ORGS_STR.split(",")
-            if org.strip()
-        )
+    def OKTA_JWKS_URI(self) -> str:
+        """The JWKS endpoint for the configured issuer.
+
+        The two Okta issuer shapes put the keys in different places. The org
+        authorization server ("https://your-org.okta.com") serves them from
+        /oauth2/v1/keys, while a custom authorization server
+        ("https://your-org.okta.com/oauth2/creative-studio") serves them from
+        <issuer>/v1/keys. Deriving this rather than hardcoding it is what
+        keeps the phase 2 cutover to a pair of config values.
+        """
+        if self.OKTA_JWKS_URI_OVERRIDE:
+            return self.OKTA_JWKS_URI_OVERRIDE
+
+        issuer = self.OKTA_ISSUER.rstrip("/")
+        if not issuer:
+            return ""
+        if "/oauth2/" in issuer:
+            return f"{issuer}/v1/keys"
+        return f"{issuer}/oauth2/v1/keys"
+
+    @computed_field
+    @property
+    def OKTA_GROUP_ROLE_MAP(self) -> dict[str, list[str]]:
+        """Parsed group-to-role mapping.
+
+        A malformed value is a deployment error, not something to paper over
+        at request time, so this raises rather than silently returning {} and
+        locking every user out with an empty role set.
+
+        Each value may be a single role or a list of roles. Some roles gate
+        only a narrow set of routes, so a group meant for people who also need
+        ordinary access has to confer more than one.
+        """
+        raw = self.OKTA_GROUP_ROLE_MAP_STR.strip()
+        if not raw:
+            return {}
+
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "OKTA_GROUP_ROLE_MAP must be a JSON object mapping group "
+                "name to a role or list of roles.",
+            )
+
+        mapping: dict[str, list[str]] = {}
+        for group, value in parsed.items():
+            if isinstance(value, str):
+                roles = [value]
+            elif isinstance(value, list):
+                roles = [str(role) for role in value]
+            else:
+                raise ValueError(
+                    f"OKTA_GROUP_ROLE_MAP value for {group!r} must be a role "
+                    "name or a list of role names.",
+                )
+            mapping[str(group)] = roles
+        return mapping
 
     @computed_field
     @property

@@ -28,7 +28,6 @@ import {UserModel} from '../models/user.model';
 import {environment} from '../../../environments/environment';
 import {HttpClient} from '@angular/common/http';
 import {Observable} from 'rxjs';
-import {user} from '@angular/fire/auth';
 import {isPlatformBrowser} from '@angular/common';
 
 const USER_COLLECTION = 'users';

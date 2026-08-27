@@ -14,35 +14,28 @@
  limitations under the License.
 -->
 
-<h1 mat-dialog-title>Edit User Role</h1>
+<h1 mat-dialog-title>User</h1>
 <div mat-dialog-content>
-  <form [formGroup]="userForm" (ngSubmit)="onSubmit()" class="pt-4">
+  <form [formGroup]="userForm" class="pt-4">
     <mat-form-field appearance="outline" class="w-full">
       <mat-label>Email</mat-label>
       <input matInput formControlName="email" readonly />
     </mat-form-field>
-
-    <mat-form-field appearance="outline" class="w-full">
-      <mat-label>Roles</mat-label>
-      <mat-select formControlName="roles" multiple>
-        <mat-option *ngFor="let role of availableRoles" [value]="role">{{
-          role | titlecase
-        }}</mat-option>
-      </mat-select>
-      <mat-error *ngIf="userForm.get('roles')?.hasError('required')">
-        At least one role must be selected.
-      </mat-error>
-    </mat-form-field>
   </form>
+
+  <div class="mb-2 text-sm opacity-70">Roles</div>
+  <div class="flex flex-wrap gap-1 mb-4">
+    <mat-chip *ngFor="let role of roles">{{ role | titlecase }}</mat-chip>
+    <span *ngIf="!roles.length" class="text-sm opacity-70">None</span>
+  </div>
+
+  <p class="text-sm opacity-70">
+    Roles are derived from Okta group membership on every request and cannot be
+    edited here. To change them, update the user's groups in Okta. Which group
+    grants which role is deployment configuration, so ask an administrator if
+    you are unsure which group a user needs.
+  </p>
 </div>
 <div mat-dialog-actions align="end">
-  <button mat-button (click)="onCancel()">Cancel</button>
-  <button
-    mat-raised-button
-    color="primary"
-    (click)="onSubmit()"
-    [disabled]="!userForm.valid"
-  >
-    Save
-  </button>
+  <button mat-button (click)="onCancel()">Close</button>
 </div>

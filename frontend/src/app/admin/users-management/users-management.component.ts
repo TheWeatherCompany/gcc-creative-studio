@@ -31,13 +31,8 @@ import {isPlatformBrowser} from '@angular/common';
 import {UserService, PaginatedResponse} from './user.service';
 import {MatDialog} from '@angular/material/dialog';
 import {UserFormComponent} from './user-form.component';
-import {MatSnackBar} from '@angular/material/snack-bar';
 import {UserModel, UserRolesEnum} from '../../common/models/user.model';
-import {
-  handleErrorSnackbar,
-  handleSuccessSnackbar,
-} from '../../utils/handleMessageSnackbar';
-import {ConfirmationDialogComponent} from '../../common/components/confirmation-dialog/confirmation-dialog.component';
+import {environment} from '../../../environments/environment';
 
 @Component({
   selector: 'app-users-management',
@@ -64,7 +59,7 @@ export class UsersManagementComponent implements OnInit, OnDestroy {
   totalUsers = 0;
   limit = 10;
   currentPageIndex = 0;
-  currentUserId: number | null = null;
+  readonly defaultAvatarUrl = environment.defaultAvatarUrl;
 
   // --- Filtering & Destroy State ---
   private filterSubject = new Subject<string>();
@@ -78,16 +73,11 @@ export class UsersManagementComponent implements OnInit, OnDestroy {
   constructor(
     private userService: UserService,
     public dialog: MatDialog,
-    private _snackBar: MatSnackBar,
     @Inject(PLATFORM_ID) private platformId: Object,
   ) {}
 
   ngOnInit(): void {
     if (isPlatformBrowser(this.platformId)) {
-      const userDetailsStr = localStorage.getItem('USER_DETAILS');
-      if (userDetailsStr) {
-        this.currentUserId = JSON.parse(userDetailsStr).id || null;
-      }
       void this.fetchPage(0);
     }
 
@@ -159,71 +149,11 @@ export class UsersManagementComponent implements OnInit, OnDestroy {
     this.resetPaginationAndFetch();
   }
 
-  async restoreUser(userId: string): Promise<void> {
-    this.isLoading = true;
-    try {
-      await firstValueFrom(this.userService.restoreUser(userId));
-      handleSuccessSnackbar(this._snackBar, 'User restored successfully!');
-      await this.fetchPage(this.currentPageIndex);
-    } catch (err) {
-      console.error(`Error restoring user ${userId}:`, err);
-      handleErrorSnackbar(this._snackBar, err, 'Restore user');
-    } finally {
-      this.isLoading = false;
-    }
-  }
-
+  /** Opens the read-only user detail dialog. Roles come from Okta. */
   openUserForm(user: UserModel): void {
-    const dialogRef = this.dialog.open(UserFormComponent, {
+    this.dialog.open(UserFormComponent, {
       width: '450px',
-      data: {user: user, isEditMode: true},
-    });
-
-    dialogRef
-      .afterClosed()
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(async (result: UserModel | undefined) => {
-        if (result) {
-          this.isLoading = true;
-          try {
-            // The form returns the full user object with updated roles
-            await firstValueFrom(this.userService.updateUser(result));
-            handleSuccessSnackbar(this._snackBar, 'User updated successfully!');
-            // Refetch to show updated data on the current page.
-            await this.fetchPage(this.currentPageIndex);
-          } catch (err) {
-            console.error(`Error updating user ${result.id}:`, err);
-            handleErrorSnackbar(this._snackBar, err, 'Update user');
-          } finally {
-            this.isLoading = false;
-          }
-        }
-      });
-  }
-
-  deleteUser(userId: string): void {
-    const dialogRef = this.dialog.open(ConfirmationDialogComponent, {
-      width: '400px',
-      data: {
-        title: 'Confirm Deletion',
-        message: `Are you sure you want to delete user with ID: ${userId}?`,
-      },
-    });
-
-    dialogRef.afterClosed().subscribe(async result => {
-      if (result) {
-        this.isLoading = true;
-        try {
-          await firstValueFrom(this.userService.deleteUser(userId));
-          handleSuccessSnackbar(this._snackBar, 'User deleted successfully!');
-          this.resetPaginationAndFetch();
-        } catch (err) {
-          console.error(`Error deleting user ${userId}:`, err);
-          handleErrorSnackbar(this._snackBar, err, 'Delete user');
-        } finally {
-          this.isLoading = false;
-        }
-      }
+      data: {user},
     });
   }
 

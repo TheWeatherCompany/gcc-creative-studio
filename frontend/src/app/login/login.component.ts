@@ -14,20 +14,34 @@
  * limitations under the License.
  */
 
-import {Component, NgZone, Inject, PLATFORM_ID} from '@angular/core';
-import {GoogleAuthProvider} from '@angular/fire/auth';
-import {Router} from '@angular/router';
-import {AuthService} from './../common/services/auth.service';
-import {UserModel} from './../common/models/user.model';
-import {MatSnackBar} from '@angular/material/snack-bar';
-import {handleErrorSnackbar} from '../utils/handleMessageSnackbar';
-import {environment} from '../../environments/environment';
 import {isPlatformBrowser} from '@angular/common';
+import {Component, Inject, PLATFORM_ID} from '@angular/core';
+import {MatSnackBar} from '@angular/material/snack-bar';
+import {ActivatedRoute} from '@angular/router';
+import {AuthService} from './../common/services/auth.service';
+import {handleErrorSnackbar} from '../utils/handleMessageSnackbar';
 
 const HOME_ROUTE = '/';
 
-interface LooseObject {
-  [key: string]: any;
+/**
+ * Constrains ?returnUrl to a path inside this app.
+ *
+ * The value survives the Okta round trip and is handed to
+ * `router.navigateByUrl`, so an absolute or protocol-relative value should
+ * never get that far. Angular's router would not actually leave the origin,
+ * but "the router happens to contain it" is a weaker guarantee than not
+ * accepting the input, and a crafted /login?returnUrl=... link should not
+ * decide where a user lands after authenticating.
+ */
+export function safeReturnUrl(candidate: string | null): string {
+  if (!candidate) return HOME_ROUTE;
+  // Rejects "//evil.com" (protocol-relative), "https://evil.com" and
+  // "\\evil.com", while allowing "/galleries?page=2".
+  if (!candidate.startsWith('/')) return HOME_ROUTE;
+  if (candidate.startsWith('//') || candidate.startsWith('/\\')) {
+    return HOME_ROUTE;
+  }
+  return candidate;
 }
 
 @Component({
@@ -36,111 +50,35 @@ interface LooseObject {
   styleUrls: ['./login.component.scss'],
 })
 export class LoginComponent {
-  private readonly provider: GoogleAuthProvider = new GoogleAuthProvider();
-
   loader = false;
-  invalidLogin = false;
-  errorMessage = '';
   isBrowser: boolean;
 
   constructor(
     private authService: AuthService,
-    private router: Router,
-    public ngZone: NgZone,
-    private _snackBar: MatSnackBar,
+    private route: ActivatedRoute,
+    private snackBar: MatSnackBar,
     @Inject(PLATFORM_ID) platformId: Object,
   ) {
     this.isBrowser = isPlatformBrowser(platformId);
-    this.provider.setCustomParameters({
-      prompt: 'select_account',
-    });
   }
 
-  ngOnInit(): void {}
-
-  loginWithGoogle() {
+  /**
+   * Hands off to Okta. There is no local-only variant any more: localhost is
+   * a registered redirect URI, so developers take the same path as everyone
+   * else and need the same Okta app assignment.
+   */
+  login(): void {
     this.loader = true;
-    this.invalidLogin = false;
-    this.errorMessage = '';
 
-    if (environment?.isLocal) {
-      // This will use the Google Identity Services library to get an FIREBASE-compatible token.
-      this.authService.signInWithGoogleFirebase().subscribe({
-        next: (firebaseToken: string) => {
-          // The signInForGoogleIdentityPlatform method already stored the token and minimal user details
-          // in localStorage. We just need to redirect to trigger the AuthGuard.
-          this.ngZone.run(() => {
-            this.loader = false;
-            void this.router.navigate([HOME_ROUTE]);
-          });
-        },
-        error: error => {
-          this.loader = false;
-          console.log(error);
-          // Handle specific errors from the auth service
-          if (
-            error.message?.includes('timed out') ||
-            error.message?.includes('Access Denied')
-          ) {
-            this.handleLoginError(error);
-          } else {
-            this.handleLoginError(
-              error || {
-                message:
-                  'An unexpected error occurred during sign-in. Please try again.',
-              },
-            );
-          }
-          console.error('FIREBASE Login Process Error:', error);
-        },
-      });
-    } else {
-      // This will use the Google Identity Services library to get an FIREBASE-compatible token.
-      this.authService.signInForGoogleIdentityPlatform().subscribe({
-        next: (firebaseToken: string) => {
-          // The signInForGoogleIdentityPlatform method already stored the token and minimal user details
-          // in localStorage. We just need to redirect to trigger the AuthGuard.
-          this.ngZone.run(() => {
-            this.loader = false;
-            void this.router.navigate([HOME_ROUTE]);
-          });
-        },
-        error: error => {
-          this.loader = false;
-          console.log(error);
-          // Handle specific errors from the auth service
-          if (
-            error.message?.includes('timed out') ||
-            error.message?.includes('Access Denied')
-          ) {
-            this.handleLoginError(error);
-          } else {
-            this.handleLoginError(
-              error || {
-                message:
-                  'An unexpected error occurred during sign-in. Please try again.',
-              },
-            );
-          }
-          console.error('FIREBASE Login Process Error:', error);
-        },
-      });
-    }
-  }
+    const returnUrl = safeReturnUrl(
+      this.route.snapshot.queryParamMap.get('returnUrl'),
+    );
 
-  private handleLoginError(error: any, postErrorAction?: () => void) {
-    this.loader = false;
-    handleErrorSnackbar(this._snackBar, error, 'Login Error');
-    if (postErrorAction) {
-      postErrorAction();
-    }
-  }
-
-  redirect(user: UserModel) {
-    if (this.isBrowser) {
-      localStorage.setItem('USER_DETAILS', JSON.stringify(user));
-    }
-    this.loader = false;
-    void this.router.navigate([HOME_ROUTE]);
+    // Resolves only after the browser has left the page, so the spinner
+    // stays up; a rejection means we never got that far.
+    this.authService.login(returnUrl).catch(error => {
+      this.loader = false;
+      handleErrorSnackbar(this.snackBar, error, 'Login Error');
+    });
   }
 }
