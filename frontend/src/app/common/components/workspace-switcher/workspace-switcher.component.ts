@@ -19,7 +19,8 @@ import {isPlatformBrowser} from '@angular/common';
 import {MatDialog} from '@angular/material/dialog';
 import {MatSnackBar} from '@angular/material/snack-bar';
 import {ActivatedRoute} from '@angular/router';
-import {map, switchMap} from 'rxjs';
+import {filter, map, switchMap, take} from 'rxjs';
+import {AuthService} from '../../services/auth.service';
 import {WorkspaceStateService} from '../../../services/workspace/workspace-state.service';
 import {WorkspaceService} from '../../../services/workspace/workspace.service';
 import {
@@ -62,6 +63,7 @@ export class WorkspaceSwitcherComponent implements OnInit {
     private workspaceStateService: WorkspaceStateService,
     public brandGuidelineService: BrandGuidelineService,
     private userService: UserService,
+    private authService: AuthService,
     private route: ActivatedRoute,
     public dialog: MatDialog,
     private snackBar: MatSnackBar,
@@ -72,7 +74,18 @@ export class WorkspaceSwitcherComponent implements OnInit {
   }
 
   ngOnInit(): void {
-    this.loadWorkspaces();
+    // Waits for a session rather than fetching immediately. This component
+    // lives in the app shell, so Angular builds it while the Okta callback is
+    // still exchanging the code; fetching here sent the request before any
+    // token existed, drew a 401, and left the switcher empty behind a red
+    // toast. On a plain reload the session is already established and this
+    // emits synchronously, so nothing is deferred that need not be.
+    this.authService.sessionReady$
+      .pipe(
+        filter(ready => ready),
+        take(1),
+      )
+      .subscribe(() => this.loadWorkspaces());
     this.workspaceStateService.activeWorkspaceId$.subscribe(id => {
       // Ensure we handle both string (from legacy/url) and number types safely if needed,
       // but ideally workspaceStateService should also be consistent.
@@ -116,6 +129,18 @@ export class WorkspaceSwitcherComponent implements OnInit {
         this.initializeActiveWorkspace();
       },
       error: error => {
+        // 401 and 403 are not workspace failures and this component is the
+        // wrong place to report them. The interceptor re-authenticates on 401
+        // and the route guards own 403, so surfacing them here produced a
+        // "Could not load workspaces" toast carrying an authorization message,
+        // which pointed at the wrong problem entirely.
+        if (error?.status === 401 || error?.status === 403) {
+          console.warn(
+            `Workspaces not loaded: the API returned ${error.status}. ` +
+              `Leaving this to the auth layer.`,
+          );
+          return;
+        }
         handleErrorSnackbar(this.snackBar, error, 'Could not load workspaces');
       },
     });
