@@ -66,19 +66,6 @@ export function oktaAuthFactory(
     postLogoutRedirectUri: resolveRedirectUri(config.postLogoutRedirectUri),
     scopes: [...config.scopes],
     pkce: config.pkce,
-    // Ask for exactly the one token that gets used, because asking for both
-    // is not free. When an access token is issued in the same flow, Okta's
-    // org authorization server returns a *thin* ID token: the base claims
-    // plus only name, preferred_username and email. Group claims are dropped.
-    // `groups` is what the backend maps to roles, so the whole tenant would
-    // authenticate successfully and then be refused with a 403. The full
-    // claim set is reachable at /oauth2/v1/userinfo, but that is an extra
-    // network call for something the token can simply carry.
-    //
-    // Derived from tokenForApi rather than hardcoded so the two cannot drift:
-    // phase 2 authorises with the access token and must then request it.
-    responseType:
-      config.tokenForApi === 'access' ? ['token', 'id_token'] : ['id_token'],
     // Keeps tokens fresh in the background so a long-lived tab does not
     // start 401ing an hour in.
     services: {autoRenew: true, autoRemove: true},
