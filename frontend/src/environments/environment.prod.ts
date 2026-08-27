@@ -27,7 +27,13 @@ export const environment = {
   },
   production: true,
   isLocal: false,
-  backendURL: 'BACKEND_URL_PLACEHOLDER',
+  // Relative on purpose. Firebase Hosting serves the SPA and rewrites
+  // /api/** to Cloud Run on the same origin, so a relative path follows
+  // whatever host the app was loaded from: the default *.web.app URL, a
+  // custom domain, or a preview channel. An absolute URL pinned to one host
+  // would make every other host issue cross-origin calls that CORS_ORIGINS
+  // then rejects.
+  backendURL: '/api',
   EMAIL_REGEX:
     /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/,
   ADMIN: 'admin',

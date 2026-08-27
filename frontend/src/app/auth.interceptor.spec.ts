@@ -51,6 +51,38 @@ describe('AuthInterceptor', () => {
 
   afterEach(() => httpMock.verify());
 
+  // Deployed builds set backendURL to the relative '/api' so the SPA follows
+  // whichever host served it. The suite otherwise only exercises the absolute
+  // localhost value from environment.ts, so pin the deployed shape too.
+  describe('with a relative backendURL, as deployed', () => {
+    let originalBackendUrl: string;
+
+    beforeEach(() => {
+      originalBackendUrl = environment.backendURL;
+      (environment as {backendURL: string}).backendURL = '/api';
+    });
+
+    afterEach(() => {
+      (environment as {backendURL: string}).backendURL = originalBackendUrl;
+    });
+
+    it('attaches the bearer token to a relative backend request', () => {
+      http.get('/api/users/me').subscribe();
+
+      const req = httpMock.expectOne('/api/users/me');
+      expect(req.request.headers.get('Authorization')).toBe('Bearer a-token');
+      req.flush({});
+    });
+
+    it('leaves a third-party absolute URL untouched', () => {
+      http.get('https://example.com/api/users/me').subscribe();
+
+      const req = httpMock.expectOne('https://example.com/api/users/me');
+      expect(req.request.headers.has('Authorization')).toBeFalse();
+      req.flush({});
+    });
+  });
+
   it('attaches the bearer token to backend requests', () => {
     http.get(`${environment.backendURL}/users/me`).subscribe();
 

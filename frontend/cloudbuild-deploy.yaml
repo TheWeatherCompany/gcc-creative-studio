@@ -27,8 +27,12 @@ steps:
     args:
       - '-c'
       - |
-        # Inject into Angular app (environment.prod.ts)
-        sed -i "s|BACKEND_URL_PLACEHOLDER|$${_BACKEND_URL}/api|g" src/environments/environment.prod.ts
+        # The API path is relative (/api) so the SPA calls whichever host
+        # served it, via the Firebase Hosting rewrite. Nothing to substitute:
+        # this only records the origin Terraform derived, which it also uses
+        # for the backend's CORS_ORIGINS. The reference keeps the trigger's
+        # _BACKEND_URL substitution matched, which Cloud Build requires.
+        echo "Frontend origin per Terraform: $${_BACKEND_URL} (API path is relative: /api)"
         # Inject Okta config. Neither value is a secret (a PKCE public client
         # ships its client ID in the bundle), so both arrive as ordinary
         # build substitutions owned by the Terraform environment repo.
