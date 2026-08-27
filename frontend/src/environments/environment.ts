@@ -45,7 +45,13 @@ export const environment = {
     // so the same value works for localhost and every deployed host.
     redirectUri: '/login/callback',
     postLogoutRedirectUri: '/login',
-    scopes: ['openid', 'profile', 'email', 'offline_access'],
+    // `groups` is load-bearing, not decorative. The Okta app emits the
+    // `groups` claim only when this scope is requested, and the backend maps
+    // that claim to application roles. Without it the ID token still verifies
+    // and still identifies the user, so login appears to succeed and then
+    // every request is refused with a 403 naming groups the user is already
+    // in. Removing it breaks authorization for the whole tenant at once.
+    scopes: ['openid', 'profile', 'email', 'offline_access', 'groups'],
     pkce: true,
     // Phase 1 sends the ID token, because Okta API Access Management is not
     // yet active in the tenant. Phase 2 flips this to 'access' once a custom
