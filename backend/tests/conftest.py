@@ -27,6 +27,16 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + "/../"))
 # Set environment for tests
 os.environ["ENVIRONMENT"] = "local"
 
+# The app validates its Okta configuration during lifespan startup and refuses
+# to serve without one, so any fixture that boots a TestClient needs these.
+# Generic values on purpose: the real group names are deployment config and
+# live in the Terraform environment repo.
+os.environ["OKTA_ISSUER"] = "https://your-org.okta.com"
+os.environ["OKTA_AUDIENCE"] = "0oaTestClientId123"
+os.environ["OKTA_GROUP_ROLE_MAP"] = (
+    '{"Test Group User": "user", "Test Group Admin": "admin"}'
+)
+
 import google.auth
 
 google.auth.default = MagicMock(return_value=(MagicMock(), "dummy-project-id"))

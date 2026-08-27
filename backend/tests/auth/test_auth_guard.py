@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 
 from src.auth.auth_guard import RoleChecker, get_current_user
+from src.config.config_service import config_service
 from src.users.user_model import UserModel, UserRoleEnum
 from tests.auth.conftest import (
     GROUP_ADMIN,
@@ -245,6 +246,103 @@ class TestGetCurrentUser:
         )
 
         assert user.email == "test@example.com"
+
+
+class TestEmailNormalisation:
+    """The email claim is lowercased once, at the guard.
+
+    Anything less lets Okta's casing and the stored row's casing disagree,
+    and the unique index on users.email compares exact strings, so one
+    person would end up as two rows.
+    """
+
+    @pytest.mark.anyio
+    async def test_mixed_case_claim_is_lowercased(
+        self, mint_token, mock_user_service
+    ):
+        await get_current_user(
+            token=mint_token(email="Test.User@Example.COM"),
+            user_service=mock_user_service,
+        )
+
+        kwargs = mock_user_service.create_or_sync_user.call_args.kwargs
+        assert kwargs["email"] == "test.user@example.com"
+
+    @pytest.mark.anyio
+    async def test_surrounding_whitespace_is_stripped(
+        self, mint_token, mock_user_service
+    ):
+        await get_current_user(
+            token=mint_token(email="  test@example.com  "),
+            user_service=mock_user_service,
+        )
+
+        kwargs = mock_user_service.create_or_sync_user.call_args.kwargs
+        assert kwargs["email"] == "test@example.com"
+
+
+class TestUnexpectedFailures:
+    """Nothing internal reaches the response body.
+
+    This endpoint is reachable without credentials, so the exception text
+    (which names unset settings, database instances and hostnames) has to
+    stay in the log.
+    """
+
+    @pytest.mark.anyio
+    async def test_provisioning_failure_returns_an_opaque_500(
+        self, mint_token, mock_user_service
+    ):
+        mock_user_service.create_or_sync_user.side_effect = RuntimeError(
+            "connection to db-instance-prod-7f3a failed: password auth",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == (
+            "Authentication is temporarily unavailable."
+        )
+        assert "db-instance-prod-7f3a" not in str(exc_info.value.detail)
+
+    @pytest.mark.anyio
+    async def test_a_status_code_attribute_cannot_set_the_response_status(
+        self, mint_token, mock_user_service
+    ):
+        """An arbitrary exception used to be able to pick its own status."""
+
+        class WeirdError(RuntimeError):
+            status_code = 204
+
+        mock_user_service.create_or_sync_user.side_effect = WeirdError("nope")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=mint_token(),
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 500
+
+    @pytest.mark.anyio
+    async def test_missing_okta_config_does_not_leak_the_setting_names(
+        self, mint_token, mock_user_service
+    ):
+        token = mint_token()
+        config_service.OKTA_AUDIENCE = ""
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                token=token,
+                user_service=mock_user_service,
+            )
+
+        assert exc_info.value.status_code == 500
+        assert "OKTA_AUDIENCE" not in exc_info.value.detail
 
 
 class TestRoleChecker:

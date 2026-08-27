@@ -36,8 +36,22 @@ steps:
         # Inject Okta config. Neither value is a secret (a PKCE public client
         # ships its client ID in the bundle), so both arrive as ordinary
         # build substitutions owned by the Terraform environment repo.
+        #
+        # Checked first, because an empty substitution is not a build error:
+        # sed would replace the placeholder with nothing and the bundle would
+        # deploy with issuer: '', where OktaAuth throws on construction and
+        # every user gets a blank page. Fail the build instead.
+        set -e
+        : "$${_OKTA_ISSUER:?_OKTA_ISSUER substitution is empty. Terraform owns this; check fe_build_substitutions in the environment repo.}"
+        : "$${_OKTA_CLIENT_ID:?_OKTA_CLIENT_ID substitution is empty. Terraform owns this; check fe_build_substitutions in the environment repo.}"
         sed -i "s|OKTA_ISSUER_PLACEHOLDER|$${_OKTA_ISSUER}|g" src/environments/environment.prod.ts
         sed -i "s|OKTA_CLIENT_ID_PLACEHOLDER|$${_OKTA_CLIENT_ID}|g" src/environments/environment.prod.ts
+
+        # Nothing should still be carrying a placeholder at this point.
+        if grep -q "OKTA_ISSUER_PLACEHOLDER\|OKTA_CLIENT_ID_PLACEHOLDER" src/environments/environment.prod.ts; then
+          echo "ERROR: an Okta placeholder survived substitution." >&2
+          exit 1
+        fi
         # Inject Firebase config
         sed -i "s|FIREBASE_API_KEY_PLACEHOLDER|$${FIREBASE_API_KEY}|g" src/environments/environment.prod.ts
         sed -i "s|FIREBASE_AUTH_DOMAIN_PLACEHOLDER|$${FIREBASE_AUTH_DOMAIN}|g" src/environments/environment.prod.ts

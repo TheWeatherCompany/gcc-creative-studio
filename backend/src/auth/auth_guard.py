@@ -55,7 +55,12 @@ async def get_current_user(
     try:
         decoded_token = await asyncio.to_thread(okta_verifier.verify, token)
 
-        email = decoded_token.get("email")
+        # Normalised once, here, so every lookup and insert downstream agrees
+        # on a single spelling. Okta can hand back a different case to what is
+        # already stored, and the unique index on users.email compares exact
+        # strings, so two spellings of one address would become two people.
+        raw_email = decoded_token.get("email")
+        email = raw_email.strip().lower() if raw_email else None
         name = decoded_token.get("name") or ""
         picture = decoded_token.get("picture", "")
         groups = decoded_token.get("groups") or []
@@ -128,14 +133,18 @@ async def get_current_user(
         logger.error("[get_current_user - Exception]: %s", e)
         raise e
     except Exception as e:
-        logger.error("[get_current_user - Exception]: %s", e)
+        # Deliberately says nothing. This path is reachable without
+        # credentials, because Firebase Hosting proxies /api/** unauthenticated
+        # and the service grants run.invoker to allUsers. The exceptions that
+        # land here carry internals worth keeping out of a response body:
+        # OktaConfigurationError names the unset settings, driver errors name
+        # the database instance. The stack trace goes to the log instead.
+        logger.exception(
+            "[get_current_user] Unexpected authentication failure",
+        )
         raise HTTPException(
-            status_code=getattr(
-                e,
-                "status_code",
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-            ),
-            detail=f"An unexpected error occurred during authentication: {e}",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication is temporarily unavailable.",
         ) from e
 
 

@@ -95,6 +95,38 @@ describe('LoginComponent', () => {
       expect(authService.login).toHaveBeenCalledWith('/workflows/edit/7');
     });
 
+    it('rejects an absolute returnUrl and falls back home', () => {
+      queryParams = {returnUrl: 'https://evil.example.com/phish'};
+
+      component.login();
+
+      expect(authService.login).toHaveBeenCalledWith('/');
+    });
+
+    it('rejects a protocol-relative returnUrl', () => {
+      queryParams = {returnUrl: '//evil.example.com'};
+
+      component.login();
+
+      expect(authService.login).toHaveBeenCalledWith('/');
+    });
+
+    it('rejects a backslash-smuggled returnUrl', () => {
+      queryParams = {returnUrl: '/\\evil.example.com'};
+
+      component.login();
+
+      expect(authService.login).toHaveBeenCalledWith('/');
+    });
+
+    it('keeps the query string on an in-app returnUrl', () => {
+      queryParams = {returnUrl: '/galleries?page=2'};
+
+      component.login();
+
+      expect(authService.login).toHaveBeenCalledWith('/galleries?page=2');
+    });
+
     it('drops the loader and reports a failure to reach Okta', async () => {
       spyOn(console, 'error');
       authService.login.and.returnValue(

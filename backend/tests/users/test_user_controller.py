@@ -136,26 +136,29 @@ class TestGetUserById:
 
 
 class TestDeleteUser:
-    """Tests for DELETE /api/users/{id}."""
+    """Tests for the retired DELETE /api/users/{id}."""
 
-    def test_delete_user_admin_success(self, admin_client, mock_user_service):
-        mock_user_service.delete_user.return_value = True
+    def test_returns_410_gone_pointing_at_okta(
+        self,
+        admin_client,
+        mock_user_service,
+    ):
+        """Soft delete never revoked access, so the endpoint is retired."""
+        response = admin_client.delete("/api/users/1")
 
-        response = admin_client.delete(
-            "/api/users/1"
-        )  # Delete ID 1 (Admin is 2)
+        assert response.status_code == status.HTTP_410_GONE
+        assert "revoked in Okta" in response.json()["detail"]
 
-        assert response.status_code == status.HTTP_204_NO_CONTENT
-        mock_user_service.delete_user.assert_called_once()
+    def test_does_not_touch_the_database(
+        self,
+        admin_client,
+        mock_user_service,
+    ):
+        admin_client.delete("/api/users/1")
 
-    def test_delete_user_prevent_self_deletion(self, admin_client, mock_admin):
-        # Admin is ID 2, trying to delete ID 2
-        response = admin_client.delete("/api/users/2")
+        mock_user_service.delete_user.assert_not_called()
 
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert "cannot delete yourself" in response.json()["detail"]
-
-    def test_delete_user_regular_user_forbidden(self, api_client):
+    def test_regular_user_still_forbidden(self, api_client):
         response = api_client.delete("/api/users/1")
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -190,19 +193,28 @@ class TestUpdateUserRole:
 
 
 class TestRestoreUser:
-    """Tests for POST /api/users/{id}/restore."""
+    """Tests for the retired POST /api/users/{id}/restore."""
 
-    def test_restore_user_admin_success(self, admin_client, mock_user_service):
-        mock_user_service.restore_user.return_value = True
-
+    def test_returns_410_gone_pointing_at_okta(
+        self,
+        admin_client,
+        mock_user_service,
+    ):
         response = admin_client.post("/api/users/1/restore")
 
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json()["message"] == "User restored successfully"
+        assert response.status_code == status.HTTP_410_GONE
+        assert "revoked in Okta" in response.json()["detail"]
 
-    def test_restore_user_not_found(self, admin_client, mock_user_service):
-        mock_user_service.restore_user.return_value = False
+    def test_does_not_touch_the_database(
+        self,
+        admin_client,
+        mock_user_service,
+    ):
+        admin_client.post("/api/users/1/restore")
 
-        response = admin_client.post("/api/users/999/restore")
+        mock_user_service.restore_user.assert_not_called()
 
-        assert response.status_code == status.HTTP_404_NOT_FOUND
+    def test_regular_user_still_forbidden(self, api_client):
+        response = api_client.post("/api/users/1/restore")
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN

@@ -23,6 +23,27 @@ import {handleErrorSnackbar} from '../utils/handleMessageSnackbar';
 
 const HOME_ROUTE = '/';
 
+/**
+ * Constrains ?returnUrl to a path inside this app.
+ *
+ * The value survives the Okta round trip and is handed to
+ * `router.navigateByUrl`, so an absolute or protocol-relative value should
+ * never get that far. Angular's router would not actually leave the origin,
+ * but "the router happens to contain it" is a weaker guarantee than not
+ * accepting the input, and a crafted /login?returnUrl=... link should not
+ * decide where a user lands after authenticating.
+ */
+export function safeReturnUrl(candidate: string | null): string {
+  if (!candidate) return HOME_ROUTE;
+  // Rejects "//evil.com" (protocol-relative), "https://evil.com" and
+  // "\\evil.com", while allowing "/galleries?page=2".
+  if (!candidate.startsWith('/')) return HOME_ROUTE;
+  if (candidate.startsWith('//') || candidate.startsWith('/\\')) {
+    return HOME_ROUTE;
+  }
+  return candidate;
+}
+
 @Component({
   selector: 'app-login',
   templateUrl: './login.component.html',
@@ -49,8 +70,9 @@ export class LoginComponent {
   login(): void {
     this.loader = true;
 
-    const returnUrl =
-      this.route.snapshot.queryParamMap.get('returnUrl') || HOME_ROUTE;
+    const returnUrl = safeReturnUrl(
+      this.route.snapshot.queryParamMap.get('returnUrl'),
+    );
 
     // Resolves only after the browser has left the page, so the spinner
     // stays up; a rejection means we never got that far.

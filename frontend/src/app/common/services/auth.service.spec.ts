@@ -244,6 +244,7 @@ describe('AuthService', () => {
     }));
 
     it('emits null instead of throwing when renewal fails', fakeAsync(() => {
+      spyOn(console, 'error');
       okta.expired = true;
       okta.tokenManager.renew.and.returnValue(
         Promise.reject(new Error('login_required')),
@@ -259,6 +260,40 @@ describe('AuthService', () => {
 
       expect(errored).toBeFalse();
       expect(emitted).toEqual([null]);
+    }));
+
+    it('logs the cause when ID token renewal fails', fakeAsync(() => {
+      // A silent null here is indistinguishable from being signed out, which
+      // makes a missing CORS Trusted Origin (the A5 failure) invisible.
+      const consoleError = spyOn(console, 'error');
+      const cause = new Error('login_required');
+      okta.expired = true;
+      okta.tokenManager.renew.and.returnValue(Promise.reject(cause));
+
+      service.getApiToken$().subscribe();
+      tick();
+
+      expect(consoleError).toHaveBeenCalled();
+      const [message, logged] = consoleError.calls.mostRecent().args;
+      expect(message).toContain('ID token renewal failed');
+      expect(message).toContain('Trusted Origin');
+      expect(logged).toBe(cause);
+    }));
+
+    it('logs the cause when access token renewal fails', fakeAsync(() => {
+      const consoleError = spyOn(console, 'error');
+      const cause = new Error('network down');
+      environment.okta.tokenForApi = 'access';
+      okta.getOrRenewAccessToken.and.returnValue(Promise.reject(cause));
+      const emitted: Array<string | null> = [];
+
+      service.getApiToken$().subscribe(t => emitted.push(t));
+      tick();
+
+      expect(emitted).toEqual([null]);
+      const [message, logged] = consoleError.calls.mostRecent().args;
+      expect(message).toContain('access token renewal failed');
+      expect(logged).toBe(cause);
     }));
 
     it('uses the access token once tokenForApi is flipped to access', fakeAsync(() => {

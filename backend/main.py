@@ -99,14 +99,26 @@ async def lifespan(app: FastAPI):
     # --- Startup ---
     logger.info("Starting up application...")
 
-    # Fail loudly at startup if GCP credentials are dead, rather than at the
-    # first Vertex or Storage call.
+    # Refuse to serve on an unusable Okta configuration. Uncaught on purpose:
+    # every value it checks is otherwise read lazily per request, so a typo in
+    # OKTA_GROUP_ROLE_MAP would present as a 500 on every authenticated call
+    # with nothing at deploy time to point at it. Failing here means Cloud Run
+    # keeps traffic on the previous revision instead.
+    from src.auth.okta_verifier import validate_configuration
+
+    validate_configuration()
+
+    # Advisory only. Logs early if ADC looks broken, which saves guessing when
+    # the first Vertex or Storage call fails instead. It cannot gate startup:
+    # the check needs resourcemanager.projects.get, which the Cloud Run runtime
+    # service account is not granted, so in a deployed environment this is
+    # expected to warn. Locally it catches expired credentials.
     try:
         from src.common.adc_health_check import check_adc_authentication
 
         check_adc_authentication()
     except Exception as e:
-        logger.error(f"ADC authentication check failed: {e}")
+        logger.warning(f"ADC authentication check did not pass: {e}")
 
     # Run Database Migrations
     try:

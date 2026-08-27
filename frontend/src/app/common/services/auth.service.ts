@@ -108,7 +108,7 @@ export class AuthService {
 
     if (environment.okta.tokenForApi === 'access') {
       return from(oktaAuth.getOrRenewAccessToken()).pipe(
-        catchError(() => of(null)),
+        catchError(error => this.noSession('access token renewal', error)),
       );
     }
 
@@ -125,8 +125,28 @@ export class AuthService {
           map(renewed => (renewed as {idToken?: string})?.idToken ?? null),
         );
       }),
-      catchError(() => of(null)),
+      catchError(error => this.noSession('ID token renewal', error)),
     );
+  }
+
+  /**
+   * Reports a token failure as "no session", but noisily.
+   *
+   * Returning null is right: the interceptor sends the request unauthorized,
+   * the API answers 401, and the user is sent back through Okta. Swallowing
+   * the cause silently is not. An expired refresh token, an Okta outage and a
+   * missing CORS Trusted Origin all land here and are otherwise
+   * indistinguishable from simply being signed out, which makes the
+   * silent-renewal failures the hardest thing here to diagnose in production.
+   */
+  private noSession(operation: string, error: unknown): Observable<null> {
+    console.error(
+      `Okta ${operation} failed; continuing without a token. If this repeats ` +
+        `for signed-in users, check that this origin is a Trusted Origin ` +
+        `with CORS enabled in Okta.`,
+      error,
+    );
+    return of(null);
   }
 
   /**

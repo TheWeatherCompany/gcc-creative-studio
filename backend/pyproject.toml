@@ -28,7 +28,6 @@ dependencies = [
     "uvicorn>=0.37.0",
     "fastapi>=0.118.0",
     "fastapi-utilities==0.3.0",
-    "firebase-admin>=6.9.0",
     "google-cloud-aiplatform>=1.119.0",
     "google-genai>=2.8.0",
     "mediapy>=1.2.4",

@@ -13,6 +13,8 @@
 # limitations under the License.
 
 
+import logging
+
 from fastapi import Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +26,9 @@ from src.users.dto.user_search_dto import UserSearchDto
 from src.users.user_model import User, UserModel
 
 
+logger = logging.getLogger(__name__)
+
+
 class UserRepository(BaseRepository[User, UserModel]):
     """Handles all database operations for the User table."""
 
@@ -31,14 +36,35 @@ class UserRepository(BaseRepository[User, UserModel]):
         super().__init__(model=User, schema=UserModel, db=db)
 
     async def get_by_email(self, email: str) -> UserModel | None:
-        """Finds a single user by their email address."""
+        """Finds a single user by their email address, ignoring case.
+
+        Case-insensitive on purpose. Addresses are not case-sensitive in
+        practice, but the unique index on `email` compares exact strings, so
+        an exact match here would happily let one person exist twice under
+        two spellings. Matching on lower() also picks up rows written before
+        addresses were normalised on the way in.
+
+        Duplicates that already exist are reported rather than raised on:
+        MultipleResultsFound during a login would read as a total outage,
+        when the correct response is to merge two rows out of hours.
+        """
         result = await self.db.execute(
-            select(self.model).where(self.model.email == email),
+            select(self.model)
+            .where(func.lower(self.model.email) == email.strip().lower())
+            .order_by(self.model.id),
         )
-        user = result.scalar_one_or_none()
-        if not user:
+        users = result.scalars().all()
+        if not users:
             return None
-        return self.schema.model_validate(user)
+        if len(users) > 1:
+            logger.warning(
+                "%d rows share the address %s under different spellings. "
+                "Using the oldest, id=%s; the duplicates need merging.",
+                len(users),
+                email,
+                users[0].id,
+            )
+        return self.schema.model_validate(users[0])
 
     async def query(
         self,

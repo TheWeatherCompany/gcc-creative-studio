@@ -105,13 +105,3 @@ class UserService:
     ) -> PaginationResponseDto[UserModel]:
         """Retrieves a paginated list of all users."""
         return await self.user_repo.query(search_dto)
-
-    async def delete_user(
-        self, user_id: int, deleted_by: int | None = None
-    ) -> bool:
-        """Soft deletes a user."""
-        return await self.user_repo.soft_delete(user_id, deleted_by=deleted_by)
-
-    async def restore_user(self, user_id: int) -> bool:
-        """Restores a soft-deleted user."""
-        return await self.user_repo.restore(user_id)

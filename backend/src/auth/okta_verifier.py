@@ -140,6 +140,54 @@ def verify(token: str) -> dict:
     return claims
 
 
+def validate_configuration() -> None:
+    """Fails fast when the Okta settings cannot serve a single request.
+
+    Called once at startup. Everything it touches is otherwise evaluated
+    lazily per request, so without this a typo in OKTA_GROUP_ROLE_MAP (which
+    is hand-written JSON inside a .tfvars string) surfaces only as a 500 on
+    every authenticated call, with nothing at deploy time pointing at the
+    cause. Raising here means Cloud Run refuses to shift traffic to the
+    broken revision, which is the failure mode you want.
+
+    Raises:
+        OktaConfigurationError: A required setting is missing, or
+            OKTA_GROUP_ROLE_MAP does not parse into group -> roles, or it
+            parses to nothing and would 403 every user.
+
+    """
+    missing = [
+        name
+        for name in ("OKTA_ISSUER", "OKTA_AUDIENCE")
+        if not getattr(config_service, name, "").strip()
+    ]
+    if missing:
+        raise OktaConfigurationError(
+            f"Okta verification requires {' and '.join(missing)} to be set.",
+        )
+
+    try:
+        # json.JSONDecodeError subclasses ValueError, so this covers both a
+        # malformed document and a well-formed one of the wrong shape.
+        role_map = config_service.OKTA_GROUP_ROLE_MAP
+    except (TypeError, ValueError) as exc:
+        raise OktaConfigurationError(
+            f"OKTA_GROUP_ROLE_MAP could not be parsed: {exc}",
+        ) from exc
+
+    if not role_map:
+        raise OktaConfigurationError(
+            "OKTA_GROUP_ROLE_MAP is empty, so no Okta group confers a role "
+            "and every user would be rejected with a 403.",
+        )
+
+    logger.info(
+        "Okta configuration valid: issuer=%s, groups mapped to roles: %s",
+        config_service.OKTA_ISSUER,
+        ", ".join(sorted(role_map)),
+    )
+
+
 def mapped_group_names() -> list[str]:
     """The Okta groups that confer a role, for user-facing messages.
 

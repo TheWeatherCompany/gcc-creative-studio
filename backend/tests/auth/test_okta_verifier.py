@@ -242,3 +242,67 @@ class TestGroupRoleMapParsing:
 
         with pytest.raises(ValueError):
             _ = config_service.OKTA_GROUP_ROLE_MAP
+
+
+class TestValidateConfiguration:
+    """Startup validation.
+
+    The point of these is that a bad deploy never receives traffic. Every
+    value checked here is otherwise read lazily per request, so the failure
+    would otherwise be a 500 on every authenticated call.
+    """
+
+    def test_a_good_configuration_passes(self):
+        okta_verifier.validate_configuration()
+
+    def test_missing_issuer_is_rejected(self):
+        config_service.OKTA_ISSUER = ""
+
+        with pytest.raises(okta_verifier.OktaConfigurationError) as exc_info:
+            okta_verifier.validate_configuration()
+
+        assert "OKTA_ISSUER" in str(exc_info.value)
+
+    def test_missing_audience_is_rejected(self):
+        config_service.OKTA_AUDIENCE = ""
+
+        with pytest.raises(okta_verifier.OktaConfigurationError) as exc_info:
+            okta_verifier.validate_configuration()
+
+        assert "OKTA_AUDIENCE" in str(exc_info.value)
+
+    def test_whitespace_only_issuer_is_rejected(self):
+        config_service.OKTA_ISSUER = "   "
+
+        with pytest.raises(okta_verifier.OktaConfigurationError):
+            okta_verifier.validate_configuration()
+
+    def test_malformed_group_map_is_rejected_as_a_config_error(self):
+        """The .tfvars value is hand-written JSON inside a string."""
+        config_service.OKTA_GROUP_ROLE_MAP_STR = '{"Group": "user",}'
+
+        with pytest.raises(okta_verifier.OktaConfigurationError) as exc_info:
+            okta_verifier.validate_configuration()
+
+        assert "OKTA_GROUP_ROLE_MAP" in str(exc_info.value)
+
+    def test_group_map_of_the_wrong_shape_is_rejected(self):
+        config_service.OKTA_GROUP_ROLE_MAP_STR = '["Group A", "Group B"]'
+
+        with pytest.raises(okta_verifier.OktaConfigurationError):
+            okta_verifier.validate_configuration()
+
+    def test_group_map_with_a_bad_value_is_rejected(self):
+        config_service.OKTA_GROUP_ROLE_MAP_STR = '{"Group": 42}'
+
+        with pytest.raises(okta_verifier.OktaConfigurationError):
+            okta_verifier.validate_configuration()
+
+    def test_an_empty_group_map_is_rejected(self):
+        """Empty parses fine but would 403 every single user."""
+        config_service.OKTA_GROUP_ROLE_MAP_STR = ""
+
+        with pytest.raises(okta_verifier.OktaConfigurationError) as exc_info:
+            okta_verifier.validate_configuration()
+
+        assert "403" in str(exc_info.value)
