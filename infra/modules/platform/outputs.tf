@@ -28,3 +28,18 @@ output "cloud_sql_connection_name" {
   description = "The connection name of the Cloud SQL instance to be used by the bootstrap script."
   value       = module.postgresql.connection_name
 }
+
+output "frontend_url" {
+  description = "The origin the frontend is served from: the custom domain when one is configured, otherwise the default Firebase address."
+  value       = local.frontend_url
+}
+
+output "frontend_custom_domain_dns_updates" {
+  description = "The DNS records Firebase requires before the custom domain goes live."
+  value       = module.frontend_service.custom_domain_dns_updates
+}
+
+output "frontend_custom_domain_state" {
+  description = "Firebase's provisioning state for the custom domain."
+  value       = module.frontend_service.custom_domain_state
+}

@@ -7,6 +7,14 @@ backend_service_name  = "cstudio-backend-dev"
 frontend_service_name = "cstudio-frontend-dev" # This is the Cloud Run service name
 firebase_site_id      = "YOUR_FIREBASE_SITE_ID" # (Optional) Custom Firebase Hosting Site ID, defaults to the gcp_project_id
 
+# (Optional) Vanity hostname to serve the frontend from. Leave empty to stay on
+# the default <site-id>.web.app address. The zone must be publicly resolvable
+# for Firebase to verify ownership and issue a certificate, and after the first
+# apply you have to add the records from the frontend_custom_domain_dns_updates
+# output before the domain goes live. Setting this also moves the SPA's API base
+# URL and the backend CORS allowlist onto the same hostname.
+frontend_custom_domain = ""
+
 # --- GitHub Repo Details ---
 github_conn_name   = "gh-repo-owner-con"
 github_repo_owner  = "RepoOwnerName"

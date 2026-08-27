@@ -36,6 +36,17 @@ variable "be_build_substitutions" {
 # Frontend specific variables
 variable "frontend_service_name" { type = string }
 
+variable "frontend_custom_domain" {
+  description = <<-EOT
+    Optional vanity hostname for the frontend, e.g. "gcs.corp.weather.com".
+    Setting this also moves the SPA's API base URL and the backend's CORS
+    allowlist onto that hostname, so it must match what users type. Empty
+    leaves everything on the default *.web.app address.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "fe_build_substitutions" {
   type        = map(string)
   description = "A map of substitution variables for the frontend Cloud Build trigger."

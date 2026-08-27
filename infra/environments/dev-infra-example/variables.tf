@@ -45,6 +45,12 @@ variable "firebase_site_id" {
   default     = ""
 }
 
+variable "frontend_custom_domain" {
+  type        = string
+  description = "(Optional) Vanity hostname for the frontend, e.g. \"studio.example.com\". Empty keeps the default *.web.app address."
+  default     = ""
+}
+
 # --- GitHub Repo Details ---
 variable "github_conn_name" {
   type        = string
