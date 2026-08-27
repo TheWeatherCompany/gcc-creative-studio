@@ -26,3 +26,22 @@ output "trigger_sa_email" {
   description = "The email of the service account used by the build trigger."
   value       = google_service_account.trigger_sa.email
 }
+
+output "custom_domain" {
+  description = "The vanity hostname serving this site, or an empty string if none is configured."
+  value       = var.custom_domain
+}
+
+output "custom_domain_dns_updates" {
+  description = "The DNS records Firebase requires for the custom domain. Hand these to the owner of the zone."
+  value       = try(google_firebase_hosting_custom_domain.this[0].required_dns_updates, null)
+}
+
+output "custom_domain_state" {
+  description = "Firebase's view of the custom domain: host state, ownership state and any outstanding issues."
+  value = try({
+    host_state      = google_firebase_hosting_custom_domain.this[0].host_state
+    ownership_state = google_firebase_hosting_custom_domain.this[0].ownership_state
+    issues          = google_firebase_hosting_custom_domain.this[0].issues
+  }, null)
+}

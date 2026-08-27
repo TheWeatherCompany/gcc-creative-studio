@@ -27,3 +27,14 @@ variable "firebase_site_id" {
   description = "The unique identifier for the Firebase Hosting site."
   type        = string
 }
+
+variable "custom_domain" {
+  description = <<-EOT
+    Optional vanity hostname to serve the site from, e.g. "gcs.corp.weather.com".
+    Empty means the site is reachable only at its default *.web.app address.
+    The DNS zone does not have to live in this project, but it must be publicly
+    resolvable for Firebase to verify ownership and issue a certificate.
+  EOT
+  type        = string
+  default     = ""
+}

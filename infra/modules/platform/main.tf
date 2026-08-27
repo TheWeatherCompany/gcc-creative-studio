@@ -53,13 +53,29 @@ locals {
   region_code  = join("", [for s in split("-", var.gcp_region) : substr(s, 0, 1)])
   backend_url = "https://${var.backend_service_name}-${data.google_project.project.number}.${var.gcp_region}.run.app"
 
-  frontend_url = "https://${var.firebase_site_id}.web.app" # Predictable Firebase URL
+  site_id = var.firebase_site_id != "" ? var.firebase_site_id : var.gcp_project_id
+
+  # Every Firebase Hosting site keeps this address, and it cannot be switched
+  # off, so it stays a valid way to reach the app even with a vanity domain.
+  frontend_default_url = "https://${local.site_id}.web.app"
+
+  # The origin users load the app from. The SPA itself no longer needs this
+  # (it calls the relative /api and follows whatever host served it), but the
+  # backend's CORS allowlist and FRONTEND_URL are derived from it, so it has
+  # to match the hostname in the address bar.
+  frontend_url = var.frontend_custom_domain != "" ? "https://${var.frontend_custom_domain}" : local.frontend_default_url
+
+  frontend_origins = distinct([local.frontend_url, local.frontend_default_url])
 
   backend_env_vars = merge(
     lookup(var.be_env_vars, "common", {}),
     lookup(var.be_env_vars, var.environment, {}),
     {
-      "CORS_ORIGINS"           = "[\"${local.frontend_url}\"]"
+      # main.py reads FRONTEND_URL for the production CORS allowlist, and
+      # email_service builds links from it. Left unset it falls back to
+      # http://localhost:4200.
+      "FRONTEND_URL"           = local.frontend_url
+      "CORS_ORIGINS"           = jsonencode(local.frontend_origins)
       "GENMEDIA_BUCKET"        = google_storage_bucket.genmedia.name
       "SIGNING_SA_EMAIL"       = google_service_account.bucket_reader_sa.email
       "BACKEND_URL"            = local.backend_url
@@ -151,17 +167,21 @@ module "frontend_service" {
   github_branch_name   = var.github_branch_name
   cloudbuild_yaml_path = "frontend/cloudbuild-deploy.yaml"
   included_files_glob  = ["frontend/**"]
-  firebase_site_id     = var.firebase_site_id != "" ? var.firebase_site_id : var.gcp_project_id
+  firebase_site_id     = local.site_id
+  custom_domain        = var.frontend_custom_domain
 
   build_substitutions = merge(
     var.fe_build_substitutions,
     {
       # This block should ONLY contain non-secret, underscore-prefixed values
-      _BACKEND_URL         = local.frontend_url # The frontend will redirect the api calls to the backend
+      # Informational only since the SPA moved to a relative /api path. The
+      # trigger has to keep supplying it: Cloud Build rejects a substitution
+      # the template never mentions, and cloudbuild-deploy.yaml logs it.
+      _BACKEND_URL         = local.frontend_url
       _FE_SERVICE_NAME     = var.frontend_service_name
       _BACKEND_SERVICE_ID  = var.backend_service_name
       _FIREBASE_PROJECT_ID = var.gcp_project_id
-      _FIREBASE_SITE_ID    = var.firebase_site_id != "" ? var.firebase_site_id : var.gcp_project_id
+      _FIREBASE_SITE_ID    = local.site_id
     }
   )
 }

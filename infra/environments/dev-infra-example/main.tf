@@ -52,6 +52,7 @@ module "creative_studio_platform" {
   be_env_vars               = var.be_env_vars
   frontend_service_name     = var.frontend_service_name
   firebase_site_id          = var.firebase_site_id != "" ? var.firebase_site_id : var.gcp_project_id
+  frontend_custom_domain    = var.frontend_custom_domain
   github_conn_name          = var.github_conn_name
   github_repo_owner         = var.github_repo_owner
   github_repo_name          = var.github_repo_name
