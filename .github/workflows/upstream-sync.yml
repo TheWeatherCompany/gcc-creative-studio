@@ -1,0 +1,178 @@
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: "0 13 * * 1" # Mondays, 13:00 UTC
+  workflow_dispatch: {}
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM_URL: https://github.com/GoogleCloudPlatform/gcc-creative-studio.git
+  UPSTREAM_BRANCH: main
+  LOCAL_BRANCH: main
+  SYNC_LABEL: upstream-sync
+
+jobs:
+  cleanup-branch:
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'upstream-sync')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete sync branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          branch="${{ github.event.pull_request.head.ref }}"
+          gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/${branch}" || true
+
+  sync:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM_URL" 2>/dev/null || true
+          git fetch upstream "$UPSTREAM_BRANCH"
+          git fetch origin "$LOCAL_BRANCH"
+
+      - name: Check for new upstream commits
+        id: diff
+        run: |
+          count=$(git rev-list --count "origin/${LOCAL_BRANCH}..upstream/${UPSTREAM_BRANCH}")
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Upstream is $count commit(s) ahead of ${LOCAL_BRANCH}"
+
+      - name: Ensure sync label exists
+        if: steps.diff.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "$SYNC_LABEL" --color "0366d6" --description "Automated upstream sync PR" 2>/dev/null || true
+
+      - name: Find previous open sync PR
+        if: steps.diff.outputs.count != '0'
+        id: prev
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          prev_json=$(gh pr list --state open --label "$SYNC_LABEL" --json number,headRefName --limit 1)
+          prev_number=$(echo "$prev_json" | jq -r '.[0].number // empty')
+          prev_head=$(echo "$prev_json" | jq -r '.[0].headRefName // empty')
+          echo "number=$prev_number" >> "$GITHUB_OUTPUT"
+          echo "head=$prev_head" >> "$GITHUB_OUTPUT"
+
+      - name: Build new sync branch
+        if: steps.diff.outputs.count != '0'
+        id: branch
+        run: |
+          new_branch="sync/upstream-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          prev_head="${{ steps.prev.outputs.head }}"
+
+          if [ -n "$prev_head" ]; then
+            git fetch origin "$prev_head"
+            git checkout -b "$new_branch" "origin/$prev_head"
+          else
+            git checkout -b "$new_branch" "origin/${LOCAL_BRANCH}"
+          fi
+
+          # Nothing new to merge beyond what the previous sync branch already has.
+          remaining=$(git rev-list --count "HEAD..upstream/${UPSTREAM_BRANCH}")
+          if [ "$remaining" = "0" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          conflicted=false
+          git merge --no-edit --no-ff "upstream/${UPSTREAM_BRANCH}" || conflicted=true
+          if [ "$conflicted" = "true" ]; then
+            git add -A
+            git commit -m "Merge upstream/${UPSTREAM_BRANCH} (unresolved conflicts, needs manual resolution)"
+          fi
+
+          git push origin "$new_branch"
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "name=$new_branch" >> "$GITHUB_OUTPUT"
+          echo "conflicted=$conflicted" >> "$GITHUB_OUTPUT"
+
+      - name: Open PR
+        if: steps.diff.outputs.count != '0' && steps.branch.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shortlog=$(git log --oneline "origin/${LOCAL_BRANCH}..upstream/${UPSTREAM_BRANCH}")
+          prev_number="${{ steps.prev.outputs.number }}"
+          conflict_note="Merged cleanly."
+          if [ "${{ steps.branch.outputs.conflicted }}" = "true" ]; then
+            conflict_note="**Has merge conflicts** that need manual resolution on this branch."
+          fi
+
+          lineage_note=""
+          if [ -n "$prev_number" ]; then
+            lineage_note="Continues from #${prev_number} (carries forward any resolution commits from that branch)."
+          fi
+
+          body=$(cat <<EOF
+          Automated sync from upstream (\`GoogleCloudPlatform/gcc-creative-studio\`, \`${UPSTREAM_BRANCH}\`).
+
+          ${conflict_note}
+          ${lineage_note}
+
+          ### New upstream commits
+          \`\`\`
+          ${shortlog}
+          \`\`\`
+          EOF
+          )
+
+          gh pr create \
+            --base "$LOCAL_BRANCH" \
+            --head "${{ steps.branch.outputs.name }}" \
+            --title "Sync upstream: ${{ steps.diff.outputs.count }} new commit(s)" \
+            --body "$body" \
+            --label "$SYNC_LABEL"
+
+          if [ -n "$prev_number" ]; then
+            new_number=$(gh pr list --head "${{ steps.branch.outputs.name }}" --json number --jq '.[0].number')
+            gh pr comment "$prev_number" --body "Superseded by #${new_number}, which picks up this branch plus newer upstream commits. Left open in case resolution work here still needs to move over."
+          fi
+
+      - name: Auto-close stale untouched sync PRs
+        if: steps.diff.outputs.count != '0' && steps.branch.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A PR in this lineage that a human never pushed to, and that's since
+          # been superseded by 3+ newer sync PRs, is dead weight - close it.
+          # Closing (rather than deleting the branch here) fires the
+          # cleanup-branch job via the pull_request "closed" event.
+          mapfile -t prs < <(gh pr list --state open --label "$SYNC_LABEL" --json number --jq 'sort_by(.number) | .[].number')
+          total=${#prs[@]}
+          for i in "${!prs[@]}"; do
+            newer=$(( total - i - 1 ))
+            if [ "$newer" -lt 3 ]; then
+              continue
+            fi
+            number="${prs[$i]}"
+            touched=$(gh api "repos/${{ github.repository }}/pulls/${number}/commits" --jq 'map(select(.commit.author.name != "github-actions[bot]")) | length')
+            if [ "$touched" = "0" ]; then
+              gh pr close "$number" --comment "Auto-closing: no manual commits on this branch, and superseded by ${newer} newer upstream-sync PRs."
+            fi
+          done
