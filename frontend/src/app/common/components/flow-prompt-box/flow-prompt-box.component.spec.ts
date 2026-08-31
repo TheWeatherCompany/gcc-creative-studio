@@ -148,12 +148,42 @@ describe('FlowPromptBoxComponent', () => {
       expect(component.hasDurationOptions()).toBeTrue();
     });
 
-    it('should return only the longest duration (10s) for Gemini Omni Flash in Ingredients to Video mode', () => {
+    it('should return the full [4, 6, 8, 10] durations for Gemini Omni Flash in Ingredients to Video mode at 1K', () => {
       component.selectedGenerationModel = geminiOmni.viewValue;
       component.mode = 'Ingredients to Video';
+      component.selectedResolution.set('1K');
+
+      const durations = component.getSelectedModelDurations();
+      expect(durations).toEqual([4, 6, 8, 10]);
+    });
+
+    it('should return the full [4, 6, 8, 10] durations for Gemini Omni Flash in Frames to Video mode at 1K', () => {
+      component.selectedGenerationModel = geminiOmni.viewValue;
+      component.mode = 'Frames to Video';
+      component.selectedResolution.set('1K');
+
+      const durations = component.getSelectedModelDurations();
+      expect(durations).toEqual([4, 6, 8, 10]);
+    });
+
+    it('should collapse to only the longest duration (10s) for resolutions above 1K', () => {
+      component.selectedGenerationModel = geminiOmni.viewValue;
+      component.mode = 'Ingredients to Video';
+      component.selectedResolution.set('2K');
 
       const durations = component.getSelectedModelDurations();
       expect(durations).toEqual([10]);
+    });
+
+    it('should not wipe a valid 4s selection when switching modes at 1K', () => {
+      component.selectedGenerationModel = geminiOmni.viewValue;
+      component.mode = 'Text to Video';
+      component.selectedResolution.set('1K');
+      component.selectDuration(4);
+
+      component.selectMode('Ingredients to Video');
+
+      expect(component.selectedDuration()).toBe(4);
     });
 
     it('should update selectedDuration and emit durationChanged on selectDuration', () => {

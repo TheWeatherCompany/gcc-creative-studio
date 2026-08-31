@@ -133,6 +133,7 @@ export interface GallerySearchDto {
   itemType?: string;
   query?: string;
   tags?: string[];
+  favoritesOnly?: boolean;
 }
 
 export interface GalleryFiltersState {
@@ -144,6 +145,7 @@ export interface GalleryFiltersState {
   itemType: string;
   tags: string[];
   onlyMyMedia: boolean;
+  favoritesOnly: boolean;
 }
 
 export interface ReferenceVideo {

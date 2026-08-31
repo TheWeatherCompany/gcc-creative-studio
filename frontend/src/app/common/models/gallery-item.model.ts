@@ -24,6 +24,7 @@ export interface BaseGalleryItem {
   createdAt: string;
   status?: string;
   deletedAt?: string;
+  isFavorite?: boolean;
   tags?: TagModel[];
 
   // Display fields (optional fallbacks for backward compatibility)

@@ -17,7 +17,7 @@ from src.users.user_model import User
 
 
 from fastapi import Depends
-from sqlalchemy import func, select
+from sqlalchemy import Text, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.common.base_repository import BaseRepository
@@ -28,6 +28,7 @@ from src.galleries.dto.gallery_search_dto import GallerySearchDto
 from src.galleries.dto.unified_gallery_response import (
     UnifiedGalleryItemResponse,
 )
+from src.favorites.schema.favorite_model import MediaItemFavorite
 
 
 class UnifiedGalleryRepository(
@@ -46,9 +47,15 @@ class UnifiedGalleryRepository(
         self,
         search_dto: GallerySearchDto,
         user_id: int | None = None,
+        current_user_id: int | None = None,
     ) -> PaginationResponseDto[UnifiedGalleryItemResponse]:
         """Performs a paginated query on the unified view.
         user_id is successfully resolved from search_dto.user_email in the Service layer if present.
+
+        current_user_id is the identity of the requesting user. It is used to
+        scope the per-user favorite state: it drives the `favorites_only`
+        filter and populates `is_favorite` on each returned item. Favorites
+        only apply to media items; source assets are never favorited.
         """
         # 1. Build the base query
         query = select(self.model)
@@ -124,9 +131,33 @@ class UnifiedGalleryRepository(
                     self.model.metadata_["tags"].contains([{"name": tag_name}])
                 )
 
+        # 4.6 Favorites Filter (per-user). Correlated EXISTS against the
+        # media_item_favorites join table, scoped to the requesting user. Only
+        # media items can be favorited, so the item_type guard keeps a
+        # source_asset sharing an id with a favorited media_item from matching.
+        if (
+            getattr(search_dto, "favorites_only", False)
+            and current_user_id is not None
+        ):
+            favorite_exists = (
+                select(MediaItemFavorite.id)
+                .where(MediaItemFavorite.media_item_id == self.model.id)
+                .where(MediaItemFavorite.user_id == current_user_id)
+                .where(self.model.item_type == "media_item")
+                .exists()
+            )
+            query = query.where(favorite_exists)
+
         # 5. Full-Text Word Search
         if hasattr(search_dto, "query") and search_dto.query:
             search_pattern = f"%{search_dto.query}%"
+            # Extract just the tag names ("$[*].name") into a JSONB array and
+            # cast it to text so a partial term matches any tag name (e.g.
+            # "sun" -> ["sunset"]). Casting only the names avoids false hits on
+            # tag keys/colors. NULL (no tags) collapses to a non-match in the OR.
+            tag_names_text = func.jsonb_path_query_array(
+                self.model.metadata_["tags"], "$[*].name"
+            ).cast(Text)
             query = query.where(
                 func.coalesce(self.model.metadata_["prompt"].astext, "").ilike(
                     search_pattern
@@ -140,6 +171,13 @@ class UnifiedGalleryRepository(
                 | func.coalesce(
                     self.model.metadata_["original_filename"].astext, ""
                 ).ilike(search_pattern)
+                | func.coalesce(self.model.metadata_["style"].astext, "").ilike(
+                    search_pattern
+                )
+                | func.coalesce(
+                    self.model.metadata_["lighting"].astext, ""
+                ).ilike(search_pattern)
+                | func.coalesce(tag_names_text, "").ilike(search_pattern)
             )
 
         # 2. Get total count
@@ -160,9 +198,30 @@ class UnifiedGalleryRepository(
         result = await self.db.execute(query)
         rows = result.scalars().all()
 
+        # 4.1 Resolve per-user favorite state for the media items on this page.
+        # A single scoped lookup rather than N per-row queries. Empty when
+        # there is no requesting user or no media items on the page.
+        favorite_ids: set[int] = set()
+        if current_user_id is not None:
+            media_item_ids = [
+                item.id for item in rows if item.item_type == "media_item"
+            ]
+            if media_item_ids:
+                favorite_result = await self.db.execute(
+                    select(MediaItemFavorite.media_item_id)
+                    .where(MediaItemFavorite.user_id == current_user_id)
+                    .where(
+                        MediaItemFavorite.media_item_id.in_(media_item_ids)
+                    )
+                )
+                favorite_ids = set(favorite_result.scalars().all())
+
         data = []
         for item in rows:
             item_data = self.schema.model_validate(item)
+            item_data.is_favorite = (
+                item.item_type == "media_item" and item.id in favorite_ids
+            )
             data.append(item_data)
 
         # 5. Determine next cursor (offset)

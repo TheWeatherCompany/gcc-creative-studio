@@ -172,9 +172,12 @@
             </div>
             
             <!-- Checkbox Row -->
-            <div class="flex items-center text-white text-sm">
+            <div class="flex items-center gap-4 text-white text-sm">
               <mat-checkbox [checked]="onlyMyMedia" (change)="toggleOnlyMyMedia($event.checked)">
                 Select only my media
+              </mat-checkbox>
+              <mat-checkbox [checked]="favoritesOnly" (change)="toggleFavoritesOnly($event.checked)">
+                Favorites only
               </mat-checkbox>
           </div>
         </div>
@@ -281,7 +284,13 @@
         </div>
       </div>
     </div>
-        <!-- Load more button -->
+        <!-- Infinite-scroll sentinel: observed by an IntersectionObserver that
+             calls loadMore() when it scrolls into view. -->
+        <div #scrollSentinel aria-hidden="true" class="h-px w-full"></div>
+
+        <!-- Load more button: kept as an always-available fallback (works when
+             IntersectionObserver is unavailable, e.g. SSR). Both paths call the
+             same guarded loadMore(). -->
         <div
           *ngIf="!isLoading && !allImagesLoaded && images.length > 0"
           class="flex justify-center mt-8"

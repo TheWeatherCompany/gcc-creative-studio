@@ -131,8 +131,14 @@ async def lifespan(app: FastAPI):
         raise e
 
     logger.info("Creating ThreadPoolExecutor...")
-    # Create the pool and attach it to the app's state
-    app.state.executor = ThreadPoolExecutor(max_workers=4)
+    # Create the pool and attach it to the app's state. The worker count is
+    # env-overridable via GENERATION_MAX_WORKERS. Note the real ceiling is the
+    # Vertex Veo per-project/region online-prediction quota, not this pool:
+    # raising it beyond ~4 requires confirmed quota headroom, otherwise the
+    # extra workers simply contend for the same quota.
+    app.state.executor = ThreadPoolExecutor(
+        max_workers=config_service.GENERATION_MAX_WORKERS
+    )
 
     yield
 

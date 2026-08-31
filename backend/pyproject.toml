@@ -29,7 +29,7 @@ dependencies = [
     "fastapi>=0.118.0",
     "fastapi-utilities==0.3.0",
     "google-cloud-aiplatform>=1.119.0",
-    "google-genai>=2.8.0",
+    "google-genai>=2.10.0,<3",
     "mediapy>=1.2.4",
     "numpy>=2.3.3",
     "pandas>=2.3.3",

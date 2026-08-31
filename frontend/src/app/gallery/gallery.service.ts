@@ -253,6 +253,7 @@ export class GalleryService implements OnDestroy {
       createdAt: item.createdAt,
       itemType: item.itemType || 'media_item',
       status: item.status,
+      isFavorite: item.isFavorite ?? item.is_favorite ?? false,
       gcsUris: item.gcsUris,
       thumbnailUris: item.thumbnailUris,
       presignedUrls: item.presignedUrls,
@@ -332,6 +333,16 @@ export class GalleryService implements OnDestroy {
       deletedAt: item.deletedAt || item.deleted_at || metadata.deleted_at, // Added mapping for soft delete
     };
     return galleryItem;
+  }
+
+  favorite(itemId: number): Observable<{isFavorite: boolean}> {
+    const url = `${environment.backendURL}/gallery/item/${itemId}/favorite`;
+    return this.http.post<{isFavorite: boolean}>(url, {});
+  }
+
+  unfavorite(itemId: number): Observable<{isFavorite: boolean}> {
+    const url = `${environment.backendURL}/gallery/item/${itemId}/favorite`;
+    return this.http.delete<{isFavorite: boolean}>(url);
   }
 
   createTemplateFromMediaItem(mediaItemId: number): Observable<{id: string}> {

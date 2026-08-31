@@ -41,3 +41,4 @@ class GallerySearchDto(BaseSearchDto):
     item_type: str | None = None  # 'media_item' or 'source_asset'
     query: str | None = None
     tags: list[str] | None = None
+    favorites_only: bool = False
