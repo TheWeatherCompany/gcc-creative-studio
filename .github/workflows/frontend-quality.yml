@@ -9,16 +9,18 @@ on:
       - test
     paths:
       - 'frontend/**'
+      - '.github/workflows/frontend-quality.yml'
   push:
     branches: [ main ]
     paths:
       - 'frontend/**'
+      - '.github/workflows/frontend-quality.yml'
 
 jobs:
-  lint:
-    name: Lint & Typecheck
+  quality:
+    name: Lint, Build & Test
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
@@ -26,7 +28,7 @@ jobs:
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '18'
+        node-version: '24'
         cache: 'npm'
         cache-dependency-path: frontend/package-lock.json
 
@@ -39,3 +41,18 @@ jobs:
       run: |
         cd frontend
         npx gts lint
+
+    # Builds and tests run because linting alone cannot catch a dependency set
+    # that does not resolve or compile. Both PR #13 and PR #4 reached review
+    # with an unbuildable frontend that only surfaced as a confusing `npm ci`
+    # error inside the lint job.
+    - name: Build
+      run: |
+        cd frontend
+        npm run build-dev
+
+    # --watch=false so Karma exits; ChromeHeadless because the runner has no display.
+    - name: Unit Tests
+      run: |
+        cd frontend
+        npm test -- --watch=false --browsers=ChromeHeadless
