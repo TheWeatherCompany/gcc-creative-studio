@@ -52,20 +52,13 @@
               "src/styles.scss",
               "node_modules/photoswipe/src/photoswipe.css"
             ],
-            "scripts": [],
-            "server": "src/main.server.ts",
-            "prerender": true,
-            "ssr": {
-              "entry": "server.ts"
-            }
+            "scripts": []
           },
           "configurations": {
             "development": {
               "optimization": false,
               "extractLicenses": false,
               "sourceMap": true,
-              "ssr": false,
-              "prerender": false,
               "namedChunks": true,
               "fileReplacements": [
                 {
@@ -88,7 +81,6 @@
               "extractLicenses": true
             },
             "build-dev": {
-              "prerender": false,
               "budgets": [
                 {
                   "type": "initial",
