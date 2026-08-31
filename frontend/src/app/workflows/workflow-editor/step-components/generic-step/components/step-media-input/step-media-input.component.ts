@@ -34,6 +34,7 @@ import {StepOutputReference} from '../../../../../workflow.models';
   selector: 'app-step-media-input',
   templateUrl: './step-media-input.component.html',
   styleUrls: ['./step-media-input.component.scss'],
+  standalone: false,
 })
 export class StepMediaInputComponent implements OnInit {
   @Input() control!: AbstractControl;

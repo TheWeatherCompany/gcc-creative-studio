@@ -177,8 +177,8 @@ export class AuthService {
   private noSession(operation: string, error: unknown): Observable<null> {
     console.error(
       `Okta ${operation} failed; continuing without a token. If this repeats ` +
-        `for signed-in users, check that this origin is a Trusted Origin ` +
-        `with CORS enabled in Okta.`,
+        'for signed-in users, check that this origin is a Trusted Origin ' +
+        'with CORS enabled in Okta.',
       error,
     );
     return of(null);

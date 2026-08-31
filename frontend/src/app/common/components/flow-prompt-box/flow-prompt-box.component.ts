@@ -41,7 +41,6 @@ import {MatTooltipModule} from '@angular/material/tooltip';
 export type NumPos = 1 | 2;
 
 @Component({
-  standalone: true,
   selector: 'app-flow-prompt-box',
   templateUrl: './flow-prompt-box.component.html',
   styleUrls: ['./flow-prompt-box.component.scss'],

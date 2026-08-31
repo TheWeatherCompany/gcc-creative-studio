@@ -20,6 +20,7 @@ import {Component, EventEmitter, Input, Output} from '@angular/core';
   selector: 'studio-date-range-filter',
   templateUrl: './studio-date-range-filter.component.html',
   styleUrls: ['./studio-date-range-filter.component.scss'],
+  standalone: false,
 })
 export class StudioDateRangeFilterComponent {
   @Input() startDate: Date | null = null;

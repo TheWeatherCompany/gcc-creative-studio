@@ -43,6 +43,7 @@ import {AuthService} from '../../common/services/auth.service';
   selector: 'app-workflow-list',
   templateUrl: './workflow-list.component.html',
   styleUrls: ['./workflow-list.component.scss'],
+  standalone: false,
 })
 export class WorkflowListComponent implements OnInit, OnDestroy, AfterViewInit {
   dataSource = new MatTableDataSource<WorkflowModel>([]);

@@ -30,6 +30,7 @@ import {Component, Input, Output, EventEmitter} from '@angular/core';
     </button>
   `,
   styleUrls: ['./studio-toolbar-button.component.scss'],
+  standalone: false,
 })
 export class StudioToolbarButtonComponent {
   @Input() active = false;

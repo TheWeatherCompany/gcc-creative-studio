@@ -20,6 +20,7 @@ import {Component, Input} from '@angular/core';
   selector: 'app-gallery-item-overlay',
   templateUrl: './gallery-item-overlay.component.html',
   styleUrls: ['./gallery-item-overlay.component.scss'],
+  standalone: false,
 })
 export class GalleryItemOverlayComponent {
   @Input() itemType = '';

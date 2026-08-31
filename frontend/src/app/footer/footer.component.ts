@@ -23,6 +23,7 @@ const PRIVACY_POLICY_URL = 'https://policies.google.com/privacy?hl=en-US';
   selector: 'app-footer',
   templateUrl: './footer.component.html',
   styleUrls: ['./footer.component.scss'],
+  standalone: false,
 })
 export class FooterComponent {
   constructor(private router: Router) {}

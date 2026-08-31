@@ -29,6 +29,7 @@ import {MediaResolutionService} from '../../shared/media-resolution.service';
   selector: 'app-execution-details-modal',
   templateUrl: './execution-details-modal.component.html',
   styleUrls: ['./execution-details-modal.component.scss'],
+  standalone: false,
 })
 export class ExecutionDetailsModalComponent implements OnInit {
   isLoading = true;

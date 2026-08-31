@@ -31,6 +31,7 @@ export interface BrandGuidelineDialogData {
   selector: 'app-brand-guideline-dialog',
   templateUrl: './brand-guideline-dialog.component.html',
   styleUrls: ['./brand-guideline-dialog.component.scss'],
+  standalone: false,
 })
 export class BrandGuidelineDialogComponent {
   form: FormGroup;

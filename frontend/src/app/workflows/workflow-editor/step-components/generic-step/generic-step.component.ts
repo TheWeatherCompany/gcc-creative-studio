@@ -35,6 +35,7 @@ import {StepConfig} from './step.model';
   selector: 'app-generic-step',
   templateUrl: './generic-step.component.html',
   styleUrls: ['./generic-step.component.scss'],
+  standalone: false,
 })
 export class GenericStepComponent implements OnInit, OnChanges {
   @Input() stepForm!: FormGroup;

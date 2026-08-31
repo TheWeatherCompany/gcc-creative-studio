@@ -38,6 +38,7 @@ import {environment} from '../../../environments/environment';
   selector: 'app-users-management',
   templateUrl: './users-management.component.html',
   styleUrls: ['./users-management.component.scss'],
+  standalone: false,
 })
 export class UsersManagementComponent implements OnInit, OnDestroy {
   displayedColumns: string[] = [

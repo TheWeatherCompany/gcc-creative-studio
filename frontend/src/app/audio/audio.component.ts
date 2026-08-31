@@ -57,6 +57,7 @@ interface LanguageOption {
   selector: 'app-lyria',
   templateUrl: './audio.component.html',
   styleUrls: ['./audio.component.scss'],
+  standalone: false,
 })
 export class AudioComponent implements OnInit {
   // UI State

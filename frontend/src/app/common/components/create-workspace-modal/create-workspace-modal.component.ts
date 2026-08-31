@@ -21,6 +21,7 @@ import {FormControl, Validators} from '@angular/forms';
 @Component({
   selector: 'app-create-workspace-modal',
   templateUrl: './create-workspace-modal.component.html',
+  standalone: false,
 })
 export class CreateWorkspaceModalComponent {
   workspaceName = new FormControl('', [

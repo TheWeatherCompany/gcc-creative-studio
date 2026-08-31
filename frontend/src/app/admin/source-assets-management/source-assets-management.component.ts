@@ -36,6 +36,7 @@ import {ConfirmationDialogComponent} from '../../common/components/confirmation-
   selector: 'app-source-assets-management',
   templateUrl: './source-assets-management.component.html',
   styleUrls: ['./source-assets-management.component.scss'],
+  standalone: false,
 })
 export class SourceAssetsManagementComponent implements OnInit {
   displayedColumns: string[] = [

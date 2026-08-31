@@ -78,6 +78,7 @@ import {NumPos} from '../common/components/flow-prompt-box/flow-prompt-box.compo
   selector: 'app-video',
   templateUrl: './video.component.html',
   styleUrl: './video.component.scss',
+  standalone: false,
 })
 export class VideoComponent implements OnInit, AfterViewInit {
   // This observable will always reflect the current job's state
