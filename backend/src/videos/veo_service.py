@@ -25,6 +25,7 @@ from fastapi import Depends, HTTPException
 from google.cloud.logging import Client as LoggerClient
 from google.cloud.logging.handlers import CloudLoggingHandler
 from google.genai import Client, types
+from google.genai.interactions import VideoResponseFormatParam
 import base64
 
 from src.auth.iam_signer_credentials_service import IamSignerCredentials
@@ -626,10 +627,42 @@ def _process_video_in_background(
                                 if request_dto.duration_seconds
                                 else "8s"
                             )
-                            omni_response_format = {
+                            # Use the SDK's typed VideoResponseFormatParam (added in
+                            # google-genai 2.10.0) rather than an untyped dict. This gives
+                            # us the Literal["16:9","9:16"] validation on aspect_ratio.
+                            omni_response_format: VideoResponseFormatParam = {
                                 "type": "video",
                                 "duration": duration_str,
                             }
+                            # Pass aspect ratio as a structured output param rather than
+                            # relying only on the prompt-text hint, which the model does
+                            # not reliably honor (yielding 16:9 output with the vertical
+                            # subject pillarboxed inside). The prompt-text hint is kept as
+                            # a harmless fallback.
+                            if request_dto.aspect_ratio:
+                                omni_response_format["aspect_ratio"] = (
+                                    request_dto.aspect_ratio.value
+                                    if isinstance(
+                                        request_dto.aspect_ratio, AspectRatioEnum
+                                    )
+                                    else request_dto.aspect_ratio
+                                )
+
+                            # Pin resolution alongside aspect_ratio. Without it the
+                            # Omni model renders portrait content that does not fill
+                            # the 9:16 frame and pads the bottom with a white band;
+                            # specifying resolution makes it target the full frame.
+                            _omni_resolution_map = {
+                                "1K": "720p",
+                                "2K": "1080p",
+                                "4K": "4k",
+                            }
+                            omni_response_format["resolution"] = (
+                                _omni_resolution_map.get(
+                                    getattr(request_dto, "resolution", None),
+                                    "720p",
+                                )
+                            )
 
                             num_outputs = 1
                             worker_logger.info(
