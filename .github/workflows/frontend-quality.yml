@@ -50,8 +50,11 @@ jobs:
         cd frontend
         npm run build-dev
 
-    # --watch=false so Karma exits; ChromeHeadless because the runner has no display.
+    # --watch=false so Karma exits. The browser is left to karma.conf.js, which
+    # defaults to a ChromeHeadlessCI launcher carrying --no-sandbox,
+    # --disable-gpu, and --disable-dev-shm-usage; overriding it here with plain
+    # ChromeHeadless would drop those flags and invite intermittent crashes.
     - name: Unit Tests
       run: |
         cd frontend
-        npm test -- --watch=false --browsers=ChromeHeadless
+        npm test -- --watch=false
