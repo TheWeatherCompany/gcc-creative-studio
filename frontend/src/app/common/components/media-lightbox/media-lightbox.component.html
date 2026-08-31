@@ -160,6 +160,19 @@
       </studio-button>
 
       <studio-button
+        variant="primary"
+        shape="circle"
+        size="medium"
+        (click)="toggleFavorite()"
+        [disabled]="isFavoriteUpdating"
+        [matTooltip]="isFavorite ? 'Remove from favorites' : 'Add to favorites'"
+      >
+        <mat-icon [class.favorited-icon]="isFavorite">
+          {{ isFavorite ? 'favorite' : 'favorite_border' }}
+        </mat-icon>
+      </studio-button>
+
+      <studio-button
         *ngIf="showShareButton"
         variant="primary"
         shape="circle"

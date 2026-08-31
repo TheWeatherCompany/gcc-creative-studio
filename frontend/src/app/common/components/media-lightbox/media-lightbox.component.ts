@@ -41,6 +41,7 @@ import {
 import {AssignTagsDialogComponent} from '../assign-tags-dialog/assign-tags-dialog.component';
 import {TagsService} from '../../services/tags.service';
 import {WorkspaceStateService} from '../../../services/workspace/workspace-state.service';
+import {GalleryService} from '../../../gallery/gallery.service';
 
 @Component({
   selector: 'app-media-lightbox',
@@ -124,7 +125,43 @@ export class MediaLightboxComponent
     public dialog: MatDialog,
     private tagsService: TagsService,
     private workspaceStateService: WorkspaceStateService,
+    private galleryService: GalleryService,
   ) {}
+
+  isFavoriteUpdating = false;
+
+  get isFavorite(): boolean {
+    return !!this.mediaItem?.isFavorite;
+  }
+
+  toggleFavorite(): void {
+    if (!this.mediaItem || this.isFavoriteUpdating) {
+      return;
+    }
+
+    // Optimistically flip local state, revert on error.
+    const item = this.mediaItem;
+    const previous = !!item.isFavorite;
+    const next = !previous;
+    item.isFavorite = next;
+    this.isFavoriteUpdating = true;
+
+    const request$ = next
+      ? this.galleryService.favorite(item.id)
+      : this.galleryService.unfavorite(item.id);
+
+    request$.subscribe({
+      next: response => {
+        item.isFavorite = response.isFavorite;
+        this.isFavoriteUpdating = false;
+      },
+      error: err => {
+        item.isFavorite = previous;
+        this.isFavoriteUpdating = false;
+        handleErrorSnackbar(this.snackBar, err, 'Update favorite');
+      },
+    });
+  }
 
   ngAfterViewInit(): void {
     this.initializePhotoSwipe();

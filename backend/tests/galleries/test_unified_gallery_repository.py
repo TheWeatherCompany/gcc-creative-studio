@@ -17,6 +17,7 @@ import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from src.common.base_dto import GenerationModelEnum, MimeTypeEnum
 from src.common.schema.media_item_model import JobStatusEnum
@@ -85,6 +86,71 @@ async def test_query_various_filters(mock_db):
     assert res.count == 5
     assert len(res.data) == 1
     assert mock_db.execute.call_count == 2
+
+
+@pytest.mark.anyio
+async def test_query_free_text_matches_tag_substring(mock_db):
+    """A free-text query folds tag names into the ILIKE OR so a partial tag
+    term (e.g. "sun" for a "sunset" tag) matches the item."""
+    repo = UnifiedGalleryRepository(db=mock_db)
+
+    mock_count_result = MagicMock()
+    mock_count_result.scalar_one.return_value = 1
+
+    mock_data_result = MagicMock()
+    tagged_item = MockItem(
+        id=7,
+        workspace_id=10,
+        user_id=1,
+        created_at=datetime.datetime.now(),
+        item_type="media_item",
+        status="completed",
+        gcs_uris=["gs://b/7"],
+        thumbnail_uris=[],
+        deleted_at=None,
+        metadata_={
+            "mime_type": "image/png",
+            "prompt": "a calm scene",
+            "tags": [
+                {
+                    "id": 1,
+                    "name": "sunset",
+                    "color": "#E8EAED",
+                    "workspace_id": 10,
+                }
+            ],
+        },
+    )
+    mock_data_result.scalars.return_value.all.return_value = [tagged_item]
+
+    mock_db.execute.side_effect = [mock_count_result, mock_data_result]
+
+    search_dto = GallerySearchDto(
+        workspace_id=10,
+        query="sun",
+        limit=10,
+        offset=0,
+    )
+
+    res = await repo.query(search_dto)
+
+    # The item whose only "sun" hit is the tag name is returned.
+    assert res.count == 1
+    assert [item.id for item in res.data] == [7]
+
+    # Prove the tag names are part of the free-text OR: the compiled data
+    # query extracts tag names via a JSON path and ILIKEs them alongside the
+    # existing prompt/file_name/model/original_filename columns.
+    data_stmt = mock_db.execute.call_args_list[1].args[0]
+    compiled = str(
+        data_stmt.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    ).lower()
+    assert "jsonb_path_query_array" in compiled
+    assert "$[*].name" in compiled
+    assert "ilike" in compiled
 
 
 @pytest.mark.anyio
