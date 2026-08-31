@@ -150,7 +150,14 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
   tagsCurrentPage = 1;
   onlyMyTags = true;
   onlyMyMedia = false;
+  favoritesOnly = false;
   userId: number | undefined;
+
+  // Whole-string match for a bare, full email address. Used to decide whether a
+  // search term should be scoped to a user's email rather than a text search.
+  private static readonly EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  @ViewChild('scrollSentinel') scrollSentinel?: ElementRef<HTMLElement>;
 
   get displayedTagOptions(): DropdownOption[] {
     const options = [
@@ -270,6 +277,7 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
         this.assetTypeFilter = savedState.itemType;
         this.tagsFilter = savedState.tags;
         this.onlyMyMedia = savedState.onlyMyMedia;
+        this.favoritesOnly = savedState.favoritesOnly ?? false;
       }
     }
 
@@ -349,6 +357,11 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     this.searchTerm();
   }
 
+  toggleFavoritesOnly(checked: boolean): void {
+    this.favoritesOnly = checked;
+    this.searchTerm();
+  }
+
   onTagSearch(search: string): void {
     this.tagsCurrentPage = 1;
     this.loadTags(search);
@@ -391,6 +404,37 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
 
   ngAfterViewInit(): void {
     if (!this.isBrowser) return;
+    this.setupInfiniteScroll();
+  }
+
+  /**
+   * Wires an IntersectionObserver to a sentinel element at the end of the grid.
+   * When the sentinel scrolls into view we trigger loadMore(). loadMore() itself
+   * guards against firing while a load is in flight or once all pages are loaded
+   * (currentPage >= totalPages), so no extra debounce is needed here.
+   */
+  private setupInfiniteScroll(): void {
+    if (
+      !this.scrollSentinel ||
+      typeof IntersectionObserver === 'undefined' ||
+      this._scrollObserver
+    ) {
+      return;
+    }
+
+    this._scrollObserver = new IntersectionObserver(
+      entries => {
+        const entry = entries[0];
+        if (entry?.isIntersecting && !this.isLoading && !this.allImagesLoaded) {
+          // IntersectionObserver callbacks can fire outside Angular's zone;
+          // run inside so change detection picks up the loaded items.
+          this.ngZone.run(() => this.loadMore());
+        }
+      },
+      {root: null, rootMargin: '200px', threshold: 0},
+    );
+
+    this._scrollObserver.observe(this.scrollSentinel.nativeElement);
   }
 
   ngOnDestroy(): void {
@@ -840,7 +884,12 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     const filters: GallerySearchDto = {limit: 40};
     if (this.queryFilter.trim()) {
       const term = this.queryFilter.trim();
-      if (term.includes('@')) {
+      // Only treat the query as an email lookup when it is a bare, full email
+      // address (whole-string match). Previously any query merely *containing*
+      // an "@" was routed to the email filter, which silently hijacked normal
+      // prompt searches like "cat @ the beach". A whole-string email match is
+      // the least-surprising signal that the user actually wants email scoping.
+      if (MediaGalleryComponent.EMAIL_REGEX.test(term)) {
         filters['userEmail'] = term;
       } else {
         filters['query'] = term;
@@ -883,6 +932,9 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     if (this.tagsFilter.length > 0) {
       filters['tags'] = this.tagsFilter;
     }
+    if (this.favoritesOnly) {
+      filters['favoritesOnly'] = true;
+    }
     if (!this.isSelectionMode && !this.isSelectorMode) {
       const state: GalleryFiltersState = {
         query: this.queryFilter,
@@ -893,6 +945,7 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
         itemType: this.assetTypeFilter,
         tags: this.tagsFilter,
         onlyMyMedia: this.onlyMyMedia,
+        favoritesOnly: this.favoritesOnly,
       };
       this.galleryService.setFiltersState(state);
     }

@@ -29,10 +29,13 @@ import {GalleryItem} from '../../models/gallery-item.model';
 import {MediaItemSelection} from '../image-selector/image-selector.component';
 import {UserService} from '../../services/user.service';
 import {MatDialog} from '@angular/material/dialog';
+import {MatSnackBar} from '@angular/material/snack-bar';
 import {UserRolesEnum} from '../../models/user.model';
 import {AssignTagsDialogComponent} from '../assign-tags-dialog/assign-tags-dialog.component';
 import {MediaItem} from '../../models/media-item.model';
 import {TagModel} from '../../services/tags.service';
+import {GalleryService} from '../../../gallery/gallery.service';
+import {handleErrorSnackbar} from '../../../utils/handleMessageSnackbar';
 
 @Component({
   selector: 'app-gallery-card',
@@ -42,10 +45,14 @@ import {TagModel} from '../../services/tags.service';
 export class GalleryCardComponent implements OnDestroy {
   isAdmin = false;
 
+  isFavoriteUpdating = false;
+
   constructor(
     private router: Router,
     private userService: UserService,
     public dialog: MatDialog,
+    private galleryService: GalleryService,
+    private snackBar: MatSnackBar,
     @Inject(PLATFORM_ID) private platformId: Object,
   ) {
     const userDetails = this.userService.getUserDetails();
@@ -142,6 +149,37 @@ export class GalleryCardComponent implements OnDestroy {
         }
         this.item.metadata.tags = result;
       }
+    });
+  }
+
+  toggleFavorite(event: Event): void {
+    event.stopPropagation();
+    event.preventDefault();
+
+    if (this.isFavoriteUpdating) {
+      return;
+    }
+
+    // Optimistically flip local state, revert on error.
+    const previous = !!this.item.isFavorite;
+    const next = !previous;
+    this.item.isFavorite = next;
+    this.isFavoriteUpdating = true;
+
+    const request$ = next
+      ? this.galleryService.favorite(this.item.id)
+      : this.galleryService.unfavorite(this.item.id);
+
+    request$.subscribe({
+      next: response => {
+        this.item.isFavorite = response.isFavorite;
+        this.isFavoriteUpdating = false;
+      },
+      error: err => {
+        this.item.isFavorite = previous;
+        this.isFavoriteUpdating = false;
+        handleErrorSnackbar(this.snackBar, err, 'Update favorite');
+      },
     });
   }
 

@@ -295,6 +295,61 @@
   }
 }
 
+.favorite-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  z-index: 20;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0; // Hidden by default, revealed on hover
+  transition: all 0.2s ease;
+  transform: scale(0.9);
+
+  // Glassmorphism base (matches selection-indicator)
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+
+  mat-icon {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+    line-height: 18px;
+    color: #fff;
+  }
+
+  .card-root:hover & {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.6);
+    transform: scale(1.1) !important;
+  }
+
+  &:disabled {
+    cursor: default;
+  }
+
+  // Favorited items stay visible even without hover
+  &.is-favorite {
+    opacity: 1;
+    transform: scale(1);
+
+    mat-icon {
+      color: #ea4335;
+    }
+  }
+}
+
 .tags-section {
   position: absolute;
   bottom: 12px;
