@@ -1,12 +1,11 @@
 name: Frontend Quality
 
 on:
+  # No branches filter: a PR stacked on another branch needs these checks
+  # just as much as one targeting main, and without this a stacked PR
+  # silently gets no checks at all.
   pull_request:
     types: [opened, synchronize]
-    branches:
-      - main
-      - develop
-      - test
     paths:
       - 'frontend/**'
       - '.github/workflows/frontend-quality.yml'
