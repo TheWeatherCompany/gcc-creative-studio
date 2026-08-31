@@ -314,6 +314,7 @@ export class AuthService {
    *
    * Deferred rather than done in the constructor because AuthService is
    * constructed during SSR hydration too, and start() schedules timers.
+   * (Vestigial: SSR was removed, so hydration no longer happens; harmless.)
    */
   private ensureStarted(): void {
     if (this.started || !this.oktaAuth) return;
