@@ -272,8 +272,12 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
       oldMode !== '' && oldMode !== mode,
     );
 
-    if (!this.isTextToVideo()) {
-      const longest = this.getSelectedModelDurations().at(-1);
+    // Only snap the duration if the current selection is no longer offered
+    // (e.g. a resolution above 1K collapses to the longest duration). A valid
+    // selection such as 4s must survive a mode change.
+    const durations = this.getSelectedModelDurations();
+    if (durations.length && !durations.includes(this.selectedDuration())) {
+      const longest = durations.at(-1);
       if (longest) this.selectDuration(longest);
     }
   }
@@ -336,9 +340,8 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
 
   getSelectedModelDurations(model?: any): number[] {
     const activeModel = model || this.getSelectedModelObject();
-    // only 'text to video' mode supports shorter durations
     // resolutions above 1K support only longest duration
-    if (!this.isTextToVideo() || this.selectedResolution() !== '1K') {
+    if (this.selectedResolution() !== '1K') {
       const longest = activeModel?.capabilities?.supportedDurations?.at(-1);
       return longest ? [longest] : [];
     }
