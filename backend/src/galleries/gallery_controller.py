@@ -104,6 +104,38 @@ async def get_single_gallery_item(
     return item
 
 
+@router.post("/item/{item_id}/favorite")
+async def favorite_gallery_item(
+    item_id: int,
+    current_user: UserModel = Depends(get_current_user),
+    service: GalleryService = Depends(),
+):
+    """Favorite a media item for the current user (idempotent).
+
+    Returns the resulting favorite state for this user.
+    """
+    return await service.favorite_item(
+        item_id=item_id,
+        current_user=current_user,
+    )
+
+
+@router.delete("/item/{item_id}/favorite")
+async def unfavorite_gallery_item(
+    item_id: int,
+    current_user: UserModel = Depends(get_current_user),
+    service: GalleryService = Depends(),
+):
+    """Remove the current user's favorite on a media item (idempotent).
+
+    Returns the resulting favorite state for this user.
+    """
+    return await service.unfavorite_item(
+        item_id=item_id,
+        current_user=current_user,
+    )
+
+
 @router.post("/bulk-delete")
 async def bulk_delete_items(
     bulk_delete_dto: BulkDeleteDto,

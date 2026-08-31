@@ -50,6 +50,7 @@ from src.images.repository.media_item_repository import MediaRepository
 from src.source_assets.repository.source_asset_repository import (
     SourceAssetRepository,
 )
+from src.favorites.repository.favorites_repository import FavoritesRepository
 from src.users.repository.user_repository import UserRepository
 from src.users.user_model import UserModel, UserRoleEnum
 from src.workspaces.repository.workspace_repository import WorkspaceRepository
@@ -74,6 +75,7 @@ class GalleryService:
         imagen_service: ImagenService = Depends(),
         gcs_service: GcsService = Depends(),
         tags_repo: TagsRepository = Depends(),
+        favorites_repo: FavoritesRepository = Depends(),
     ):
         """Initializes the service with its dependencies."""
         self.media_repo = media_repo
@@ -86,6 +88,7 @@ class GalleryService:
         self.imagen_service = imagen_service
         self.gcs_service = gcs_service
         self.tags_repo = tags_repo
+        self.favorites_repo = favorites_repo
 
     async def _enrich_source_asset_link(
         self,
@@ -320,9 +323,12 @@ class GalleryService:
             search_dto.status = JobStatusEnum.COMPLETED
 
         # Run the database query directly (it is async)
-        # We assume UnifiedGalleryRepository.query handles filtering
+        # We assume UnifiedGalleryRepository.query handles filtering.
+        # current_user_id scopes the per-user favorite state (is_favorite and
+        # the favorites_only filter) to the requesting user.
         unified_items_query = await self.unified_gallery_repo.query(
             search_dto,
+            current_user_id=current_user.id,
         )
         unified_items = unified_items_query.data or []
 
@@ -375,11 +381,59 @@ class GalleryService:
 
         response = await self._create_gallery_response(item)
         response.tags = await self.tags_repo.get_tags_for_media_item(item_id)
+        response.is_favorite = await self.favorites_repo.is_favorite(
+            user_id=current_user.id,
+            media_item_id=item_id,
+        )
         if item.user_id:
             user = await self.user_repo.get_by_id(item.user_id)
             if user:
                 response.user_picture = user.picture
         return response
+
+    async def favorite_item(
+        self,
+        item_id: int,
+        current_user: UserModel,
+    ) -> dict[str, bool]:
+        """Favorites a media item for the current user (idempotent).
+
+        Authorizes the user against the item's workspace before recording the
+        favorite, so a user cannot star an item they could not otherwise see.
+        """
+        item = await self.media_repo.get_by_id(item_id)
+        if not item:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Media item not found",
+            )
+
+        await self.workspace_auth.authorize(
+            workspace_id=item.workspace_id,
+            user=current_user,
+        )
+
+        await self.favorites_repo.add_favorite(
+            user_id=current_user.id,
+            media_item_id=item_id,
+        )
+        return {"is_favorite": True}
+
+    async def unfavorite_item(
+        self,
+        item_id: int,
+        current_user: UserModel,
+    ) -> dict[str, bool]:
+        """Removes the current user's favorite on a media item (idempotent).
+
+        Unfavoriting only ever affects the current user's own row, so it does
+        not require a workspace check: at worst it is a no-op.
+        """
+        await self.favorites_repo.remove_favorite(
+            user_id=current_user.id,
+            media_item_id=item_id,
+        )
+        return {"is_favorite": False}
 
     async def bulk_delete(
         self,

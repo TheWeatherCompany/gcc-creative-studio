@@ -37,6 +37,9 @@ class UnifiedGalleryItemResponse(BaseModel):
     gcs_uris: list[str] = []
     thumbnail_uris: list[str] = []
     tags: list[TagModel] = []
+    # Per-user favorite state, scoped to the requesting user. Only ever true
+    # for media items; source assets cannot be favorited.
+    is_favorite: bool = False
     deleted_at: datetime | None = None  # To support frontend filters
     workspace_name: str | None = None
     user_picture: str | None = None

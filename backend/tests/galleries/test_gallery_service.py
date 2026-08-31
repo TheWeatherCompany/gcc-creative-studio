@@ -51,6 +51,7 @@ def fixture_service():
     mock_imagen_service = AsyncMock()
     mock_gcs_service = MagicMock()
     mock_tags_repo = AsyncMock()
+    mock_favorites_repo = AsyncMock()
 
     service = GalleryService(
         media_repo=mock_media_repo,
@@ -63,6 +64,7 @@ def fixture_service():
         imagen_service=mock_imagen_service,
         gcs_service=mock_gcs_service,
         tags_repo=mock_tags_repo,
+        favorites_repo=mock_favorites_repo,
     )
 
     # Attach mocks for ease of use in tests
@@ -75,6 +77,7 @@ def fixture_service():
     service.mock_workspace_auth = mock_workspace_auth
     service.mock_gcs_service = mock_gcs_service
     service.mock_tags_repo = mock_tags_repo
+    service.mock_favorites_repo = mock_favorites_repo
 
     return service
 
