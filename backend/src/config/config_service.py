@@ -48,6 +48,15 @@ class ConfigService(BaseSettings):
     LOG_LEVEL: str = "INFO"
     INIT_VERTEX: bool = True
 
+    # --- Generation Concurrency ---
+    # Size of the shared ThreadPoolExecutor that runs blocking generation work
+    # (Veo, Imagen, etc.). The true ceiling is NOT this number: it is the
+    # Vertex Veo per-project/region online-prediction quota. Raising this beyond
+    # ~4 only helps if there is confirmed quota headroom, otherwise the extra
+    # workers just queue against the same quota and fail. Override via the
+    # GENERATION_MAX_WORKERS env var (e.g. on Cloud Run) after a quota check.
+    GENERATION_MAX_WORKERS: int = 4
+
     # --- Okta ---
     # Phase 1 (no API Access Management): the org authorization server, e.g.
     # "https://your-org.okta.com", with the SPA client ID as the audience.
