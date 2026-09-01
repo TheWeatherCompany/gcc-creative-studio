@@ -16,6 +16,11 @@ env:
   UPSTREAM_BRANCH: main
   LOCAL_BRANCH: main
   SYNC_LABEL: upstream-sync
+  # Paths owned by fork-only work with no upstream equivalent (Okta auth
+  # migration, custom-domain Firebase hosting). Upstream changes here can't
+  # be merged mechanically - they need someone who understands both the
+  # old GIP-based auth and the Okta replacement to reconcile by hand.
+  AUTH_OWNED_PATTERN: '^(backend/src/auth/|frontend/src/app/common/services/auth|frontend/src/app/login/|infra/modules/firebase-hosting-service/)'
 
 jobs:
   cleanup-branch:
@@ -59,12 +64,30 @@ jobs:
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "Upstream is $count commit(s) ahead of ${LOCAL_BRANCH}"
 
+      - name: Check for auth-owned path collisions
+        if: steps.diff.outputs.count != '0'
+        id: authcheck
+        run: |
+          changed=$(git diff --name-only "origin/${LOCAL_BRANCH}..upstream/${UPSTREAM_BRANCH}")
+          hits=$(echo "$changed" | grep -E "$AUTH_OWNED_PATTERN" || true)
+          if [ -n "$hits" ]; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+            {
+              echo 'files<<AUTHEOF'
+              echo "$hits"
+              echo 'AUTHEOF'
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Ensure sync label exists
         if: steps.diff.outputs.count != '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh label create "$SYNC_LABEL" --color "0366d6" --description "Automated upstream sync PR" 2>/dev/null || true
+          gh label create "needs-auth-review" --color "d73a4a" --description "Touches fork-owned Okta auth or custom-domain hosting code" 2>/dev/null || true
 
       - name: Find previous open sync PR
         if: steps.diff.outputs.count != '0'
@@ -129,11 +152,30 @@ jobs:
             lineage_note="Continues from #${prev_number} (carries forward any resolution commits from that branch)."
           fi
 
+          auth_warning=""
+          extra_label=""
+          if [ "${{ steps.authcheck.outputs.hit }}" = "true" ]; then
+            extra_label="--label needs-auth-review"
+            auth_warning=$(cat <<EOF
+
+          ### :warning: Touches fork-owned auth / hosting code
+          Upstream changed path(s) we've replaced with fork-only work (Okta auth migration,
+          custom-domain Firebase hosting). These have no equivalent upstream to merge against -
+          a clean auto-merge here doesn't mean it's actually correct. Needs manual review by
+          someone who understands both the upstream implementation and our replacement:
+          \`\`\`
+          ${{ steps.authcheck.outputs.files }}
+          \`\`\`
+          EOF
+          )
+          fi
+
           body=$(cat <<EOF
           Automated sync from upstream (\`GoogleCloudPlatform/gcc-creative-studio\`, \`${UPSTREAM_BRANCH}\`).
 
           ${conflict_note}
           ${lineage_note}
+          ${auth_warning}
 
           ### New upstream commits
           \`\`\`
@@ -147,7 +189,7 @@ jobs:
             --head "${{ steps.branch.outputs.name }}" \
             --title "Sync upstream: ${{ steps.diff.outputs.count }} new commit(s)" \
             --body "$body" \
-            --label "$SYNC_LABEL"
+            --label "$SYNC_LABEL" $extra_label
 
           if [ -n "$prev_number" ]; then
             new_number=$(gh pr list --head "${{ steps.branch.outputs.name }}" --json number --jq '.[0].number')
@@ -163,14 +205,18 @@ jobs:
           # been superseded by 3+ newer sync PRs, is dead weight - close it.
           # Closing (rather than deleting the branch here) fires the
           # cleanup-branch job via the pull_request "closed" event.
-          mapfile -t prs < <(gh pr list --state open --label "$SYNC_LABEL" --json number --jq 'sort_by(.number) | .[].number')
+          mapfile -t prs < <(gh pr list --state open --label "$SYNC_LABEL" --json number,labels --jq 'sort_by(.number) | .[] | "\(.number)\t\([.labels[].name] | contains(["needs-auth-review"]))"')
           total=${#prs[@]}
           for i in "${!prs[@]}"; do
             newer=$(( total - i - 1 ))
             if [ "$newer" -lt 3 ]; then
               continue
             fi
-            number="${prs[$i]}"
+            number=$(echo "${prs[$i]}" | cut -f1)
+            needs_auth_review=$(echo "${prs[$i]}" | cut -f2)
+            if [ "$needs_auth_review" = "true" ]; then
+              continue
+            fi
             touched=$(gh api "repos/${{ github.repository }}/pulls/${number}/commits" --jq 'map(select(.commit.author.name != "github-actions[bot]")) | length')
             if [ "$touched" = "0" ]; then
               gh pr close "$number" --comment "Auto-closing: no manual commits on this branch, and superseded by ${newer} newer upstream-sync PRs."
