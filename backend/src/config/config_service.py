@@ -57,6 +57,13 @@ class ConfigService(BaseSettings):
     # GENERATION_MAX_WORKERS env var (e.g. on Cloud Run) after a quota check.
     GENERATION_MAX_WORKERS: int = 4
 
+    # Per-user fairness cap: the maximum number of in-flight (PROCESSING) video
+    # generations a single user may have at once. This keeps one user from
+    # occupying every slot of the shared GENERATION_MAX_WORKERS pool and
+    # starving other users. It should stay below GENERATION_MAX_WORKERS.
+    # Override via the GENERATION_MAX_PER_USER env var.
+    GENERATION_MAX_PER_USER: int = 5
+
     # --- Okta ---
     # Phase 1 (no API Access Management): the org authorization server, e.g.
     # "https://your-org.okta.com", with the SPA client ID as the audience.

@@ -78,7 +78,7 @@ describe('VideoComponent', () => {
         {
           provide: SearchService,
           useValue: {
-            activeVideoJob$: of(null),
+            activeVideoJobs$: of([]),
             videoPrompt: '',
           },
         },

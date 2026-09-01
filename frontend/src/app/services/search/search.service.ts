@@ -55,9 +55,12 @@ export interface ConcatenateVideosDto {
   providedIn: 'root',
 })
 export class SearchService {
-  private activeVideoJob = new BehaviorSubject<MediaItem | null>(null);
-  public activeVideoJob$ = this.activeVideoJob.asObservable();
-  private videoPollingSubscription: Subscription | null = null;
+  // Video generation supports multiple concurrent jobs per user. We track the
+  // list of in-flight/finished jobs and poll each one independently, keyed by
+  // its media item id.
+  private activeVideoJobs = new BehaviorSubject<MediaItem[]>([]);
+  public activeVideoJobs$ = this.activeVideoJobs.asObservable();
+  private videoPollingSubscriptions = new Map<number, Subscription>();
 
   private activeImageJob = new BehaviorSubject<MediaItem | null>(null);
   public activeImageJob$ = this.activeImageJob.asObservable();
@@ -161,9 +164,9 @@ export class SearchService {
       // The 'tap' operator lets us perform a side-effect (like starting polling)
       // without affecting the value passed to the component's subscription.
       tap(initialItem => {
-        // 1. Push the initial "processing" item into the BehaviorSubject
-        this.activeVideoJob.next(initialItem);
-        // 2. Start polling in the background
+        // 1. Add the initial "processing" item to the list of active jobs.
+        this.upsertVideoJob(initialItem);
+        // 2. Start polling this job in the background.
         this.startVeoPolling(initialItem.id);
       }),
     );
@@ -173,36 +176,65 @@ export class SearchService {
     const url = `${environment.backendURL}/videos/concatenate`;
     return this.http.post<MediaItem>(url, payload).pipe(
       tap(initialResponse => {
-        this.activeVideoJob.next(initialResponse);
+        this.upsertVideoJob(initialResponse);
         this.startVeoPolling(initialResponse.id);
       }),
     );
   }
 
-  clearActiveVideoJob() {
-    this.activeVideoJob.next(null);
+  /**
+   * Inserts a job into the active list, or replaces the existing entry with the
+   * same id (so a poll update swaps the item in place without reordering).
+   */
+  private upsertVideoJob(item: MediaItem): void {
+    const jobs = this.activeVideoJobs.value;
+    const index = jobs.findIndex(job => job.id === item.id);
+    if (index === -1) {
+      this.activeVideoJobs.next([...jobs, item]);
+      return;
+    }
+    const next = jobs.slice();
+    next[index] = item;
+    this.activeVideoJobs.next(next);
+  }
+
+  /** Removes a single job from the active list and stops its polling. */
+  removeVideoJob(mediaId: number): void {
+    this.stopVeoPolling(mediaId);
+    this.activeVideoJobs.next(
+      this.activeVideoJobs.value.filter(job => job.id !== mediaId),
+    );
+  }
+
+  /** Clears all active video jobs and stops every poll. */
+  clearActiveVideoJobs() {
+    this.videoPollingSubscriptions.forEach(sub => sub.unsubscribe());
+    this.videoPollingSubscriptions.clear();
+    this.activeVideoJobs.next([]);
   }
 
   /**
-   * Private method to poll the status of a media item.
+   * Polls the status of a single media item until it reaches a terminal state.
+   * Each job is polled by its own subscription so multiple generations can run
+   * concurrently without clobbering each other.
    * @param mediaId The ID of the job to poll.
    */
   private startVeoPolling(mediaId: number): void {
-    this.stopVeoPolling(); // Ensure no other polls are running
+    this.stopVeoPolling(mediaId); // Replace any existing poll for this id.
 
-    this.videoPollingSubscription = timer(5000, 15000) // Start after 5s, then every 15s
+    const subscription = timer(5000, 15000) // Start after 5s, then every 15s
       .pipe(
         switchMap(() => this.getVeoMediaItem(mediaId)),
         tap(latestItem => {
-          // Push the latest status to all subscribers
-          this.activeVideoJob.next(latestItem);
+          // Swap the latest status into the active list.
+          this.upsertVideoJob(latestItem);
 
-          // If the job is finished, stop polling
+          // If this job is finished, stop polling it.
           if (
             latestItem.status === JobStatus.COMPLETED ||
             latestItem.status === JobStatus.FAILED
           ) {
-            this.stopVeoPolling();
+            this.stopVeoPolling(mediaId);
             if (latestItem.status === JobStatus.COMPLETED) {
               handleSuccessSnackbar(this._snackBar, 'Your video is ready!');
             } else {
@@ -216,17 +248,18 @@ export class SearchService {
         }),
         catchError(err => {
           console.error('Polling failed', err);
-          this.stopVeoPolling();
-          // You could update the item with an error status here
+          this.stopVeoPolling(mediaId);
           return EMPTY;
         }),
       )
       .subscribe();
+
+    this.videoPollingSubscriptions.set(mediaId, subscription);
   }
 
-  private stopVeoPolling(): void {
-    this.videoPollingSubscription?.unsubscribe();
-    this.videoPollingSubscription = null;
+  private stopVeoPolling(mediaId: number): void {
+    this.videoPollingSubscriptions.get(mediaId)?.unsubscribe();
+    this.videoPollingSubscriptions.delete(mediaId);
   }
 
   /**

@@ -21,7 +21,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, status
 from google.cloud.logging import Client as LoggerClient
 from google.cloud.logging.handlers import CloudLoggingHandler
 from google.genai import Client, types
@@ -643,7 +643,8 @@ def _process_video_in_background(
                                 omni_response_format["aspect_ratio"] = (
                                     request_dto.aspect_ratio.value
                                     if isinstance(
-                                        request_dto.aspect_ratio, AspectRatioEnum
+                                        request_dto.aspect_ratio,
+                                        AspectRatioEnum,
                                     )
                                     else request_dto.aspect_ratio
                                 )
@@ -1208,6 +1209,30 @@ class VeoService:
         self.gcs_service = gcs_service
         self.source_asset_repo = source_asset_repo
 
+    async def _enforce_per_user_cap(self, user: UserModel) -> None:
+        """Rejects the request if the user already has the maximum number of
+        in-flight video generations. This is a fairness guard so one user cannot
+        occupy every slot of the shared generation pool.
+
+        Note: the count-then-submit is not atomic, so bursts of simultaneous
+        requests can briefly exceed the cap by a small margin. That is
+        acceptable for a fairness limit; it is not a hard quota boundary.
+        """
+        active = await self.media_repo.count_active_generations(
+            user_id=user.id,
+            mime_type_prefix="video/",
+        )
+        limit = config_service.GENERATION_MAX_PER_USER
+        if active >= limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    f"You already have {active} video generations in progress. "
+                    f"Please wait for one to finish before starting another "
+                    f"(limit {limit})."
+                ),
+            )
+
     async def start_video_generation_job(
         self,
         request_dto: CreateVeoDto,
@@ -1221,6 +1246,9 @@ class VeoService:
             The initial MediaItem with a 'processing' status and a pre-generated ID.
 
         """
+        # 0. Enforce the per-user in-flight cap before doing any work.
+        await self._enforce_per_user_cap(user)
+
         # 1. Prepare source asset links if they exist
         source_assets: list[SourceAssetLink] = []
         source_media_items: list[SourceMediaItemLink] = []
@@ -1392,6 +1420,10 @@ class VeoService:
         executor: ThreadPoolExecutor,
     ) -> MediaItemResponse:
         """Creates a placeholder for a video concatenation job and starts it in the background."""
+        # Concatenation also consumes the shared generation pool, so it counts
+        # against the same per-user in-flight cap.
+        await self._enforce_per_user_cap(user)
+
         source_media_items: list[SourceMediaItemLink] = []
         source_assets: list[SourceAssetLink] = []
 

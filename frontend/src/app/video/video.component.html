@@ -15,100 +15,136 @@
 -->
 <div class="lg:container lg:mx-auto mb-8">
   <div class="home-margin grid grid-cols-1">
-    <!-- Video Homepage -->
-    <ng-container *ngIf="isLoading; else videoOrGallery">
-      <div class="video-container">
-        <div class="w-full h-full flex justify-center items-center">
-          <mat-progress-spinner
-            color="primary"
-            mode="indeterminate"
-          ></mat-progress-spinner>
+    <!-- Video generation results. Multiple generations can run at once; each
+         is a card that flips from a spinner to the finished video in place. No
+         full-screen overlay blocks starting another generation. -->
+    <ng-container *ngIf="activeVideoJobs$ | async as jobs">
+      <!-- Inline lightbox for the job the user opened -->
+      <div *ngIf="selectedJob as job" style="height: 80vh;">
+        <div class="mb-4">
+          <button mat-stroked-button (click)="backToResults()">
+            <mat-icon>arrow_back</mat-icon>
+            <span class="ml-1">Back to results</span>
+          </button>
+        </div>
+        <app-media-lightbox
+          [mediaItem]="job"
+          [initialIndex]="0"
+          [showSeeMoreInfoButton]="true"
+          [showDeleteButton]="true"
+          (extendWithAiClicked)="handleExtendWithAi($event)"
+          (editWithOmniClicked)="handleEditWithOmni($event)"
+          (concatenateClicked)="handleConcatenate($event)"
+          (deleteClicked)="deleteGeneratedMedia()"
+          style="height: calc(100% - 3rem)"
+        ></app-media-lightbox>
+      </div>
+
+      <!-- Grid of in-flight and finished job cards -->
+      <div
+        *ngIf="!selectedJob && jobs.length > 0"
+        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+      >
+        <div
+          *ngFor="let job of jobs; trackBy: trackJobById"
+          class="relative rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800 aspect-video flex items-center justify-center"
+        >
+          <!-- Processing -->
+          <div
+            *ngIf="job.status === JobStatus.PROCESSING"
+            class="flex flex-col items-center justify-center p-4 text-center"
+          >
+            <mat-progress-spinner
+              color="primary"
+              mode="indeterminate"
+              [diameter]="40"
+            ></mat-progress-spinner>
+            <p class="!mt-4 text-white text-sm">
+              Your video is being generated...
+            </p>
+            <p class="text-gray-400 text-xs">
+              This may take a few minutes. You can safely navigate away.
+            </p>
+          </div>
+
+          <!-- Completed -->
+          <button
+            *ngIf="job.status === JobStatus.COMPLETED"
+            type="button"
+            (click)="openJob(job)"
+            class="w-full h-full"
+          >
+            <img
+              *ngIf="
+                job.presignedThumbnailUrls && job.presignedThumbnailUrls[0];
+                else noThumb
+              "
+              [src]="job.presignedThumbnailUrls[0]"
+              class="w-full h-full object-cover"
+              alt="Generated video"
+            />
+            <ng-template #noThumb>
+              <div
+                class="flex items-center justify-center w-full h-full text-white"
+              >
+                <mat-icon class="!w-12 !h-12 !text-5xl">play_circle</mat-icon>
+              </div>
+            </ng-template>
+            <div
+              class="absolute bottom-0 inset-x-0 bg-black/60 text-white text-xs py-1.5 flex items-center justify-center gap-1"
+            >
+              <mat-icon class="!text-base !w-4 !h-4">play_arrow</mat-icon>
+              View
+            </div>
+          </button>
+
+          <!-- Failed -->
+          <div
+            *ngIf="job.status === JobStatus.FAILED"
+            class="flex flex-col items-center justify-center p-4 text-center"
+          >
+            <mat-icon class="text-red-500 !w-10 !h-10 !text-4xl"
+              >error_outline</mat-icon
+            >
+            <p class="mt-2 text-white text-sm">Video generation failed</p>
+            <p class="text-gray-400 text-xs max-w-xs w-full truncate px-2">
+              {{ job.errorMessage || job.error_message }}
+            </p>
+            <button
+              mat-button
+              color="warn"
+              (click)="dismissJob(job)"
+              class="!mt-2"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Hero (shown only when there are no active jobs) -->
+      <div *ngIf="!selectedJob && jobs.length === 0" class="video-container">
+        <video
+          class="w-full rounded-xl"
+          oncanplay="this.play()"
+          onloadedmetadata="this.muted = true"
+          muted
+          playsinline
+          loop
+          autoplay
+        >
+          <source
+            src="assets/videos/generate-video-homepage-video.mp4"
+            type="video/mp4"
+          />
+        </video>
+        <div
+          class="top-[40%] md:top-[20%] lg:top-[30%] xl:top-[40%] absolute w-full text-center justify-center text-3xl md:text-6xl font-bold bg-gradient-to-r from-blue-500 via-violet-500 to-red-400 bg-clip-text text-transparent"
+        >
+          Generate Video Ads
         </div>
       </div>
     </ng-container>
-
-    <ng-template #videoOrGallery>
-      <ng-container *ngIf="activeVideoJob$ | async as job">
-        <div
-          *ngIf="job.status === JobStatus.PROCESSING"
-          class="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black bg-opacity-70 rounded-xl"
-        >
-          <mat-progress-spinner
-            color="primary"
-            mode="indeterminate"
-            [diameter]="50"
-          ></mat-progress-spinner>
-          <p class="!mt-6 text-white text-lg">
-            Your video is being generated...
-          </p>
-          <p class="text-gray-400 text-sm">
-            This may take a few minutes. You can safely navigate away.
-          </p>
-        </div>
-
-        <div
-          *ngIf="job.status === JobStatus.FAILED && showErrorOverlay"
-          class="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black bg-opacity-70 rounded-xl text-center p-4"
-        >
-          <mat-icon class="text-red-500 !w-16 !h-16 !text-6xl"
-            >error_outline</mat-icon
-          >
-          <p class="mt-4 text-white text-lg">Video Generation Failed</p>
-          <p class="text-gray-400 text-sm max-w-md">
-            {{ job.errorMessage || job.error_message }}
-          </p>
-          <button
-            mat-raised-button
-            color="primary"
-            (click)="closeErrorOverlay()"
-            class="mt-4"
-          >
-            Close
-          </button>
-        </div>
-
-        <!-- Video Gallery -->
-        <div style="height: 80vh;" *ngIf="job.status === JobStatus.COMPLETED">
-          <app-media-lightbox
-            [mediaItem]="job"
-            [initialIndex]="0"
-            [showSeeMoreInfoButton]="true"
-            [showDeleteButton]="true"
-            (extendWithAiClicked)="handleExtendWithAi($event)"
-            (editWithOmniClicked)="handleEditWithOmni($event)"
-            (concatenateClicked)="handleConcatenate($event)"
-            (deleteClicked)="deleteGeneratedMedia()"
-            style="height: 100%"
-          ></app-media-lightbox>
-        </div>
-      </ng-container>
-
-      <ng-container
-        *ngIf="(activeVideoJob$ | async)?.status !== JobStatus.COMPLETED"
-      >
-        <div class="video-container">
-          <video
-            class="w-full rounded-xl"
-            oncanplay="this.play()"
-            onloadedmetadata="this.muted = true"
-            muted
-            playsinline
-            loop
-            autoplay
-          >
-            <source
-              src="assets/videos/generate-video-homepage-video.mp4"
-              type="video/mp4"
-            />
-          </video>
-          <div
-            class="top-[40%] md:top-[20%] lg:top-[30%] xl:top-[40%] absolute w-full text-center justify-center text-3xl md:text-6xl font-bold bg-gradient-to-r from-blue-500 via-violet-500 to-red-400 bg-clip-text text-transparent"
-          >
-            Generate Video Ads
-          </div>
-        </div>
-      </ng-container>
-    </ng-template>
 
     <!-- Control Options (Legacy) -->
     <div

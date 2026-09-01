@@ -16,21 +16,64 @@
 
 import {TestBed} from '@angular/core/testing';
 import {provideHttpClient} from '@angular/common/http';
-import {provideHttpClientTesting} from '@angular/common/http/testing';
+import {
+  HttpTestingController,
+  provideHttpClientTesting,
+} from '@angular/common/http/testing';
 
+import {environment} from '../../../environments/environment';
+import {JobStatus, MediaItem} from '../../common/models/media-item.model';
 import {SearchService} from './search.service';
+
+function processingItem(id: number): MediaItem {
+  return {id, gcsUris: [], status: JobStatus.PROCESSING} as MediaItem;
+}
 
 describe('SearchService', () => {
   let service: SearchService;
+  let httpMock: HttpTestingController;
+
+  const generateUrl = `${environment.backendURL}/videos/generate-videos`;
 
   beforeEach(() => {
     TestBed.configureTestingModule({
       providers: [provideHttpClient(), provideHttpClientTesting()],
     });
     service = TestBed.inject(SearchService);
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    // Stop any per-job polling timers before the next test.
+    service.clearActiveVideoJobs();
   });
 
   it('should be created', () => {
     expect(service).toBeTruthy();
+  });
+
+  it('tracks a started video generation as an active job', () => {
+    let jobs: MediaItem[] = [];
+    service.activeVideoJobs$.subscribe(next => (jobs = next));
+
+    service.startVeoGeneration({} as never).subscribe();
+    httpMock.expectOne(generateUrl).flush(processingItem(1));
+
+    expect(jobs.map(job => job.id)).toEqual([1]);
+  });
+
+  it('tracks multiple concurrent video generations independently', () => {
+    let jobs: MediaItem[] = [];
+    service.activeVideoJobs$.subscribe(next => (jobs = next));
+
+    service.startVeoGeneration({} as never).subscribe();
+    httpMock.expectOne(generateUrl).flush(processingItem(1));
+    service.startVeoGeneration({} as never).subscribe();
+    httpMock.expectOne(generateUrl).flush(processingItem(2));
+
+    expect(jobs.map(job => job.id)).toEqual([1, 2]);
+
+    service.removeVideoJob(1);
+    expect(jobs.map(job => job.id)).toEqual([2]);
   });
 });

@@ -19,7 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.common.base_repository import BaseRepository
 from src.common.dto.pagination_response_dto import PaginationResponseDto
-from src.common.schema.media_item_model import MediaItem, MediaItemModel
+from src.common.schema.media_item_model import (
+    JobStatusEnum,
+    MediaItem,
+    MediaItemModel,
+)
 from src.database import get_db
 from src.galleries.dto.gallery_search_dto import GallerySearchDto
 
@@ -29,6 +33,32 @@ class MediaRepository(BaseRepository[MediaItem, MediaItemModel]):
 
     def __init__(self, db: AsyncSession = Depends(get_db)):
         super().__init__(model=MediaItem, schema=MediaItemModel, db=db)
+
+    async def count_active_generations(
+        self,
+        user_id: int,
+        mime_type_prefix: str | None = None,
+    ) -> int:
+        """Counts a user's in-flight (PROCESSING) generations.
+
+        Optionally scoped to a mime-type prefix (e.g. "video/"). Used to enforce
+        a per-user concurrency cap against the shared generation pool. Excludes
+        soft-deleted rows.
+        """
+        query = (
+            select(func.count())
+            .select_from(self.model)
+            .where(self.model.user_id == user_id)
+            .where(self.model.status == JobStatusEnum.PROCESSING.value)
+            .where(self.model.deleted_at.is_(None))
+        )
+        if mime_type_prefix:
+            query = query.where(
+                self.model.mime_type.like(f"{mime_type_prefix}%")
+            )
+
+        result = await self.db.execute(query)
+        return result.scalar_one()
 
     async def query(
         self,

@@ -42,6 +42,9 @@ def fixture_mock_media_repo():
     repo.create = AsyncMock()
     repo.get_by_id = AsyncMock()
     repo.update = AsyncMock()
+    # Default: user has no in-flight generations, so the per-user cap allows the
+    # request. Individual tests override the return value to exercise the cap.
+    repo.count_active_generations = AsyncMock(return_value=0)
     return repo
 
 
@@ -233,6 +236,76 @@ class TestVeoServiceMethods:
             )
         assert exc_info.value.status_code == 400
         assert "not a video" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_start_video_generation_job_rejected_at_cap(
+        self,
+        veo_service,
+        mock_media_repo,
+        sample_create_veo_dto,
+        sample_user,
+    ):
+        from fastapi import HTTPException
+
+        from src.config.config_service import config_service
+
+        # User is already at the per-user in-flight cap.
+        mock_media_repo.count_active_generations.return_value = (
+            config_service.GENERATION_MAX_PER_USER
+        )
+        mock_executor = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await veo_service.start_video_generation_job(
+                request_dto=sample_create_veo_dto,
+                user=sample_user,
+                executor=mock_executor,
+            )
+
+        assert exc_info.value.status_code == 429
+        # Nothing is created or submitted when the cap is hit.
+        mock_media_repo.create.assert_not_called()
+        mock_executor.submit.assert_not_called()
+        # The cap is counted against the user's in-flight videos.
+        mock_media_repo.count_active_generations.assert_awaited_once_with(
+            user_id=sample_user.id,
+            mime_type_prefix="video/",
+        )
+
+    @pytest.mark.anyio
+    async def test_start_video_concatenation_job_rejected_at_cap(
+        self,
+        veo_service,
+        mock_media_repo,
+        sample_user,
+    ):
+        from fastapi import HTTPException
+
+        from src.config.config_service import config_service
+
+        request_dto = ConcatenateVideosDto(
+            workspace_id=1,
+            name="Concat Video",
+            inputs=[
+                ConcatenationInput(type="media_item", id=1),
+                ConcatenationInput(type="media_item", id=2),
+            ],
+        )
+        mock_media_repo.count_active_generations.return_value = (
+            config_service.GENERATION_MAX_PER_USER
+        )
+        mock_executor = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await veo_service.start_video_concatenation_job(
+                request_dto=request_dto,
+                user=sample_user,
+                executor=mock_executor,
+            )
+
+        assert exc_info.value.status_code == 429
+        mock_media_repo.create.assert_not_called()
+        mock_executor.submit.assert_not_called()
 
 
 class TestBackgroundWorkers:
