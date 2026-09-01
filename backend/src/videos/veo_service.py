@@ -87,6 +87,16 @@ def _format_omni_prompt(
     return prompt
 
 
+class EmptyGenerationError(Exception):
+    """Veo reported an operation as done but returned no videos.
+
+    Raised rather than returned so the worker's failure handler writes FAILED:
+    a silent return leaves the row PROCESSING, invisible to the user and
+    counted against their concurrency cap. Typed so it is distinguishable from
+    genuine infrastructure errors in logs.
+    """
+
+
 def _mark_job_failed(
     media_item_id: int,
     error: str,
@@ -941,11 +951,7 @@ def _process_video_in_background(
                                 or not operation.response
                                 or not operation.response.generated_videos
                             ):
-                                # Raise rather than return: the enclosing
-                                # handler writes FAILED, so the row does not sit
-                                # in PROCESSING (invisible to the user, counted
-                                # against their concurrency cap) forever.
-                                raise Exception(
+                                raise EmptyGenerationError(
                                     "Veo reported the operation as done but "
                                     "returned no generated videos."
                                 )
@@ -1306,6 +1312,41 @@ class VeoService:
                     f"(limit {limit})."
                 ),
             )
+
+    async def list_active_video_generations(
+        self,
+        user: UserModel,
+    ) -> list[MediaItemResponse]:
+        """Returns the caller's in-flight video generations.
+
+        The frontend tracks generation jobs in memory, so a reload (or a second
+        tab) loses the cards while the rows still count against the per-user
+        cap. This rebuilds them from exactly the rows the cap counts.
+
+        Deliberately not workspace-scoped, because the cap is not either: a job
+        started in another workspace still occupies one of the user's slots and
+        so still needs a card. The user is taken from the token rather than the
+        request, so there is nothing here that can be pointed at someone else.
+        """
+        # Derived from the cap rather than hardcoded, so raising the cap cannot
+        # leave a user with in-flight jobs that have no card. The headroom
+        # covers the cap's non-atomic count-then-submit overshoot.
+        limit = config_service.GENERATION_EFFECTIVE_MAX_PER_USER * 2 + 10
+        items = await self.media_repo.list_active_generations(
+            user_id=user.id,
+            mime_type_prefix="video/",
+            limit=limit,
+        )
+        # In-flight jobs have no output yet, so the presigned lists are empty:
+        # the same shape the submit endpoints return for a fresh placeholder.
+        return [
+            MediaItemResponse(
+                **item.model_dump(),
+                presigned_urls=[],
+                presigned_thumbnail_urls=[],
+            )
+            for item in items
+        ]
 
     async def start_video_generation_job(
         self,

@@ -74,6 +74,32 @@ async def generate_videos(
         )
 
 
+@router.get(
+    "/active",
+    response_model=list[MediaItemResponse],
+    summary="List the caller's in-flight video generations",
+)
+async def list_active_video_generations(
+    current_user: UserModel = Depends(get_current_user),
+    service: VeoService = Depends(),
+):
+    """Returns the video generations the caller currently has in flight.
+
+    Used by the frontend to rebuild its job cards after a reload. No workspace
+    parameter: the per-user cap spans workspaces, so this must too. The user
+    comes from the token, so a caller can only ever see their own jobs.
+    """
+    try:
+        return await service.list_active_video_generations(user=current_user)
+    except HTTPException as http_exception:
+        raise http_exception
+    except Exception as e:
+        raise HTTPException(
+            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
 @router.post(
     "/concatenate",
     response_model=MediaItemResponse,

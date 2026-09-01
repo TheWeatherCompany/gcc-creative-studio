@@ -210,32 +210,25 @@ export class SearchService {
    * against the per-user cap: the next submit would 429 with nothing on screen
    * to wait for.
    *
-   * Queries the gallery directly rather than through GalleryService, whose
-   * fetch also drives the gallery's own loading spinner and cache.
+   * Uses the dedicated /videos/active endpoint rather than a gallery search:
+   * the gallery forces status=COMPLETED for non-admins, so a search for
+   * PROCESSING rows comes back empty for ordinary users. /videos/active also
+   * derives the user from the token and returns exactly the rows the per-user
+   * cap counts, so the restored cards and the cap cannot disagree.
    */
-  restoreActiveVideoJobs(workspaceId: number, userEmail: string): void {
-    const url = `${environment.backendURL}/gallery/search`;
-    this.http
-      .post<{data: MediaItem[]}>(url, {
-        limit: 20,
-        offset: 0,
-        workspaceId,
-        userEmail,
-        status: JobStatus.PROCESSING,
-        mimeType: 'video/*',
-        itemType: 'media_item',
-      })
-      .subscribe({
-        next: response => {
-          for (const item of response.data ?? []) {
-            this.trackVideoJob(item);
-          }
-        },
-        error: err => {
-          // Non-fatal: the user just does not get their in-flight cards back.
-          console.error('Could not restore in-flight video generations', err);
-        },
-      });
+  restoreActiveVideoJobs(): void {
+    const url = `${environment.backendURL}/videos/active`;
+    this.http.get<MediaItem[]>(url).subscribe({
+      next: items => {
+        for (const item of items ?? []) {
+          this.trackVideoJob(item);
+        }
+      },
+      error: err => {
+        // Non-fatal: the user just does not get their in-flight cards back.
+        console.error('Could not restore in-flight video generations', err);
+      },
+    });
   }
 
   /**

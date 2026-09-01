@@ -241,6 +241,51 @@ class TestVeoServiceMethods:
         assert "not a video" in exc_info.value.detail
 
     @pytest.mark.anyio
+    async def test_list_active_video_generations_returns_own_in_flight_jobs(
+        self,
+        veo_service,
+        mock_media_repo,
+        sample_user,
+    ):
+        from src.config.config_service import config_service
+
+        in_flight = MediaItemModel(
+            id=321,
+            workspace_id=1,
+            user_id=1,
+            user_email="test@example.com",
+            mime_type=MimeTypeEnum.VIDEO_MP4,
+            model=GenerationModelEnum.VEO_3_QUALITY,
+            aspect_ratio="16:9",
+            status=JobStatusEnum.PROCESSING,
+            gcs_uris=[],
+            thumbnail_uris=[],
+        )
+        mock_media_repo.list_active_generations = AsyncMock(
+            return_value=[in_flight],
+        )
+
+        response = await veo_service.list_active_video_generations(
+            user=sample_user,
+        )
+
+        assert [item.id for item in response] == [321]
+        assert response[0].status == JobStatusEnum.PROCESSING
+        # No output yet, matching the shape the submit endpoints return.
+        assert response[0].presigned_urls == []
+        assert response[0].presigned_thumbnail_urls == []
+        # Scoped to the caller and to video rows only, and NOT workspace-scoped:
+        # the cap spans workspaces, so the restore has to as well.
+        kwargs = mock_media_repo.list_active_generations.await_args.kwargs
+        assert kwargs["user_id"] == sample_user.id
+        assert kwargs["mime_type_prefix"] == "video/"
+        # The page size must cover the cap, or a user at the cap would be left
+        # with in-flight jobs that have no card.
+        assert (
+            kwargs["limit"] >= config_service.GENERATION_EFFECTIVE_MAX_PER_USER
+        )
+
+    @pytest.mark.anyio
     async def test_start_video_generation_job_rejected_at_cap(
         self,
         veo_service,

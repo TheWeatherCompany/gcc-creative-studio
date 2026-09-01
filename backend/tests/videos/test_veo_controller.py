@@ -21,9 +21,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.auth.auth_guard import get_current_user
-from src.common.base_dto import MimeTypeEnum
+from src.common.base_dto import GenerationModelEnum, MimeTypeEnum
+from src.common.schema.media_item_model import JobStatusEnum, MediaItemModel
 from src.galleries.dto.gallery_response_dto import MediaItemResponse
-from src.users.user_model import UserModel
+from src.users.user_model import UserModel, UserRoleEnum
 from src.videos.veo_controller import router
 from src.videos.veo_service import VeoService
 from src.workspaces.workspace_auth_guard import WorkspaceAuth
@@ -41,6 +42,7 @@ def fixture_mock_veo_service():
     service = AsyncMock()
     service.start_video_generation_job = AsyncMock()
     service.start_video_concatenation_job = AsyncMock()
+    service.list_active_video_generations = AsyncMock()
     return service
 
 
@@ -239,3 +241,52 @@ def test_concatenate_videos_general_exception(client, mock_veo_service):
     response = client.post("/api/videos/concatenate", json=payload)
     assert response.status_code == 500
     assert "Database is down" in response.json()["detail"]
+
+
+def test_list_active_video_generations_for_non_admin_user(mock_user):
+    """Exercises the real VeoService, not a mock of it.
+
+    The first attempt at this feature reused the gallery search endpoint, which
+    silently rewrites status to COMPLETED for non-admins, so restore returned
+    nothing for ordinary users. This test drives the real service against a
+    mocked repository with a plain "user" role, so that class of regression
+    fails here rather than in production.
+    """
+    assert UserRoleEnum.ADMIN not in mock_user.roles
+
+    in_flight = MediaItemModel(
+        id=321,
+        workspace_id=1,
+        user_id=1,
+        user_email="test@example.com",
+        mime_type=MimeTypeEnum.VIDEO_MP4,
+        model=GenerationModelEnum.VEO_3_QUALITY,
+        aspect_ratio="16:9",
+        status=JobStatusEnum.PROCESSING,
+        gcs_uris=[],
+        thumbnail_uris=[],
+    )
+    media_repo = AsyncMock()
+    media_repo.list_active_generations = AsyncMock(return_value=[in_flight])
+    real_service = VeoService(
+        media_repo=media_repo,
+        source_asset_repo=AsyncMock(),
+        gcs_service=MagicMock(),
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.executor = MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[VeoService] = lambda: real_service
+    client = TestClient(app)
+
+    response = client.get("/api/videos/active")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["id"] for item in body] == [321]
+    assert body[0]["status"] == JobStatusEnum.PROCESSING.value
+    kwargs = media_repo.list_active_generations.await_args.kwargs
+    assert kwargs["user_id"] == 1
+    assert kwargs["mime_type_prefix"] == "video/"

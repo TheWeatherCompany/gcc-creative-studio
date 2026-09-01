@@ -95,20 +95,15 @@ describe('SearchService', () => {
     let jobs: MediaItem[] = [];
     service.activeVideoJobs$.subscribe(next => (jobs = next));
 
-    service.restoreActiveVideoJobs(1, 'test@example.com');
+    service.restoreActiveVideoJobs();
 
+    // Must be /videos/active, not a gallery search: the gallery forces
+    // status=COMPLETED for non-admins, which would return nothing.
     const request = httpMock.expectOne(
-      `${environment.backendURL}/gallery/search`,
+      `${environment.backendURL}/videos/active`,
     );
-    expect(request.request.body).toEqual(
-      jasmine.objectContaining({
-        workspaceId: 1,
-        userEmail: 'test@example.com',
-        status: JobStatus.PROCESSING,
-        mimeType: 'video/*',
-      }),
-    );
-    request.flush({data: [processingItem(3), processingItem(4)]});
+    expect(request.request.method).toBe('GET');
+    request.flush([processingItem(3), processingItem(4)]);
 
     expect(jobs.map(job => job.id)).toEqual([3, 4]);
   });

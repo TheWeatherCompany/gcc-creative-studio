@@ -14,6 +14,7 @@
 """Tests for Media Item Repository."""
 
 
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -201,3 +202,33 @@ async def test_count_active_generations_excludes_stale_rows():
     # No mime-type prefix means the cap is not scoped to one media type.
     compiled = str(query.compile(compile_kwargs={"literal_binds": True}))
     assert "mime_type LIKE" not in compiled
+
+
+@pytest.mark.anyio
+async def test_list_active_generations_matches_count_predicates():
+    """Restore and the cap must agree on what counts as in-flight, so the list
+    query has to carry the same WHERE clause as the count.
+    """
+    mock_db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalars().all.return_value = []
+    mock_db.execute.return_value = mock_result
+
+    repo = MediaRepository(db=mock_db)
+
+    await repo.list_active_generations(user_id=42, mime_type_prefix="video/")
+    list_query = mock_db.execute.call_args.args[0]
+
+    mock_count_result = MagicMock()
+    mock_count_result.scalar_one.return_value = 0
+    mock_db.execute.return_value = mock_count_result
+    await repo.count_active_generations(user_id=42, mime_type_prefix="video/")
+    count_query = mock_db.execute.call_args.args[0]
+
+    def where_clause(query):
+        compiled = str(query.compile(compile_kwargs={"literal_binds": True}))
+        # Drop the timestamp literal, which differs by microseconds.
+        body = compiled.split("WHERE", 1)[1]
+        return re.sub(r"'\d{4}-\d\d-\d\d[^']*'", "'CUTOFF'", body)
+
+    assert where_clause(list_query).startswith(where_clause(count_query))
