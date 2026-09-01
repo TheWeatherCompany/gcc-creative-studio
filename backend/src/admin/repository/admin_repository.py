@@ -19,6 +19,7 @@ from src.database import get_db
 from src.users.user_model import User
 from src.workspaces.schema.workspace_model import Workspace
 from src.source_assets.schema.source_asset_model import SourceAsset
+from src.common.job_policy import stale_job_cutoff
 from src.common.schema.media_item_model import MediaItem, JobStatusEnum
 from src.admin.dto.admin_response_dto import (
     AdminOverviewStats,
@@ -27,7 +28,7 @@ from src.admin.dto.admin_response_dto import (
     AdminActiveRole,
     AdminGenerationHealth,
 )
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 
 class AdminRepository:
@@ -287,12 +288,12 @@ class AdminRepository:
         return {row.month: row.count for row in results}
 
     async def cleanup_stuck_jobs(self) -> int:
-        """Marks processing jobs older than 1 hour as stopped."""
-        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+        """Marks processing jobs older than the staleness window as stopped."""
+        cutoff = stale_job_cutoff()
         query = (
             update(MediaItem)
             .where(MediaItem.status == JobStatusEnum.PROCESSING.value)
-            .where(MediaItem.created_at < one_hour_ago)
+            .where(MediaItem.created_at < cutoff)
             .values(status=JobStatusEnum.STOPPED.value)
         )
         result = await self.db.execute(query)

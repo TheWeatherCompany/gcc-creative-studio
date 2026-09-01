@@ -64,6 +64,7 @@ import {
   SearchService,
 } from '../services/search/search.service';
 import {VideoStateService} from '../services/video-state.service';
+import {UserService} from '../common/services/user.service';
 import {WorkspaceStateService} from '../services/workspace/workspace-state.service';
 import {GalleryService} from '../gallery/gallery.service';
 
@@ -224,6 +225,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
     private workspaceStateService: WorkspaceStateService,
     private sourceAssetService: SourceAssetService,
     private videoStateService: VideoStateService,
+    private userService: UserService,
 
     @Inject(GalleryService)
     private galleryService: GalleryService,
@@ -239,7 +241,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
     this.activeVideoJobs$ = this.service.activeVideoJobs$.pipe(
       map(jobs =>
         jobs.map(
-          job => this.galleryService.mapUnifiedItem(job) as unknown as MediaItem,
+          job =>
+            this.galleryService.mapUnifiedItem(job) as unknown as MediaItem,
         ),
       ),
     );
@@ -295,6 +298,22 @@ export class VideoComponent implements OnInit, AfterViewInit {
     if (this.pendingSourceAssets) {
       this.applySourceAssets(this.pendingSourceAssets);
     }
+    this.restoreInFlightGenerations();
+  }
+
+  /**
+   * Re-attaches cards and polling to generations that are still running
+   * server-side, so a reload does not leave an empty grid while the backend
+   * still counts those jobs against the per-user cap.
+   */
+  private restoreInFlightGenerations(): void {
+    if (!this.isBrowser) return;
+
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    const userEmail = this.userService.getUserDetails()?.email;
+    if (workspaceId === null || !userEmail) return;
+
+    this.service.restoreActiveVideoJobs(workspaceId, userEmail);
   }
 
   public saveState() {

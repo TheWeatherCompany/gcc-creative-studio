@@ -43,6 +43,7 @@ import {SearchService} from '../services/search/search.service';
 import {WorkspaceStateService} from '../services/workspace/workspace-state.service';
 import {VideoStateService} from '../services/video-state.service';
 import {GalleryService} from '../gallery/gallery.service';
+import {UserService} from '../common/services/user.service';
 
 describe('VideoComponent', () => {
   let component: VideoComponent;
@@ -80,6 +81,8 @@ describe('VideoComponent', () => {
           useValue: {
             activeVideoJobs$: of([]),
             videoPrompt: '',
+            trackVideoJob: jasmine.createSpy('trackVideoJob'),
+            restoreActiveVideoJobs: jasmine.createSpy('restoreActiveVideoJobs'),
           },
         },
         {
@@ -99,6 +102,12 @@ describe('VideoComponent', () => {
           provide: GalleryService,
           useValue: {
             mapUnifiedItem: (item: any) => item,
+          },
+        },
+        {
+          provide: UserService,
+          useValue: {
+            getUserDetails: () => ({email: 'test@example.com'}),
           },
         },
       ],

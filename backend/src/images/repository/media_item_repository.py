@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.common.base_repository import BaseRepository
 from src.common.dto.pagination_response_dto import PaginationResponseDto
+from src.common.job_policy import stale_job_cutoff
 from src.common.schema.media_item_model import (
     JobStatusEnum,
     MediaItem,
@@ -44,6 +45,12 @@ class MediaRepository(BaseRepository[MediaItem, MediaItemModel]):
         Optionally scoped to a mime-type prefix (e.g. "video/"). Used to enforce
         a per-user concurrency cap against the shared generation pool. Excludes
         soft-deleted rows.
+
+        Rows older than STUCK_JOB_STALE_AFTER are excluded: the generation work
+        happens in a background thread after the response is returned, so an
+        instance replacement leaves the row PROCESSING with nothing left to
+        finish it. Without the age bound those orphans would count against the
+        cap forever and permanently lock the user out of new generations.
         """
         query = (
             select(func.count())
@@ -51,6 +58,7 @@ class MediaRepository(BaseRepository[MediaItem, MediaItemModel]):
             .where(self.model.user_id == user_id)
             .where(self.model.status == JobStatusEnum.PROCESSING.value)
             .where(self.model.deleted_at.is_(None))
+            .where(self.model.created_at >= stale_job_cutoff())
         )
         if mime_type_prefix:
             query = query.where(

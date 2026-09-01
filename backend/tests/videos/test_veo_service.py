@@ -14,12 +14,14 @@
 """Tests for Veo Service."""
 
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.common.base_dto import GenerationModelEnum
 from src.common.schema.media_item_model import (
+    JobStatusEnum,
     MediaItemModel,
     MimeTypeEnum,
 )
@@ -31,6 +33,7 @@ from src.videos.dto.concatenate_videos_dto import (
 from src.videos.dto.create_veo_dto import CreateVeoDto
 from src.videos.veo_service import (
     VeoService,
+    _mark_job_failed,
     _process_video_concatenation_in_background,
     _process_video_in_background,
 )
@@ -251,7 +254,7 @@ class TestVeoServiceMethods:
 
         # User is already at the per-user in-flight cap.
         mock_media_repo.count_active_generations.return_value = (
-            config_service.GENERATION_MAX_PER_USER
+            config_service.GENERATION_EFFECTIVE_MAX_PER_USER
         )
         mock_executor = MagicMock()
 
@@ -292,7 +295,7 @@ class TestVeoServiceMethods:
             ],
         )
         mock_media_repo.count_active_generations.return_value = (
-            config_service.GENERATION_MAX_PER_USER
+            config_service.GENERATION_EFFECTIVE_MAX_PER_USER
         )
         mock_executor = MagicMock()
 
@@ -1718,3 +1721,174 @@ class TestBackgroundWorkers:
             assert update_dict["gcs_uris"] == [
                 "gs://bucket/omni_flash_video.mp4"
             ]
+
+
+class TestWorkerOrphanPaths:
+    """A row left in PROCESSING is invisible to the user and keeps consuming one
+    of their per-user concurrency slots, so every worker exit must write a
+    terminal status.
+    """
+
+    @patch("src.database.WorkerDatabase")
+    def test_setup_failure_marks_job_failed(self, mock_worker_db_class):
+        """A failure before the inner handler exists (DB session, logging
+        client, event loop) must still write FAILED.
+        """
+        mock_worker_db_class.return_value.__aenter__.side_effect = Exception(
+            "session setup exploded",
+        )
+        sample_dto = CreateVeoDto(
+            workspace_id=1,
+            prompt="Test",
+            generation_model=GenerationModelEnum.VEO_3_QUALITY,
+            aspect_ratio="16:9",
+            duration_seconds=5,
+        )
+
+        with patch(
+            "src.videos.veo_service._mark_job_failed",
+        ) as mock_mark_failed:
+            _process_video_in_background(
+                media_item_id=123,
+                request_dto=sample_dto,
+                user_email="test@user.com",
+            )
+
+        mock_mark_failed.assert_called_once()
+        assert mock_mark_failed.call_args.args[0] == 123
+        assert "session setup exploded" in mock_mark_failed.call_args.args[1]
+
+    @patch("src.database.WorkerDatabase")
+    def test_concatenation_setup_failure_marks_job_failed(
+        self,
+        mock_worker_db_class,
+    ):
+        mock_worker_db_class.return_value.__aenter__.side_effect = Exception(
+            "session setup exploded",
+        )
+        request_dto = ConcatenateVideosDto(
+            workspace_id=1,
+            name="Concat Video",
+            inputs=[
+                ConcatenationInput(type="media_item", id=1),
+                ConcatenationInput(type="media_item", id=2),
+            ],
+        )
+
+        with patch(
+            "src.videos.veo_service._mark_job_failed",
+        ) as mock_mark_failed:
+            _process_video_concatenation_in_background(
+                media_item_id=456,
+                request_dto=request_dto,
+            )
+
+        mock_mark_failed.assert_called_once()
+        assert mock_mark_failed.call_args.args[0] == 456
+
+    @patch("src.database.WorkerDatabase")
+    def test_mark_job_failed_writes_failed_status(self, mock_worker_db_class):
+        mock_db_context = AsyncMock()
+        mock_db_factory = MagicMock(return_value=mock_db_context)
+        mock_worker_db_class.return_value.__aenter__.return_value = (
+            mock_db_factory
+        )
+
+        with patch(
+            "src.videos.veo_service.MediaRepository",
+        ) as mock_media_repo_class:
+            mock_media_repo = AsyncMock()
+            mock_media_repo_class.return_value = mock_media_repo
+            still_processing = MagicMock()
+            still_processing.status = JobStatusEnum.PROCESSING.value
+            mock_media_repo.get_by_id.return_value = still_processing
+
+            _mark_job_failed(789, "boom", logging.getLogger("test"))
+
+        mock_media_repo.update.assert_awaited_once()
+        media_item_id, update_data = mock_media_repo.update.await_args.args
+        assert media_item_id == 789
+        assert update_data["status"] == JobStatusEnum.FAILED
+        assert update_data["error_message"] == "boom"
+
+    @patch("src.database.WorkerDatabase")
+    @patch("src.videos.veo_service.GenAIModelSetup.init")
+    def test_empty_veo_response_marks_job_failed(
+        self,
+        mock_genai_init,
+        mock_worker_db_class,
+    ):
+        """Veo can report an operation as done while returning no videos. That
+        used to `return` silently, stranding the row in PROCESSING.
+        """
+        mock_db_context = AsyncMock()
+        mock_db_factory = MagicMock(return_value=mock_db_context)
+        mock_worker_db_class.return_value.__aenter__.return_value = (
+            mock_db_factory
+        )
+
+        mock_client = MagicMock()
+        mock_genai_init.return_value = mock_client
+        mock_operation = MagicMock()
+        mock_operation.done = True
+        mock_operation.error = None
+        mock_operation.response.generated_videos = []
+        mock_client.models.generate_videos.return_value = mock_operation
+        mock_client.operations.get.return_value = mock_operation
+
+        sample_dto = CreateVeoDto(
+            workspace_id=1,
+            prompt="Test",
+            generation_model=GenerationModelEnum.VEO_3_QUALITY,
+            aspect_ratio="16:9",
+            duration_seconds=5,
+        )
+
+        with (
+            patch(
+                "src.videos.veo_service.MediaRepository",
+            ) as mock_media_repo_class,
+            patch("src.videos.veo_service.SourceAssetRepository"),
+            patch("src.videos.veo_service.GeminiService"),
+            patch("src.videos.veo_service.GcsService"),
+        ):
+            mock_media_repo = AsyncMock()
+            mock_media_repo_class.return_value = mock_media_repo
+
+            _process_video_in_background(
+                media_item_id=321,
+                request_dto=sample_dto,
+                user_email="test@user.com",
+            )
+
+        mock_media_repo.update.assert_awaited_once()
+        _, update_data = mock_media_repo.update.await_args.args
+        assert update_data["status"] == JobStatusEnum.FAILED
+        assert "no generated videos" in update_data["error_message"]
+
+    @patch("src.database.WorkerDatabase")
+    def test_mark_job_failed_leaves_terminal_status_alone(
+        self,
+        mock_worker_db_class,
+    ):
+        """A worker whose teardown throws after a successful run must not
+        overwrite the COMPLETED status it just wrote.
+        """
+        mock_db_context = AsyncMock()
+        mock_db_factory = MagicMock(return_value=mock_db_context)
+        mock_worker_db_class.return_value.__aenter__.return_value = (
+            mock_db_factory
+        )
+
+        with patch(
+            "src.videos.veo_service.MediaRepository",
+        ) as mock_media_repo_class:
+            mock_media_repo = AsyncMock()
+            mock_media_repo_class.return_value = mock_media_repo
+            completed = MagicMock()
+            completed.status = JobStatusEnum.COMPLETED.value
+            mock_media_repo.get_by_id.return_value = completed
+
+            _mark_job_failed(789, "teardown blew up", logging.getLogger("test"))
+
+        mock_media_repo.update.assert_not_awaited()

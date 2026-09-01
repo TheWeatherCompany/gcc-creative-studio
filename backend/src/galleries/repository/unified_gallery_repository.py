@@ -210,9 +210,7 @@ class UnifiedGalleryRepository(
                 favorite_result = await self.db.execute(
                     select(MediaItemFavorite.media_item_id)
                     .where(MediaItemFavorite.user_id == current_user_id)
-                    .where(
-                        MediaItemFavorite.media_item_id.in_(media_item_ids)
-                    )
+                    .where(MediaItemFavorite.media_item_id.in_(media_item_ids))
                 )
                 favorite_ids = set(favorite_result.scalars().all())
 

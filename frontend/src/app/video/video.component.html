@@ -20,7 +20,7 @@
          full-screen overlay blocks starting another generation. -->
     <ng-container *ngIf="activeVideoJobs$ | async as jobs">
       <!-- Inline lightbox for the job the user opened -->
-      <div *ngIf="selectedJob as job" style="height: 80vh;">
+      <div *ngIf="selectedJob as job" style="height: 80vh">
         <div class="mb-4">
           <button mat-stroked-button (click)="backToResults()">
             <mat-icon>arrow_back</mat-icon>
@@ -65,6 +65,17 @@
             <p class="text-gray-400 text-xs">
               This may take a few minutes. You can safely navigate away.
             </p>
+            <!-- Stops tracking this card only; the generation itself keeps
+                 running and will land in the gallery. Gives the user a way out
+                 of a card that is no longer making progress. -->
+            <button
+              mat-button
+              (click)="dismissJob(job)"
+              class="!mt-2 !text-xs"
+              matTooltip="Hide this card. The video will still finish and appear in your gallery."
+            >
+              Hide
+            </button>
           </div>
 
           <!-- Completed -->
@@ -107,7 +118,10 @@
               >error_outline</mat-icon
             >
             <p class="mt-2 text-white text-sm">Video generation failed</p>
-            <p class="text-gray-400 text-xs max-w-xs w-full truncate px-2">
+            <p
+              class="text-gray-400 text-xs max-w-xs w-full line-clamp-3 px-2"
+              [title]="job.errorMessage || job.error_message"
+            >
               {{ job.errorMessage || job.error_message }}
             </p>
             <button
@@ -150,7 +164,6 @@
     <div
       class="control-options inline-flex justify-center items-start grid grid-cols-2 md:grid-cols-3 lg:flex gap-4 mt-8 place-items-center"
     >
-
       <div
         matTooltip="Select Style"
         class="cursor-pointer w-24 inline-flex flex-col justify-start items-center"
@@ -331,10 +344,7 @@
         <div class="text-center justify-center text-neutral-200 text-base mt-2">
           Negative Phrases ({{ negativePhrases.length }})
         </div>
-        <mat-menu
-          #negativePhrasesMenu="matMenu"
-          class="negative-phrases-menu"
-        >
+        <mat-menu #negativePhrasesMenu="matMenu" class="negative-phrases-menu">
           <div class="p-2" (click)="$event.stopPropagation()">
             <mat-form-field class="w-full">
               <mat-label>Things to avoid...</mat-label>
@@ -346,10 +356,7 @@
                   class="negative-prompt-chips"
                 >
                   {{ phrase }}
-                  <button
-                    matChipRemove
-                    [matTooltip]="'Remove ' + phrase"
-                  >
+                  <button matChipRemove [matTooltip]="'Remove ' + phrase">
                     <mat-icon>cancel</mat-icon>
                   </button>
                 </mat-chip-row>
@@ -397,9 +404,15 @@
     <!-- Prompt Generator -->
     <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 my-5">
       <!-- Prompt Section -->
-      <div class="lg:col-span-4 flex flex-col justify-start items-center gap-4 w-full">
-        <app-flow-prompt-box class="w-full max-w-2xl block" [prompt]="searchRequest.prompt"
-          [aspectRatio]="selectedAspectRatio" [outputs]="searchRequest.numberOfMedia || 1" [mode]="currentMode"
+      <div
+        class="lg:col-span-4 flex flex-col justify-start items-center gap-4 w-full"
+      >
+        <app-flow-prompt-box
+          class="w-full max-w-2xl block"
+          [prompt]="searchRequest.prompt"
+          [aspectRatio]="selectedAspectRatio"
+          [outputs]="searchRequest.numberOfMedia || 1"
+          [mode]="currentMode"
           [modes]="modes"
           [aspectRatioOptions]="aspectRatioOptions"
           [generationModels]="generationModels"
@@ -433,10 +446,11 @@
           (clearReferenceVideo)="clearReferenceVideo($event)"
           (openAudioSelectorForReference)="openAudioSelectorForReference()"
           (clearReferenceAudio)="clearReferenceAudio($event)"
-          (toggleReferenceImagesType)="referenceImagesType = $event ? 'STYLE' : 'ASSET'; saveState()"
+          (toggleReferenceImagesType)="
+            referenceImagesType = $event ? 'STYLE' : 'ASSET'; saveState()
+          "
         ></app-flow-prompt-box>
       </div>
-
     </div>
   </div>
 </div>

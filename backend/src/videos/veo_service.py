@@ -87,6 +87,58 @@ def _format_omni_prompt(
     return prompt
 
 
+def _mark_job_failed(
+    media_item_id: int,
+    error: str,
+    worker_logger: logging.Logger,
+) -> None:
+    """Best-effort FAILED write from a worker's *outer* handler.
+
+    The inner handler owns the normal failure path, but it only exists once the
+    event loop and DB session are up. A failure before that (LoggerClient init,
+    WorkerDatabase setup, event-loop creation) would otherwise leave the row
+    PROCESSING forever, which both hides the failure from the user and consumes
+    one of their per-user concurrency slots. This opens its own short-lived
+    session because the worker's session is out of scope by then.
+
+    Only writes if the row is still PROCESSING, so it cannot clobber a status
+    the inner handler (or a successful run) already wrote.
+    """
+    from src.database import WorkerDatabase
+
+    async def _write() -> None:
+        async with WorkerDatabase() as db_factory:
+            async with db_factory() as db:
+                media_repo = MediaRepository(db)
+                item = await media_repo.get_by_id(media_item_id)
+                current_status = getattr(item, "status", None)
+                if getattr(current_status, "value", current_status) != (
+                    JobStatusEnum.PROCESSING.value
+                ):
+                    return
+                await media_repo.update(
+                    media_item_id,
+                    {
+                        "status": JobStatusEnum.FAILED,
+                        "error_message": error,
+                    },
+                )
+
+    try:
+        asyncio.run(_write())
+    except Exception as write_error:  # pragma: no cover - last-resort logging
+        worker_logger.error(
+            "Could not mark job FAILED after worker setup failure.",
+            extra={
+                "json_fields": {
+                    "media_id": media_item_id,
+                    "error": str(write_error),
+                },
+            },
+            exc_info=True,
+        )
+
+
 # --- STANDALONE WORKER FUNCTION ---
 # This function will run in the background thread. It is defined outside the class.
 def _process_video_in_background(
@@ -889,7 +941,14 @@ def _process_video_in_background(
                                 or not operation.response
                                 or not operation.response.generated_videos
                             ):
-                                return
+                                # Raise rather than return: the enclosing
+                                # handler writes FAILED, so the row does not sit
+                                # in PROCESSING (invisible to the user, counted
+                                # against their concurrency cap) forever.
+                                raise Exception(
+                                    "Veo reported the operation as done but "
+                                    "returned no generated videos."
+                                )
 
                             # Download the generated video and create thumbnail
                             thumbnail_path = ""
@@ -1021,6 +1080,10 @@ def _process_video_in_background(
             extra={"json_fields": {"media_id": media_item_id, "error": str(e)}},
             exc_info=True,
         )  # exc_info=True still adds the full traceback
+        # The inner handler could not run (or re-raised), so write the failure
+        # here. Leaving the row PROCESSING would strand it until the admin
+        # stuck-job cleanup and burn a per-user concurrency slot in the meantime.
+        _mark_job_failed(media_item_id, str(e), worker_logger)
 
 
 def _process_video_concatenation_in_background(
@@ -1191,6 +1254,7 @@ def _process_video_concatenation_in_background(
             f"Video concatenation worker failed to initialize: {e}",
             exc_info=True,
         )
+        _mark_job_failed(media_item_id, str(e), worker_logger)
 
 
 class VeoService:
@@ -1222,8 +1286,18 @@ class VeoService:
             user_id=user.id,
             mime_type_prefix="video/",
         )
-        limit = config_service.GENERATION_MAX_PER_USER
+        limit = config_service.GENERATION_EFFECTIVE_MAX_PER_USER
         if active >= limit:
+            logger.info(
+                "Rejected video generation: per-user in-flight cap reached.",
+                extra={
+                    "json_fields": {
+                        "user_id": user.id,
+                        "active_generations": active,
+                        "limit": limit,
+                    },
+                },
+            )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=(

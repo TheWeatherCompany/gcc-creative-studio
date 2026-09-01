@@ -133,3 +133,71 @@ async def test_media_repository_query_custom_model_value():
     assert len(response.data) == 1
     # Check that model is successfully validated and stored as "custom-model-id" string
     assert response.data[0].model == "custom-model-id"
+
+
+@pytest.mark.anyio
+async def test_count_active_generations_predicates():
+    """The cap is only correct if the count query filters on exactly the right
+    rows, so assert on the compiled WHERE clause rather than a mocked return.
+    """
+    mock_db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one.return_value = 3
+    mock_db.execute.return_value = mock_result
+
+    repo = MediaRepository(db=mock_db)
+
+    count = await repo.count_active_generations(
+        user_id=42,
+        mime_type_prefix="video/",
+    )
+
+    assert count == 3
+    query = mock_db.execute.call_args.args[0]
+    compiled = str(
+        query.compile(compile_kwargs={"literal_binds": True})
+    ).lower()
+
+    assert "media_items.user_id = 42" in compiled
+    assert f"status = '{JobStatusEnum.PROCESSING.value}'" in compiled
+    assert "deleted_at is null" in compiled
+    assert "mime_type like 'video/%'" in compiled
+    # The staleness bound keeps orphaned PROCESSING rows (killed mid-run by a
+    # deploy) from counting against the user forever.
+    assert "created_at >=" in compiled
+
+
+@pytest.mark.anyio
+async def test_count_active_generations_excludes_stale_rows():
+    """The cutoff must match the admin stuck-job cleanup window."""
+    from datetime import datetime, timedelta, timezone
+
+    from src.common.job_policy import STUCK_JOB_STALE_AFTER
+
+    mock_db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one.return_value = 0
+    mock_db.execute.return_value = mock_result
+
+    repo = MediaRepository(db=mock_db)
+    before = datetime.now(timezone.utc)
+    await repo.count_active_generations(user_id=1)
+    after = datetime.now(timezone.utc)
+
+    query = mock_db.execute.call_args.args[0]
+    cutoffs = [
+        value
+        for value in query.compile().params.values()
+        if isinstance(value, datetime)
+    ]
+    assert len(cutoffs) == 1
+    assert (
+        before - STUCK_JOB_STALE_AFTER
+        <= cutoffs[0]
+        <= after - STUCK_JOB_STALE_AFTER
+    )
+    assert STUCK_JOB_STALE_AFTER == timedelta(hours=1)
+
+    # No mime-type prefix means the cap is not scoped to one media type.
+    compiled = str(query.compile(compile_kwargs={"literal_binds": True}))
+    assert "mime_type LIKE" not in compiled

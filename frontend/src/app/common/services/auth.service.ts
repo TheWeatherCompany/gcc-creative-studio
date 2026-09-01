@@ -23,6 +23,7 @@ import {catchError, map, switchMap, tap} from 'rxjs/operators';
 import {environment} from '../../../environments/environment';
 import {UserModel, UserRolesEnum} from '../models/user.model';
 import {OKTA_AUTH} from './okta-auth.provider';
+import {SearchService} from '../../services/search/search.service';
 import {UserService} from './user.service';
 
 const USER_DETAILS = 'USER_DETAILS';
@@ -62,6 +63,7 @@ export class AuthService {
     private router: Router,
     private httpClient: HttpClient,
     private userService: UserService,
+    private searchService: SearchService,
   ) {
     // Seeds the reload case, where tokens are already in storage and there is
     // no callback to wait for.
@@ -307,6 +309,10 @@ export class AuthService {
     this.sessionReady.next(false);
     localStorage.removeItem(USER_DETAILS);
     localStorage.removeItem('showTooltip');
+    // Generation jobs are tracked in a root-scoped service, so without this the
+    // outgoing user's cards and their polling would survive into the next
+    // sign-in in the same tab.
+    this.searchService.clearActiveVideoJobs();
   }
 
   /**
