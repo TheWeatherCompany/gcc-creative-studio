@@ -44,6 +44,11 @@ export interface ConcatenationInput {
   id: number;
   type: 'media_item' | 'source_asset';
 }
+// How many consecutive failed polls to tolerate before giving up on a job.
+// Generous on purpose: the request is retried on the normal 15s poll tick, so
+// this rides out roughly a minute of backend or network trouble.
+const MAX_CONSECUTIVE_POLL_FAILURES = 4;
+
 export interface ConcatenateVideosDto {
   workspaceId: number;
   name: string;
@@ -55,9 +60,12 @@ export interface ConcatenateVideosDto {
   providedIn: 'root',
 })
 export class SearchService {
-  private activeVideoJob = new BehaviorSubject<MediaItem | null>(null);
-  public activeVideoJob$ = this.activeVideoJob.asObservable();
-  private videoPollingSubscription: Subscription | null = null;
+  // Video generation supports multiple concurrent jobs per user. We track the
+  // list of in-flight/finished jobs and poll each one independently, keyed by
+  // its media item id.
+  private activeVideoJobs = new BehaviorSubject<MediaItem[]>([]);
+  public activeVideoJobs$ = this.activeVideoJobs.asObservable();
+  private videoPollingSubscriptions = new Map<number, Subscription>();
 
   private activeImageJob = new BehaviorSubject<MediaItem | null>(null);
   public activeImageJob$ = this.activeImageJob.asObservable();
@@ -161,9 +169,9 @@ export class SearchService {
       // The 'tap' operator lets us perform a side-effect (like starting polling)
       // without affecting the value passed to the component's subscription.
       tap(initialItem => {
-        // 1. Push the initial "processing" item into the BehaviorSubject
-        this.activeVideoJob.next(initialItem);
-        // 2. Start polling in the background
+        // 1. Add the initial "processing" item to the list of active jobs.
+        this.upsertVideoJob(initialItem);
+        // 2. Start polling this job in the background.
         this.startVeoPolling(initialItem.id);
       }),
     );
@@ -173,36 +181,127 @@ export class SearchService {
     const url = `${environment.backendURL}/videos/concatenate`;
     return this.http.post<MediaItem>(url, payload).pipe(
       tap(initialResponse => {
-        this.activeVideoJob.next(initialResponse);
+        this.upsertVideoJob(initialResponse);
         this.startVeoPolling(initialResponse.id);
       }),
     );
   }
 
-  clearActiveVideoJob() {
-    this.activeVideoJob.next(null);
+  /**
+   * Inserts a job into the active list, or replaces the existing entry with the
+   * same id (so a poll update swaps the item in place without reordering).
+   */
+  private upsertVideoJob(item: MediaItem): void {
+    const jobs = this.activeVideoJobs.value;
+    const index = jobs.findIndex(job => job.id === item.id);
+    if (index === -1) {
+      this.activeVideoJobs.next([...jobs, item]);
+      return;
+    }
+    const next = jobs.slice();
+    next[index] = item;
+    this.activeVideoJobs.next(next);
   }
 
   /**
-   * Private method to poll the status of a media item.
+   * Re-attaches tracking to the user's generations that are still running
+   * server-side. Job state lives in memory here, so without this a reload (or a
+   * second tab) shows an empty grid while the backend still counts those jobs
+   * against the per-user cap: the next submit would 429 with nothing on screen
+   * to wait for.
+   *
+   * Uses the dedicated /videos/active endpoint rather than a gallery search:
+   * the gallery forces status=COMPLETED for non-admins, so a search for
+   * PROCESSING rows comes back empty for ordinary users. /videos/active also
+   * derives the user from the token and returns exactly the rows the per-user
+   * cap counts, so the restored cards and the cap cannot disagree.
+   */
+  restoreActiveVideoJobs(): void {
+    const url = `${environment.backendURL}/videos/active`;
+    this.http.get<MediaItem[]>(url).subscribe({
+      next: items => {
+        for (const item of items ?? []) {
+          this.trackVideoJob(item);
+        }
+      },
+      error: err => {
+        // Non-fatal: the user just does not get their in-flight cards back.
+        console.error('Could not restore in-flight video generations', err);
+      },
+    });
+  }
+
+  /**
+   * Starts tracking a generation that this browser session did not submit:
+   * after a page reload, or in a second tab, the in-flight jobs still exist
+   * server-side and still count against the per-user cap, so they need cards
+   * and polling here too. A job already being tracked is left alone.
+   */
+  trackVideoJob(item: MediaItem): void {
+    if (this.videoPollingSubscriptions.has(item.id)) {
+      return;
+    }
+    this.upsertVideoJob(item);
+    if (item.status === JobStatus.PROCESSING) {
+      this.startVeoPolling(item.id);
+    }
+  }
+
+  /** Removes a single job from the active list and stops its polling. */
+  removeVideoJob(mediaId: number): void {
+    this.stopVeoPolling(mediaId);
+    this.activeVideoJobs.next(
+      this.activeVideoJobs.value.filter(job => job.id !== mediaId),
+    );
+  }
+
+  /** Clears all active video jobs and stops every poll. */
+  clearActiveVideoJobs() {
+    this.videoPollingSubscriptions.forEach(sub => sub.unsubscribe());
+    this.videoPollingSubscriptions.clear();
+    this.activeVideoJobs.next([]);
+  }
+
+  /**
+   * Polls the status of a single media item until it reaches a terminal state.
+   * Each job is polled by its own subscription so multiple generations can run
+   * concurrently without clobbering each other.
    * @param mediaId The ID of the job to poll.
    */
   private startVeoPolling(mediaId: number): void {
-    this.stopVeoPolling(); // Ensure no other polls are running
+    this.stopVeoPolling(mediaId); // Replace any existing poll for this id.
 
-    this.videoPollingSubscription = timer(5000, 15000) // Start after 5s, then every 15s
+    // A generation runs for minutes, so one failed poll (a 500, a token-refresh
+    // blip, a dropped connection) must not end the tracking. Handle the error
+    // inside the inner request so the outer timer keeps ticking, and only give
+    // up after several consecutive failures.
+    let consecutiveFailures = 0;
+
+    const subscription = timer(5000, 15000) // Start after 5s, then every 15s
       .pipe(
-        switchMap(() => this.getVeoMediaItem(mediaId)),
+        switchMap(() =>
+          this.getVeoMediaItem(mediaId).pipe(
+            catchError(err => {
+              console.error('Polling failed', err);
+              consecutiveFailures++;
+              if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+                this.abandonVideoJob(mediaId);
+              }
+              return EMPTY;
+            }),
+          ),
+        ),
         tap(latestItem => {
-          // Push the latest status to all subscribers
-          this.activeVideoJob.next(latestItem);
+          consecutiveFailures = 0;
+          // Swap the latest status into the active list.
+          this.upsertVideoJob(latestItem);
 
-          // If the job is finished, stop polling
+          // If this job is finished, stop polling it.
           if (
             latestItem.status === JobStatus.COMPLETED ||
             latestItem.status === JobStatus.FAILED
           ) {
-            this.stopVeoPolling();
+            this.stopVeoPolling(mediaId);
             if (latestItem.status === JobStatus.COMPLETED) {
               handleSuccessSnackbar(this._snackBar, 'Your video is ready!');
             } else {
@@ -214,19 +313,41 @@ export class SearchService {
             }
           }
         }),
+        // Safety net: an error thrown outside the request itself would
+        // otherwise kill the poll and strand the card on PROCESSING.
         catchError(err => {
-          console.error('Polling failed', err);
-          this.stopVeoPolling();
-          // You could update the item with an error status here
+          console.error('Video polling stream failed', err);
+          this.abandonVideoJob(mediaId);
           return EMPTY;
         }),
       )
       .subscribe();
+
+    this.videoPollingSubscriptions.set(mediaId, subscription);
   }
 
-  private stopVeoPolling(): void {
-    this.videoPollingSubscription?.unsubscribe();
-    this.videoPollingSubscription = null;
+  /**
+   * Stops polling a job and marks it terminally. Called when polling can no
+   * longer make progress: without this the card spins forever with no Dismiss
+   * button and no explanation. The generation itself may well still finish,
+   * hence the pointer to the gallery rather than a flat "it failed".
+   */
+  private abandonVideoJob(mediaId: number): void {
+    this.stopVeoPolling(mediaId);
+    const job = this.activeVideoJobs.value.find(item => item.id === mediaId);
+    if (!job) return;
+    this.upsertVideoJob({
+      ...job,
+      status: JobStatus.FAILED,
+      errorMessage:
+        'Lost track of this generation. It may still be running: ' +
+        'check your gallery in a few minutes.',
+    });
+  }
+
+  private stopVeoPolling(mediaId: number): void {
+    this.videoPollingSubscriptions.get(mediaId)?.unsubscribe();
+    this.videoPollingSubscriptions.delete(mediaId);
   }
 
   /**

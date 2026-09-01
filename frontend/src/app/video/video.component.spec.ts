@@ -78,8 +78,10 @@ describe('VideoComponent', () => {
         {
           provide: SearchService,
           useValue: {
-            activeVideoJob$: of(null),
+            activeVideoJobs$: of([]),
             videoPrompt: '',
+            trackVideoJob: jasmine.createSpy('trackVideoJob'),
+            restoreActiveVideoJobs: jasmine.createSpy('restoreActiveVideoJobs'),
           },
         },
         {

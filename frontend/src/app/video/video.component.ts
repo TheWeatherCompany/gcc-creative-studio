@@ -31,7 +31,7 @@ import {MatSnackBar} from '@angular/material/snack-bar';
 import {DomSanitizer, SafeResourceUrl} from '@angular/platform-browser';
 import {Router} from '@angular/router';
 import {isPlatformBrowser} from '@angular/common';
-import {finalize, first, map, Observable} from 'rxjs';
+import {finalize, map, Observable} from 'rxjs';
 import {AssetTypeEnum} from '../admin/source-assets-management/source-asset.model';
 import {ImageCropperDialogComponent} from '../common/components/image-cropper-dialog/image-cropper-dialog.component';
 import {ConfirmationDialogComponent} from '../common/components/confirmation-dialog/confirmation-dialog.component';
@@ -80,8 +80,11 @@ import {NumPos} from '../common/components/flow-prompt-box/flow-prompt-box.compo
   styleUrl: './video.component.scss',
 })
 export class VideoComponent implements OnInit, AfterViewInit {
-  // This observable will always reflect the current job's state
-  activeVideoJob$: Observable<MediaItem | null>;
+  // Emits the list of the user's in-flight and finished video jobs. Multiple
+  // generations can run at once, each rendered as its own card.
+  activeVideoJobs$: Observable<MediaItem[]>;
+  // The job currently opened in the inline lightbox, if any.
+  selectedJob: MediaItem | null = null;
   public readonly JobStatus = JobStatus; // Expose enum to the template
   isBrowser = false;
 
@@ -106,7 +109,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
   image1Preview: string | null = null;
   image2Preview: string | null = null;
   showDefaultDocuments = false;
-  showErrorOverlay = true;
   isConcatenateMode = false;
   isExtensionMode = false;
   referenceImages: ReferenceImage[] = [];
@@ -234,11 +236,12 @@ export class VideoComponent implements OnInit, AfterViewInit {
         ?.viewValue || this.generationModels[0].viewValue;
 
     this.isBrowser = isPlatformBrowser(this.platformId);
-    this.activeVideoJob$ = this.service.activeVideoJob$.pipe(
-      map(job =>
-        job
-          ? (this.galleryService.mapUnifiedItem(job) as unknown as MediaItem)
-          : null,
+    this.activeVideoJobs$ = this.service.activeVideoJobs$.pipe(
+      map(jobs =>
+        jobs.map(
+          job =>
+            this.galleryService.mapUnifiedItem(job) as unknown as MediaItem,
+        ),
       ),
     );
 
@@ -293,6 +296,17 @@ export class VideoComponent implements OnInit, AfterViewInit {
     if (this.pendingSourceAssets) {
       this.applySourceAssets(this.pendingSourceAssets);
     }
+    this.restoreInFlightGenerations();
+  }
+
+  /**
+   * Re-attaches cards and polling to generations that are still running
+   * server-side, so a reload does not leave an empty grid while the backend
+   * still counts those jobs against the per-user cap.
+   */
+  private restoreInFlightGenerations(): void {
+    if (!this.isBrowser) return;
+    this.service.restoreActiveVideoJobs();
   }
 
   public saveState() {
@@ -634,7 +648,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
       );
       return;
     }
-    this.showErrorOverlay = true;
 
     const hasSourceAssets = this.startImageAssetId || this.endImageAssetId;
     const hasSourceMediaItems = this.sourceMediaItems.some(i => !!i);
@@ -1217,10 +1230,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
     }
   }
 
-  closeErrorOverlay() {
-    this.showErrorOverlay = false;
-  }
-
   private resetInputs() {
     this.sourceMediaItems = [null, null];
     this.image1Preview = null;
@@ -1229,7 +1238,9 @@ export class VideoComponent implements OnInit, AfterViewInit {
     this.endImageAssetId = null;
     this.isExtensionMode = false;
     this.isConcatenateMode = false;
-    this.service.clearActiveVideoJob();
+    // Note: active video jobs are intentionally NOT cleared here. Resetting the
+    // inputs (e.g. for a remix/extend flow) must not wipe other in-flight or
+    // finished generations the user still wants to see.
   }
 
   private updateModeAndNotify() {
@@ -1871,38 +1882,62 @@ export class VideoComponent implements OnInit, AfterViewInit {
     // this.promptText.set(this.promptText() + ' ' + preset);
   }
 
+  /** Opens a completed job in the inline lightbox. */
+  openJob(job: MediaItem) {
+    if (job.status === JobStatus.COMPLETED) {
+      this.selectedJob = job;
+    }
+  }
+
+  /** Returns from the inline lightbox to the grid of job cards. */
+  backToResults() {
+    this.selectedJob = null;
+  }
+
+  /** Removes a single job card (e.g. dismissing a failed generation). */
+  dismissJob(job: MediaItem) {
+    this.service.removeVideoJob(job.id);
+    if (this.selectedJob?.id === job.id) {
+      this.selectedJob = null;
+    }
+  }
+
+  trackJobById(_index: number, job: MediaItem): number {
+    return job.id;
+  }
+
   deleteGeneratedMedia() {
-    this.activeVideoJob$.pipe(first()).subscribe(job => {
-      if (!job?.id) return;
+    const job = this.selectedJob;
+    if (!job?.id) return;
 
-      const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
-      if (workspaceId === null) return;
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    if (workspaceId === null) return;
 
-      const dialogRef = this.dialog.open(ConfirmationDialogComponent, {
-        data: {
-          title: 'Delete Video',
-          message: 'Are you sure you want to delete this generation result?',
-        },
-      });
+    const dialogRef = this.dialog.open(ConfirmationDialogComponent, {
+      data: {
+        title: 'Delete Video',
+        message: 'Are you sure you want to delete this generation result?',
+      },
+    });
 
-      dialogRef.afterClosed().subscribe(result => {
-        if (result) {
-          this.galleryService
-            .bulkDelete([{id: job.id, type: 'media_item'}], workspaceId)
-            .subscribe({
-              next: () => {
-                handleSuccessSnackbar(
-                  this._snackBar,
-                  'Video deleted successfully',
-                );
-                this.service.clearActiveVideoJob();
-              },
-              error: err => {
-                handleErrorSnackbar(this._snackBar, err, 'Delete results');
-              },
-            });
-        }
-      });
+    dialogRef.afterClosed().subscribe(result => {
+      if (result) {
+        this.galleryService
+          .bulkDelete([{id: job.id, type: 'media_item'}], workspaceId)
+          .subscribe({
+            next: () => {
+              handleSuccessSnackbar(
+                this._snackBar,
+                'Video deleted successfully',
+              );
+              this.service.removeVideoJob(job.id);
+              this.selectedJob = null;
+            },
+            error: err => {
+              handleErrorSnackbar(this._snackBar, err, 'Delete results');
+            },
+          });
+      }
     });
   }
 }

@@ -14,12 +14,14 @@
 """Tests for Veo Service."""
 
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.common.base_dto import GenerationModelEnum
 from src.common.schema.media_item_model import (
+    JobStatusEnum,
     MediaItemModel,
     MimeTypeEnum,
 )
@@ -31,6 +33,7 @@ from src.videos.dto.concatenate_videos_dto import (
 from src.videos.dto.create_veo_dto import CreateVeoDto
 from src.videos.veo_service import (
     VeoService,
+    _mark_job_failed,
     _process_video_concatenation_in_background,
     _process_video_in_background,
 )
@@ -42,6 +45,9 @@ def fixture_mock_media_repo():
     repo.create = AsyncMock()
     repo.get_by_id = AsyncMock()
     repo.update = AsyncMock()
+    # Default: user has no in-flight generations, so the per-user cap allows the
+    # request. Individual tests override the return value to exercise the cap.
+    repo.count_active_generations = AsyncMock(return_value=0)
     return repo
 
 
@@ -233,6 +239,121 @@ class TestVeoServiceMethods:
             )
         assert exc_info.value.status_code == 400
         assert "not a video" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_list_active_video_generations_returns_own_in_flight_jobs(
+        self,
+        veo_service,
+        mock_media_repo,
+        sample_user,
+    ):
+        from src.config.config_service import config_service
+
+        in_flight = MediaItemModel(
+            id=321,
+            workspace_id=1,
+            user_id=1,
+            user_email="test@example.com",
+            mime_type=MimeTypeEnum.VIDEO_MP4,
+            model=GenerationModelEnum.VEO_3_QUALITY,
+            aspect_ratio="16:9",
+            status=JobStatusEnum.PROCESSING,
+            gcs_uris=[],
+            thumbnail_uris=[],
+        )
+        mock_media_repo.list_active_generations = AsyncMock(
+            return_value=[in_flight],
+        )
+
+        response = await veo_service.list_active_video_generations(
+            user=sample_user,
+        )
+
+        assert [item.id for item in response] == [321]
+        assert response[0].status == JobStatusEnum.PROCESSING
+        # No output yet, matching the shape the submit endpoints return.
+        assert response[0].presigned_urls == []
+        assert response[0].presigned_thumbnail_urls == []
+        # Scoped to the caller and to video rows only, and NOT workspace-scoped:
+        # the cap spans workspaces, so the restore has to as well.
+        kwargs = mock_media_repo.list_active_generations.await_args.kwargs
+        assert kwargs["user_id"] == sample_user.id
+        assert kwargs["mime_type_prefix"] == "video/"
+        # The page size must cover the cap, or a user at the cap would be left
+        # with in-flight jobs that have no card.
+        assert (
+            kwargs["limit"] >= config_service.GENERATION_EFFECTIVE_MAX_PER_USER
+        )
+
+    @pytest.mark.anyio
+    async def test_start_video_generation_job_rejected_at_cap(
+        self,
+        veo_service,
+        mock_media_repo,
+        sample_create_veo_dto,
+        sample_user,
+    ):
+        from fastapi import HTTPException
+
+        from src.config.config_service import config_service
+
+        # User is already at the per-user in-flight cap.
+        mock_media_repo.count_active_generations.return_value = (
+            config_service.GENERATION_EFFECTIVE_MAX_PER_USER
+        )
+        mock_executor = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await veo_service.start_video_generation_job(
+                request_dto=sample_create_veo_dto,
+                user=sample_user,
+                executor=mock_executor,
+            )
+
+        assert exc_info.value.status_code == 429
+        # Nothing is created or submitted when the cap is hit.
+        mock_media_repo.create.assert_not_called()
+        mock_executor.submit.assert_not_called()
+        # The cap is counted against the user's in-flight videos.
+        mock_media_repo.count_active_generations.assert_awaited_once_with(
+            user_id=sample_user.id,
+            mime_type_prefix="video/",
+        )
+
+    @pytest.mark.anyio
+    async def test_start_video_concatenation_job_rejected_at_cap(
+        self,
+        veo_service,
+        mock_media_repo,
+        sample_user,
+    ):
+        from fastapi import HTTPException
+
+        from src.config.config_service import config_service
+
+        request_dto = ConcatenateVideosDto(
+            workspace_id=1,
+            name="Concat Video",
+            inputs=[
+                ConcatenationInput(type="media_item", id=1),
+                ConcatenationInput(type="media_item", id=2),
+            ],
+        )
+        mock_media_repo.count_active_generations.return_value = (
+            config_service.GENERATION_EFFECTIVE_MAX_PER_USER
+        )
+        mock_executor = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await veo_service.start_video_concatenation_job(
+                request_dto=request_dto,
+                user=sample_user,
+                executor=mock_executor,
+            )
+
+        assert exc_info.value.status_code == 429
+        mock_media_repo.create.assert_not_called()
+        mock_executor.submit.assert_not_called()
 
 
 class TestBackgroundWorkers:
@@ -1645,3 +1766,174 @@ class TestBackgroundWorkers:
             assert update_dict["gcs_uris"] == [
                 "gs://bucket/omni_flash_video.mp4"
             ]
+
+
+class TestWorkerOrphanPaths:
+    """A row left in PROCESSING is invisible to the user and keeps consuming one
+    of their per-user concurrency slots, so every worker exit must write a
+    terminal status.
+    """
+
+    @patch("src.database.WorkerDatabase")
+    def test_setup_failure_marks_job_failed(self, mock_worker_db_class):
+        """A failure before the inner handler exists (DB session, logging
+        client, event loop) must still write FAILED.
+        """
+        mock_worker_db_class.return_value.__aenter__.side_effect = Exception(
+            "session setup exploded",
+        )
+        sample_dto = CreateVeoDto(
+            workspace_id=1,
+            prompt="Test",
+            generation_model=GenerationModelEnum.VEO_3_QUALITY,
+            aspect_ratio="16:9",
+            duration_seconds=5,
+        )
+
+        with patch(
+            "src.videos.veo_service._mark_job_failed",
+        ) as mock_mark_failed:
+            _process_video_in_background(
+                media_item_id=123,
+                request_dto=sample_dto,
+                user_email="test@user.com",
+            )
+
+        mock_mark_failed.assert_called_once()
+        assert mock_mark_failed.call_args.args[0] == 123
+        assert "session setup exploded" in mock_mark_failed.call_args.args[1]
+
+    @patch("src.database.WorkerDatabase")
+    def test_concatenation_setup_failure_marks_job_failed(
+        self,
+        mock_worker_db_class,
+    ):
+        mock_worker_db_class.return_value.__aenter__.side_effect = Exception(
+            "session setup exploded",
+        )
+        request_dto = ConcatenateVideosDto(
+            workspace_id=1,
+            name="Concat Video",
+            inputs=[
+                ConcatenationInput(type="media_item", id=1),
+                ConcatenationInput(type="media_item", id=2),
+            ],
+        )
+
+        with patch(
+            "src.videos.veo_service._mark_job_failed",
+        ) as mock_mark_failed:
+            _process_video_concatenation_in_background(
+                media_item_id=456,
+                request_dto=request_dto,
+            )
+
+        mock_mark_failed.assert_called_once()
+        assert mock_mark_failed.call_args.args[0] == 456
+
+    @patch("src.database.WorkerDatabase")
+    def test_mark_job_failed_writes_failed_status(self, mock_worker_db_class):
+        mock_db_context = AsyncMock()
+        mock_db_factory = MagicMock(return_value=mock_db_context)
+        mock_worker_db_class.return_value.__aenter__.return_value = (
+            mock_db_factory
+        )
+
+        with patch(
+            "src.videos.veo_service.MediaRepository",
+        ) as mock_media_repo_class:
+            mock_media_repo = AsyncMock()
+            mock_media_repo_class.return_value = mock_media_repo
+            still_processing = MagicMock()
+            still_processing.status = JobStatusEnum.PROCESSING.value
+            mock_media_repo.get_by_id.return_value = still_processing
+
+            _mark_job_failed(789, "boom", logging.getLogger("test"))
+
+        mock_media_repo.update.assert_awaited_once()
+        media_item_id, update_data = mock_media_repo.update.await_args.args
+        assert media_item_id == 789
+        assert update_data["status"] == JobStatusEnum.FAILED
+        assert update_data["error_message"] == "boom"
+
+    @patch("src.database.WorkerDatabase")
+    @patch("src.videos.veo_service.GenAIModelSetup.init")
+    def test_empty_veo_response_marks_job_failed(
+        self,
+        mock_genai_init,
+        mock_worker_db_class,
+    ):
+        """Veo can report an operation as done while returning no videos. That
+        used to `return` silently, stranding the row in PROCESSING.
+        """
+        mock_db_context = AsyncMock()
+        mock_db_factory = MagicMock(return_value=mock_db_context)
+        mock_worker_db_class.return_value.__aenter__.return_value = (
+            mock_db_factory
+        )
+
+        mock_client = MagicMock()
+        mock_genai_init.return_value = mock_client
+        mock_operation = MagicMock()
+        mock_operation.done = True
+        mock_operation.error = None
+        mock_operation.response.generated_videos = []
+        mock_client.models.generate_videos.return_value = mock_operation
+        mock_client.operations.get.return_value = mock_operation
+
+        sample_dto = CreateVeoDto(
+            workspace_id=1,
+            prompt="Test",
+            generation_model=GenerationModelEnum.VEO_3_QUALITY,
+            aspect_ratio="16:9",
+            duration_seconds=5,
+        )
+
+        with (
+            patch(
+                "src.videos.veo_service.MediaRepository",
+            ) as mock_media_repo_class,
+            patch("src.videos.veo_service.SourceAssetRepository"),
+            patch("src.videos.veo_service.GeminiService"),
+            patch("src.videos.veo_service.GcsService"),
+        ):
+            mock_media_repo = AsyncMock()
+            mock_media_repo_class.return_value = mock_media_repo
+
+            _process_video_in_background(
+                media_item_id=321,
+                request_dto=sample_dto,
+                user_email="test@user.com",
+            )
+
+        mock_media_repo.update.assert_awaited_once()
+        _, update_data = mock_media_repo.update.await_args.args
+        assert update_data["status"] == JobStatusEnum.FAILED
+        assert "no generated videos" in update_data["error_message"]
+
+    @patch("src.database.WorkerDatabase")
+    def test_mark_job_failed_leaves_terminal_status_alone(
+        self,
+        mock_worker_db_class,
+    ):
+        """A worker whose teardown throws after a successful run must not
+        overwrite the COMPLETED status it just wrote.
+        """
+        mock_db_context = AsyncMock()
+        mock_db_factory = MagicMock(return_value=mock_db_context)
+        mock_worker_db_class.return_value.__aenter__.return_value = (
+            mock_db_factory
+        )
+
+        with patch(
+            "src.videos.veo_service.MediaRepository",
+        ) as mock_media_repo_class:
+            mock_media_repo = AsyncMock()
+            mock_media_repo_class.return_value = mock_media_repo
+            completed = MagicMock()
+            completed.status = JobStatusEnum.COMPLETED.value
+            mock_media_repo.get_by_id.return_value = completed
+
+            _mark_job_failed(789, "teardown blew up", logging.getLogger("test"))
+
+        mock_media_repo.update.assert_not_awaited()

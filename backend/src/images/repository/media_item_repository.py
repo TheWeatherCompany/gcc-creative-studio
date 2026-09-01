@@ -19,7 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.common.base_repository import BaseRepository
 from src.common.dto.pagination_response_dto import PaginationResponseDto
-from src.common.schema.media_item_model import MediaItem, MediaItemModel
+from src.common.job_policy import stale_job_cutoff
+from src.common.schema.media_item_model import (
+    JobStatusEnum,
+    MediaItem,
+    MediaItemModel,
+)
 from src.database import get_db
 from src.galleries.dto.gallery_search_dto import GallerySearchDto
 
@@ -29,6 +34,71 @@ class MediaRepository(BaseRepository[MediaItem, MediaItemModel]):
 
     def __init__(self, db: AsyncSession = Depends(get_db)):
         super().__init__(model=MediaItem, schema=MediaItemModel, db=db)
+
+    def _active_generation_filters(
+        self,
+        user_id: int,
+        mime_type_prefix: str | None = None,
+    ) -> list:
+        """Filters defining a user's in-flight (PROCESSING) generations.
+
+        Optionally scoped to a mime-type prefix (e.g. "video/"). Shared by the
+        count (which enforces the per-user concurrency cap) and the listing
+        (which restores the user's cards after a reload) so the two can never
+        disagree about what counts as in-flight.
+
+        Rows older than STUCK_JOB_STALE_AFTER are excluded: the generation work
+        happens in a background thread after the response is returned, so an
+        instance replacement leaves the row PROCESSING with nothing left to
+        finish it. Without the age bound those orphans would count against the
+        cap forever and permanently lock the user out of new generations.
+        """
+        filters = [
+            self.model.user_id == user_id,
+            self.model.status == JobStatusEnum.PROCESSING.value,
+            self.model.deleted_at.is_(None),
+            self.model.created_at >= stale_job_cutoff(),
+        ]
+        if mime_type_prefix:
+            filters.append(self.model.mime_type.like(f"{mime_type_prefix}%"))
+        return filters
+
+    async def count_active_generations(
+        self,
+        user_id: int,
+        mime_type_prefix: str | None = None,
+    ) -> int:
+        """Counts a user's in-flight generations, for the per-user cap."""
+        query = (
+            select(func.count())
+            .select_from(self.model)
+            .where(*self._active_generation_filters(user_id, mime_type_prefix))
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one()
+
+    async def list_active_generations(
+        self,
+        user_id: int,
+        mime_type_prefix: str | None = None,
+        limit: int = 50,
+    ) -> list[MediaItemModel]:
+        """Lists the same rows count_active_generations counts.
+
+        Used to rebuild the user's in-flight cards after a page reload. Sharing
+        the filters with the count matters: restoring a row the cap does not
+        count would show a spinner for a job that is never coming back.
+        """
+        query = (
+            select(self.model)
+            .where(*self._active_generation_filters(user_id, mime_type_prefix))
+            .order_by(self.model.created_at.desc())
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
+        return [
+            self.schema.model_validate(item) for item in result.scalars().all()
+        ]
 
     async def query(
         self,

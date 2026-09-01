@@ -57,6 +57,18 @@ class ConfigService(BaseSettings):
     # GENERATION_MAX_WORKERS env var (e.g. on Cloud Run) after a quota check.
     GENERATION_MAX_WORKERS: int = 4
 
+    # Per-user fairness cap: the maximum number of in-flight (PROCESSING) video
+    # generations a single user may have at once. This keeps one user from
+    # occupying every slot of the shared GENERATION_MAX_WORKERS pool and
+    # starving other users. Override via the GENERATION_MAX_PER_USER env var.
+    #
+    # Read GENERATION_EFFECTIVE_MAX_PER_USER, not this value: the cap only means
+    # anything if it stays below the pool size, and with the default pool of 4 a
+    # requested cap of 5 would be a no-op. The computed property below enforces
+    # that, so this can be tuned for the production pool (12) without inverting
+    # the invariant for local dev, which uses the defaults.
+    GENERATION_MAX_PER_USER: int = 5
+
     # --- Okta ---
     # Phase 1 (no API Access Management): the org authorization server, e.g.
     # "https://your-org.okta.com", with the SPA client ID as the audience.
@@ -234,6 +246,21 @@ class ConfigService(BaseSettings):
     @property
     def IMAGE_BUCKET(self) -> str:
         return f"{self.GENMEDIA_BUCKET}/images"
+
+    @computed_field
+    @property
+    def GENERATION_EFFECTIVE_MAX_PER_USER(self) -> int:
+        """The per-user in-flight cap actually enforced.
+
+        Clamped to one below GENERATION_MAX_WORKERS so the cap always leaves at
+        least one worker for someone else. Without the clamp, any environment
+        where the requested cap meets or exceeds the pool size (including the
+        defaults) would let one user take every worker.
+        """
+        return min(
+            self.GENERATION_MAX_PER_USER,
+            max(1, self.GENERATION_MAX_WORKERS - 1),
+        )
 
 
 # Create a single, cached instance of the settings to be used throughout the app.

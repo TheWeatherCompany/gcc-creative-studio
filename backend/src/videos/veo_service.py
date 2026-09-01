@@ -21,7 +21,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, status
 from google.cloud.logging import Client as LoggerClient
 from google.cloud.logging.handlers import CloudLoggingHandler
 from google.genai import Client, types
@@ -85,6 +85,68 @@ def _format_omni_prompt(
     ):
         return f"{prompt}\nAspect ratio: 16:9 widescreen landscape format. Resolution: 720p."
     return prompt
+
+
+class EmptyGenerationError(Exception):
+    """Veo reported an operation as done but returned no videos.
+
+    Raised rather than returned so the worker's failure handler writes FAILED:
+    a silent return leaves the row PROCESSING, invisible to the user and
+    counted against their concurrency cap. Typed so it is distinguishable from
+    genuine infrastructure errors in logs.
+    """
+
+
+def _mark_job_failed(
+    media_item_id: int,
+    error: str,
+    worker_logger: logging.Logger,
+) -> None:
+    """Best-effort FAILED write from a worker's *outer* handler.
+
+    The inner handler owns the normal failure path, but it only exists once the
+    event loop and DB session are up. A failure before that (LoggerClient init,
+    WorkerDatabase setup, event-loop creation) would otherwise leave the row
+    PROCESSING forever, which both hides the failure from the user and consumes
+    one of their per-user concurrency slots. This opens its own short-lived
+    session because the worker's session is out of scope by then.
+
+    Only writes if the row is still PROCESSING, so it cannot clobber a status
+    the inner handler (or a successful run) already wrote.
+    """
+    from src.database import WorkerDatabase
+
+    async def _write() -> None:
+        async with WorkerDatabase() as db_factory:
+            async with db_factory() as db:
+                media_repo = MediaRepository(db)
+                item = await media_repo.get_by_id(media_item_id)
+                current_status = getattr(item, "status", None)
+                if getattr(current_status, "value", current_status) != (
+                    JobStatusEnum.PROCESSING.value
+                ):
+                    return
+                await media_repo.update(
+                    media_item_id,
+                    {
+                        "status": JobStatusEnum.FAILED,
+                        "error_message": error,
+                    },
+                )
+
+    try:
+        asyncio.run(_write())
+    except Exception as write_error:  # pragma: no cover - last-resort logging
+        worker_logger.error(
+            "Could not mark job FAILED after worker setup failure.",
+            extra={
+                "json_fields": {
+                    "media_id": media_item_id,
+                    "error": str(write_error),
+                },
+            },
+            exc_info=True,
+        )
 
 
 # --- STANDALONE WORKER FUNCTION ---
@@ -643,7 +705,8 @@ def _process_video_in_background(
                                 omni_response_format["aspect_ratio"] = (
                                     request_dto.aspect_ratio.value
                                     if isinstance(
-                                        request_dto.aspect_ratio, AspectRatioEnum
+                                        request_dto.aspect_ratio,
+                                        AspectRatioEnum,
                                     )
                                     else request_dto.aspect_ratio
                                 )
@@ -888,7 +951,10 @@ def _process_video_in_background(
                                 or not operation.response
                                 or not operation.response.generated_videos
                             ):
-                                return
+                                raise EmptyGenerationError(
+                                    "Veo reported the operation as done but "
+                                    "returned no generated videos."
+                                )
 
                             # Download the generated video and create thumbnail
                             thumbnail_path = ""
@@ -1020,6 +1086,10 @@ def _process_video_in_background(
             extra={"json_fields": {"media_id": media_item_id, "error": str(e)}},
             exc_info=True,
         )  # exc_info=True still adds the full traceback
+        # The inner handler could not run (or re-raised), so write the failure
+        # here. Leaving the row PROCESSING would strand it until the admin
+        # stuck-job cleanup and burn a per-user concurrency slot in the meantime.
+        _mark_job_failed(media_item_id, str(e), worker_logger)
 
 
 def _process_video_concatenation_in_background(
@@ -1190,6 +1260,7 @@ def _process_video_concatenation_in_background(
             f"Video concatenation worker failed to initialize: {e}",
             exc_info=True,
         )
+        _mark_job_failed(media_item_id, str(e), worker_logger)
 
 
 class VeoService:
@@ -1208,6 +1279,75 @@ class VeoService:
         self.gcs_service = gcs_service
         self.source_asset_repo = source_asset_repo
 
+    async def _enforce_per_user_cap(self, user: UserModel) -> None:
+        """Rejects the request if the user already has the maximum number of
+        in-flight video generations. This is a fairness guard so one user cannot
+        occupy every slot of the shared generation pool.
+
+        Note: the count-then-submit is not atomic, so bursts of simultaneous
+        requests can briefly exceed the cap by a small margin. That is
+        acceptable for a fairness limit; it is not a hard quota boundary.
+        """
+        active = await self.media_repo.count_active_generations(
+            user_id=user.id,
+            mime_type_prefix="video/",
+        )
+        limit = config_service.GENERATION_EFFECTIVE_MAX_PER_USER
+        if active >= limit:
+            logger.info(
+                "Rejected video generation: per-user in-flight cap reached.",
+                extra={
+                    "json_fields": {
+                        "user_id": user.id,
+                        "active_generations": active,
+                        "limit": limit,
+                    },
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    f"You already have {active} video generations in progress. "
+                    f"Please wait for one to finish before starting another "
+                    f"(limit {limit})."
+                ),
+            )
+
+    async def list_active_video_generations(
+        self,
+        user: UserModel,
+    ) -> list[MediaItemResponse]:
+        """Returns the caller's in-flight video generations.
+
+        The frontend tracks generation jobs in memory, so a reload (or a second
+        tab) loses the cards while the rows still count against the per-user
+        cap. This rebuilds them from exactly the rows the cap counts.
+
+        Deliberately not workspace-scoped, because the cap is not either: a job
+        started in another workspace still occupies one of the user's slots and
+        so still needs a card. The user is taken from the token rather than the
+        request, so there is nothing here that can be pointed at someone else.
+        """
+        # Derived from the cap rather than hardcoded, so raising the cap cannot
+        # leave a user with in-flight jobs that have no card. The headroom
+        # covers the cap's non-atomic count-then-submit overshoot.
+        limit = config_service.GENERATION_EFFECTIVE_MAX_PER_USER * 2 + 10
+        items = await self.media_repo.list_active_generations(
+            user_id=user.id,
+            mime_type_prefix="video/",
+            limit=limit,
+        )
+        # In-flight jobs have no output yet, so the presigned lists are empty:
+        # the same shape the submit endpoints return for a fresh placeholder.
+        return [
+            MediaItemResponse(
+                **item.model_dump(),
+                presigned_urls=[],
+                presigned_thumbnail_urls=[],
+            )
+            for item in items
+        ]
+
     async def start_video_generation_job(
         self,
         request_dto: CreateVeoDto,
@@ -1221,6 +1361,9 @@ class VeoService:
             The initial MediaItem with a 'processing' status and a pre-generated ID.
 
         """
+        # 0. Enforce the per-user in-flight cap before doing any work.
+        await self._enforce_per_user_cap(user)
+
         # 1. Prepare source asset links if they exist
         source_assets: list[SourceAssetLink] = []
         source_media_items: list[SourceMediaItemLink] = []
@@ -1392,6 +1535,10 @@ class VeoService:
         executor: ThreadPoolExecutor,
     ) -> MediaItemResponse:
         """Creates a placeholder for a video concatenation job and starts it in the background."""
+        # Concatenation also consumes the shared generation pool, so it counts
+        # against the same per-user in-flight cap.
+        await self._enforce_per_user_cap(user)
+
         source_media_items: list[SourceMediaItemLink] = []
         source_assets: list[SourceAssetLink] = []
 
