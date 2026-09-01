@@ -132,14 +132,14 @@ describe('FlowPromptBoxComponent', () => {
 
   describe('Duration Support', () => {
     const geminiOmni = MODEL_CONFIGS.find(
-      m => m.value === 'gemini-omni-flash-preview',
+      m => m.value === 'gemini-omni-1.1-flash-preview',
     )!;
 
     beforeEach(() => {
       component.generationModels = MODEL_CONFIGS;
     });
 
-    it('should support [4, 6, 8, 10] durations for Gemini Omni Flash in Text to Video mode', () => {
+    it('should support [4, 6, 8, 10] durations for Gemini Omni 1.1 Flash in Text to Video mode', () => {
       component.selectedGenerationModel = geminiOmni.viewValue;
       component.mode = 'Text to Video';
 
@@ -148,7 +148,7 @@ describe('FlowPromptBoxComponent', () => {
       expect(component.hasDurationOptions()).toBeTrue();
     });
 
-    it('should return the full [4, 6, 8, 10] durations for Gemini Omni Flash in Ingredients to Video mode at 1K', () => {
+    it('should return the full [4, 6, 8, 10] durations for Gemini Omni 1.1 Flash in Ingredients to Video mode at 1K', () => {
       component.selectedGenerationModel = geminiOmni.viewValue;
       component.mode = 'Ingredients to Video';
       component.selectedResolution.set('1K');
@@ -184,6 +184,17 @@ describe('FlowPromptBoxComponent', () => {
       component.selectMode('Ingredients to Video');
 
       expect(component.selectedDuration()).toBe(4);
+    });
+
+    it('should identify omni models correctly with isOmniModel', () => {
+      component.selectedGenerationModel = 'Gemini Omni Flash';
+      expect(component.isOmniModel()).toBeTrue();
+
+      component.selectedGenerationModel = 'Gemini Omni 1.1 Flash';
+      expect(component.isOmniModel()).toBeTrue();
+
+      component.selectedGenerationModel = 'Veo 3.1';
+      expect(component.isOmniModel()).toBeFalse();
     });
 
     it('should update selectedDuration and emit durationChanged on selectDuration', () => {
