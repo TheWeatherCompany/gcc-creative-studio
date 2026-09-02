@@ -148,6 +148,12 @@ class UnifiedGalleryRepository(
             )
             query = query.where(favorite_exists)
 
+        # 4.7 Folder Filter
+        if getattr(search_dto, "is_root", False):
+            query = query.where(self.model.folder_id.is_(None))
+        elif getattr(search_dto, "folder_id", None) is not None:
+            query = query.where(self.model.folder_id == search_dto.folder_id)
+
         # 5. Full-Text Word Search
         if hasattr(search_dto, "query") and search_dto.query:
             search_pattern = f"%{search_dto.query}%"
