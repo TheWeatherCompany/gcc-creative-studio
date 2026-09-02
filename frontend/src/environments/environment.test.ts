@@ -49,9 +49,11 @@ export const environment = {
     postLogoutRedirectUri: '/login',
     scopes: ['openid', 'profile', 'email', 'offline_access'],
     pkce: true,
-    // Phase 1 sends the ID token, because Okta API Access Management is not
-    // yet active in the tenant. Phase 2 flips this to 'access' once a custom
-    // authorization server exists. That is the only frontend change required.
-    tokenForApi: 'id' as 'id' | 'access',
+    // The access token from the custom authorization server. It carries
+    // `aud: api://creative-studio` and the `groups` claim the backend maps to
+    // roles; the phase 1 org-server ID token carried the SPA client ID as its
+    // audience and no longer validates. This moves with `issuer`, never
+    // independently: either alone is a tenant-wide outage.
+    tokenForApi: 'access' as 'id' | 'access',
   },
 };

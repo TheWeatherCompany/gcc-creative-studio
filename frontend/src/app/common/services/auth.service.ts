@@ -131,9 +131,10 @@ export class AuthService {
   /**
    * The token to put in the Authorization header, renewing it if needed.
    *
-   * Which token that is comes from `environment.okta.tokenForApi`. Phase 1
-   * sends the ID token because the tenant has no custom authorization server
-   * yet; phase 2 sends the access token. Emits null when there is no session.
+   * Which token that is comes from `environment.okta.tokenForApi`: the
+   * access token from a custom authorization server, or the ID token from an
+   * org authorization server where API Access Management is unavailable.
+   * Emits null when there is no session.
    */
   getApiToken$(): Observable<string | null> {
     if (!this.oktaAuth || !isPlatformBrowser(this.platformId)) {

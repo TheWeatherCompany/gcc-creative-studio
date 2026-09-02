@@ -70,11 +70,12 @@ class ConfigService(BaseSettings):
     GENERATION_MAX_PER_USER: int = 5
 
     # --- Okta ---
-    # Phase 1 (no API Access Management): the org authorization server, e.g.
-    # "https://your-org.okta.com", with the SPA client ID as the audience.
-    # Phase 2: a custom authorization server, e.g.
+    # A custom authorization server, e.g.
     # "https://your-org.okta.com/oauth2/creative-studio" with audience
-    # "api://creative-studio". Nothing but these two values changes.
+    # "api://creative-studio". Where API Access Management is unavailable,
+    # the org authorization server works instead, e.g.
+    # "https://your-org.okta.com" with the SPA client ID as the audience;
+    # nothing but these two values changes between the two.
     OKTA_ISSUER: str = ""
     OKTA_AUDIENCE: str = ""
     # Optional. When set, a `cid` claim present on the token must match.
@@ -187,7 +188,8 @@ class ConfigService(BaseSettings):
         /oauth2/v1/keys, while a custom authorization server
         ("https://your-org.okta.com/oauth2/creative-studio") serves them from
         <issuer>/v1/keys. Deriving this rather than hardcoding it is what
-        keeps the phase 2 cutover to a pair of config values.
+        keeps the choice of authorization server to a pair of config
+        values.
         """
         if self.OKTA_JWKS_URI_OVERRIDE:
             return self.OKTA_JWKS_URI_OVERRIDE
