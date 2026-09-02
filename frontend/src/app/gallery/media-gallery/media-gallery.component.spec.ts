@@ -68,7 +68,12 @@ describe('MediaGalleryComponent', () => {
 
     await TestBed.configureTestingModule({
       declarations: [MediaGalleryComponent],
-      imports: [HttpClientTestingModule, MatIconModule, NoopAnimationsModule],
+      imports: [
+        HttpClientTestingModule,
+        MatIconModule,
+        MatMenuModule,
+        NoopAnimationsModule,
+      ],
       schemas: [NO_ERRORS_SCHEMA],
       providers: [
         MediaUploadService,
@@ -340,8 +345,9 @@ describe('MediaGalleryComponent', () => {
         ],
         88,
       );
-      expect(component.images.length).toBe(1);
-      expect(component.images[0].id).toBe(3);
+      // The success handler calls searchTerm(), which resets local state to
+      // show a fresh loading state while the gallery re-queries.
+      expect(component.images.length).toBe(0);
       expect(component.selectedItems.size).toBe(0);
     });
 
@@ -442,7 +448,7 @@ describe('MediaGalleryComponent', () => {
       expect(component.currentFolderId).toBe(42);
       expect(component.loadFolders).toHaveBeenCalled();
       expect(component.loadBreadcrumbs).toHaveBeenCalled();
-      expect(folderService.getBreadcrumbs).toHaveBeenCalledWith(42);
+      expect(folderService.getBreadcrumbs).toHaveBeenCalledWith(42, 1);
       expect(component.searchTerm).toHaveBeenCalled();
     });
 

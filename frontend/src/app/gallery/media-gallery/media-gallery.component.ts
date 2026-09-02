@@ -279,10 +279,7 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
         'gemini-spark-icon',
         this.setPath(`${this.path}/gemini-spark-icon.svg`),
       )
-      .addSvgIcon(
-        'drive-icon',
-        this.setPath(`${this.path}/drive-icon.svg`),
-      );
+      .addSvgIcon('drive-icon', this.setPath(`${this.path}/drive-icon.svg`));
     const user = this.userService.getUserDetails();
     this.userId = user?.id as number;
   }
@@ -360,12 +357,14 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     let lastWorkspaceId = this.workspaceStateService.getActiveWorkspaceId();
 
     if (!this.isSelectionMode && !this.isSelectorMode) {
+      let isFirstRouteEmission = true;
       this.routeSub = this.route.paramMap.subscribe(params => {
         const folderIdParam = params.get('folderId');
-        const wasRootOrIsInitializing = this.currentFolderId === null;
+        const isInitializing = isFirstRouteEmission;
+        isFirstRouteEmission = false;
         this.currentFolderId = folderIdParam ? Number(folderIdParam) : null;
 
-        if (wasRootOrIsInitializing || !this.currentFolderId) {
+        if (isInitializing || this.currentFolderId === null) {
           return;
         }
 

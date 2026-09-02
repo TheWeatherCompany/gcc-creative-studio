@@ -581,10 +581,6 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 user_email=user_email or item.user_email,
                 mime_type=item.mime_type,
                 model=item.model,
-                titles=list(item.titles) if item.titles else [],
-                descriptions=(
-                    list(item.descriptions) if item.descriptions else []
-                ),
                 prompt=item.prompt,
                 original_prompt=item.original_prompt,
                 rewritten_prompt=item.rewritten_prompt,
@@ -642,10 +638,6 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 user_id=user_id,
                 gcs_uri=asset.gcs_uri,
                 original_filename=asset.original_filename,
-                titles=list(asset.titles) if asset.titles else [],
-                descriptions=(
-                    list(asset.descriptions) if asset.descriptions else []
-                ),
                 mime_type=asset.mime_type,
                 aspect_ratio=asset.aspect_ratio,
                 file_hash=asset.file_hash,
@@ -653,7 +645,6 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 asset_type=asset.asset_type,
                 thumbnail_gcs_uri=asset.thumbnail_gcs_uri,
                 original_gcs_uri=asset.original_gcs_uri,
-                external_url=asset.external_url,
             )
             self.db.add(new_asset)
             assets_copied_count += 1

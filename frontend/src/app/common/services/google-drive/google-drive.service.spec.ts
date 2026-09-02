@@ -92,7 +92,12 @@ describe('GoogleDriveService', () => {
           }
           build() {
             return {
-              setVisible: () => {
+              // Mirrors the real Picker API: only opening (visible=true)
+              // fires the selection callback. Calling setVisible(false)
+              // during cleanup must be a no-op, or it would re-invoke the
+              // callback and recurse forever.
+              setVisible: (visible: boolean) => {
+                if (!visible) return;
                 this.cb({
                   action: mockPickerAction,
                   docs: mockPickerDocs,

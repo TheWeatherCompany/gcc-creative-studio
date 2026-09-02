@@ -21,9 +21,11 @@ import {MatIconModule} from '@angular/material/icon';
 import {MatChipsModule} from '@angular/material/chips';
 import {NO_ERRORS_SCHEMA} from '@angular/core';
 
+import {of} from 'rxjs';
 import {GalleryCardComponent} from './gallery-card.component';
 import {UserService} from '../../services/user.service';
 import {GalleryItem} from '../../models/gallery-item.model';
+import {GalleryService} from '../../../gallery/gallery.service';
 
 describe('GalleryCardComponent', () => {
   let component: GalleryCardComponent;
@@ -59,6 +61,13 @@ describe('GalleryCardComponent', () => {
             getUserDetails: () => ({email: 'user@example.com', roles: []}),
           },
         },
+        {
+          provide: GalleryService,
+          useValue: {
+            favorite: () => of({}),
+            unfavorite: () => of({}),
+          },
+        },
       ],
     }).compileComponents();
 
@@ -76,6 +85,7 @@ describe('GalleryCardComponent', () => {
     let setDataCall: {type: string; data: string} | null = null;
     const mockEvent = {
       preventDefault: jasmine.createSpy('preventDefault'),
+      stopPropagation: jasmine.createSpy('stopPropagation'),
       dataTransfer: {
         setData: (type: string, data: string) => {
           setDataCall = {type, data};
@@ -106,6 +116,7 @@ describe('GalleryCardComponent', () => {
     let setDataCall: {type: string; data: string} | null = null;
     const mockEvent = {
       preventDefault: jasmine.createSpy('preventDefault'),
+      stopPropagation: jasmine.createSpy('stopPropagation'),
       dataTransfer: {
         setData: (type: string, data: string) => {
           setDataCall = {type, data};
