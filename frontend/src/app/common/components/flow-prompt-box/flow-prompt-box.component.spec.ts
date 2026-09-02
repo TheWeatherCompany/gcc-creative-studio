@@ -187,13 +187,26 @@ describe('FlowPromptBoxComponent', () => {
     });
 
     it('should identify omni models correctly with isOmniModel', () => {
-      component.selectedGenerationModel = 'Gemini Omni Flash';
+      // The legacy 'gemini-omni-flash-preview' model was retired from
+      // MODEL_CONFIGS (superseded by the 1.1 model below), but isOmniModel
+      // must still recognize it for any media generated before the switch.
+      // Pass model objects directly rather than relying on a MODEL_CONFIGS
+      // viewValue lookup for a value that no longer exists in the list.
+      expect(
+        component.isOmniModel({value: 'gemini-omni-flash-preview'}),
+      ).toBeTrue();
+
+      expect(
+        component.isOmniModel({value: 'gemini-omni-1.1-flash-preview'}),
+      ).toBeTrue();
+
+      component.selectedGenerationModel = geminiOmni.viewValue;
       expect(component.isOmniModel()).toBeTrue();
 
-      component.selectedGenerationModel = 'Gemini Omni 1.1 Flash';
-      expect(component.isOmniModel()).toBeTrue();
-
-      component.selectedGenerationModel = 'Veo 3.1';
+      const veo31 = MODEL_CONFIGS.find(
+        m => m.value === 'veo-3.1-generate-001',
+      )!;
+      component.selectedGenerationModel = veo31.viewValue;
       expect(component.isOmniModel()).toBeFalse();
     });
 
