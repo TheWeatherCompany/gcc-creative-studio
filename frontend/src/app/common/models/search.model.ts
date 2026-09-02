@@ -134,6 +134,8 @@ export interface GallerySearchDto {
   query?: string;
   tags?: string[];
   favoritesOnly?: boolean;
+  folderId?: number;
+  isRoot?: boolean;
 }
 
 export interface GalleryFiltersState {

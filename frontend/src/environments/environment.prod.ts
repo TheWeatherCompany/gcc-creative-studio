@@ -37,6 +37,10 @@ export const environment = {
   EMAIL_REGEX:
     /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/,
   ADMIN: 'admin',
+  // Not wired into the deploy pipeline yet; leave blank until a build
+  // substitution for it exists. The Google Drive picker degrades to a
+  // clear error message when this is unset, it does not block the build.
+  GOOGLE_CLIENT_ID: '',
   // Shown wherever a user has no Okta profile picture. Okta does not serve
   // avatars, so in practice this is every user.
   defaultAvatarUrl: 'assets/images/default-profile-picture.svg',

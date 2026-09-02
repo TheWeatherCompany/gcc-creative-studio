@@ -15,15 +15,10 @@
  */
 
 import {ComponentFixture, TestBed} from '@angular/core/testing';
-import {NoopAnimationsModule} from '@angular/platform-browser/animations';
-import {provideRouter} from '@angular/router';
-import {provideHttpClient} from '@angular/common/http';
-import {provideHttpClientTesting} from '@angular/common/http/testing';
-import {MatMenuModule} from '@angular/material/menu';
-import {MatIconModule} from '@angular/material/icon';
-import {MatTooltipModule} from '@angular/material/tooltip';
-import {CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
-
+import {Router} from '@angular/router';
+import {NO_ERRORS_SCHEMA} from '@angular/core';
+import {of} from 'rxjs';
+import {BreakpointObserver} from '@angular/cdk/layout';
 import {HeaderComponent} from './header.component';
 import {UserService} from '../common/services/user.service';
 import {AuthService} from '../common/services/auth.service';
@@ -31,20 +26,23 @@ import {AuthService} from '../common/services/auth.service';
 describe('HeaderComponent', () => {
   let component: HeaderComponent;
   let fixture: ComponentFixture<HeaderComponent>;
+  let routerSpy: jasmine.SpyObj<Router>;
 
   beforeEach(async () => {
+    routerSpy = jasmine.createSpyObj(
+      'Router',
+      ['navigate', 'navigateByUrl', 'isActive'],
+      {
+        url: '/gallery',
+      },
+    );
+    routerSpy.isActive.and.returnValue(false);
+
     await TestBed.configureTestingModule({
       declarations: [HeaderComponent],
-      imports: [
-        NoopAnimationsModule,
-        MatMenuModule,
-        MatIconModule,
-        MatTooltipModule,
-      ],
+      schemas: [NO_ERRORS_SCHEMA],
       providers: [
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        provideRouter([]),
+        {provide: Router, useValue: routerSpy},
         {
           provide: UserService,
           useValue: {
@@ -64,8 +62,13 @@ describe('HeaderComponent', () => {
               .and.returnValue(false),
           },
         },
+        {
+          provide: BreakpointObserver,
+          useValue: {
+            observe: () => of({matches: true}),
+          },
+        },
       ],
-      schemas: [CUSTOM_ELEMENTS_SCHEMA],
     }).compileComponents();
 
     fixture = TestBed.createComponent(HeaderComponent);
@@ -75,5 +78,31 @@ describe('HeaderComponent', () => {
 
   it('should create', () => {
     expect(component).toBeTruthy();
+  });
+
+  describe('isGalleryActive', () => {
+    it('should return true when router.isActive(/gallery, false) is true', () => {
+      routerSpy.isActive.and.returnValue(true);
+      (
+        Object.getOwnPropertyDescriptor(routerSpy, 'url')?.get as jasmine.Spy
+      ).and.returnValue('/gallery');
+      expect(component.isGalleryActive()).toBeTrue();
+    });
+
+    it('should return true when router.url starts with /folders', () => {
+      routerSpy.isActive.and.returnValue(false);
+      (
+        Object.getOwnPropertyDescriptor(routerSpy, 'url')?.get as jasmine.Spy
+      ).and.returnValue('/folders/123');
+      expect(component.isGalleryActive()).toBeTrue();
+    });
+
+    it('should return false when on another page', () => {
+      routerSpy.isActive.and.returnValue(false);
+      (
+        Object.getOwnPropertyDescriptor(routerSpy, 'url')?.get as jasmine.Spy
+      ).and.returnValue('/video');
+      expect(component.isGalleryActive()).toBeFalse();
+    });
   });
 });

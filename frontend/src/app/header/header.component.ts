@@ -148,4 +148,11 @@ export class HeaderComponent implements OnDestroy {
       this.toolsMenuHovered = false;
     }, 200);
   }
+
+  isGalleryActive(): boolean {
+    return (
+      this.router.isActive('/gallery', false) ||
+      this.router.url.startsWith('/folders')
+    );
+  }
 }

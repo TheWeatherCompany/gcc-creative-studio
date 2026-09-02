@@ -36,7 +36,8 @@ import {MatDialog} from '@angular/material/dialog';
 import {MatSnackBar} from '@angular/material/snack-bar';
 import {MatIconRegistry} from '@angular/material/icon';
 import {DomSanitizer, SafeResourceUrl} from '@angular/platform-browser';
-import {Subscription, fromEvent, forkJoin, of} from 'rxjs';
+import {ActivatedRoute, Router} from '@angular/router';
+import {Subscription, fromEvent, forkJoin, of, firstValueFrom} from 'rxjs';
 import {debounceTime, map, switchMap} from 'rxjs/operators';
 import {MediaItemSelection} from '../../common/components/image-selector/image-selector.component';
 import {CopyToWorkspaceDialogComponent} from '../../common/components/copy-to-workspace-dialog/copy-to-workspace-dialog.component';
@@ -56,6 +57,20 @@ import {AssignTagsDialogComponent} from '../../common/components/assign-tags-dia
 import {UserRolesEnum} from '../../common/models/user.model';
 import {TagsManagementDialogComponent} from '../../common/components/tags-management-dialog/tags-management-dialog.component';
 import {ConfirmationDialogComponent} from '../../common/components/confirmation-dialog/confirmation-dialog.component';
+import {MediaUploadService} from '../../common/services/media-upload/media-upload.service';
+import {ACCEPTED_MEDIA_UPLOAD_FORMATS} from '../../common/services/media-upload/media-upload.constants';
+import {GoogleDriveService} from '../../common/services/google-drive/google-drive.service';
+import {
+  Folder,
+  FolderBreadcrumb,
+  GalleryDragPayload,
+} from '../../common/models/folder.model';
+import {FolderService} from '../../common/services/folder.service';
+import {CreateFolderDialogComponent} from '../../common/components/create-folder-dialog/create-folder-dialog.component';
+import {
+  MoveToFolderDialogComponent,
+  MoveToFolderDialogResult,
+} from '../../common/components/move-to-folder-dialog/move-to-folder-dialog.component';
 
 @Component({
   selector: 'app-media-gallery',
@@ -111,6 +126,12 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
   filteredImages: GalleryItem[] = [];
   groups: {title: string; items: GalleryItem[]}[] = [];
 
+  folders: Folder[] = [];
+  currentFolderId: number | null = null;
+  breadcrumbs: FolderBreadcrumb[] = [];
+  isLoadingFolders = false;
+  dragOverBreadcrumbId: number | string | null = null;
+
   selectedItems: Set<string> = new Set();
   lastSelectedIndex: number | null = null;
 
@@ -120,11 +141,15 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
   public isDeleting = false;
   public isDownloading = false;
   public isCopying = false;
+  public isMoving = false;
   public showAdvancedFilters = false;
 
   toggleAdvancedFilters() {
     this.showAdvancedFilters = !this.showAdvancedFilters;
   }
+  private routeSub: Subscription | undefined;
+  private workspaceSub: Subscription | undefined;
+  private uploadBatchSubscription: Subscription | undefined;
   private imagesSubscription: Subscription | undefined;
   private allImagesLoadedSubscription: Subscription | undefined;
   private loadingSubscription: Subscription | undefined;
@@ -237,6 +262,11 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     private snackBar: MatSnackBar,
     public dialog: MatDialog,
     private tagsService: TagsService,
+    public uploadService: MediaUploadService,
+    private googleDriveService: GoogleDriveService,
+    private folderService: FolderService,
+    private route: ActivatedRoute,
+    private router: Router,
     @Inject(PLATFORM_ID) platformId: Object,
   ) {
     this.isBrowser = isPlatformBrowser(platformId);
@@ -248,6 +278,10 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
       .addSvgIcon(
         'gemini-spark-icon',
         this.setPath(`${this.path}/gemini-spark-icon.svg`),
+      )
+      .addSvgIcon(
+        'drive-icon',
+        this.setPath(`${this.path}/drive-icon.svg`),
       );
     const user = this.userService.getUserDetails();
     this.userId = user?.id as number;
@@ -311,17 +345,60 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
         this.allImagesLoaded = loaded;
       });
 
-    if (this.isBrowser) {
-      this.searchTerm();
-      this.showFeaturesHint();
+    this.uploadBatchSubscription =
+      this.uploadService.uploadBatchComplete$.subscribe(() => {
+        this.searchTerm();
+      });
 
-      this.workspaceStateService.activeWorkspaceId$.subscribe(workspaceId => {
-        if (workspaceId) {
-          this.tagsCurrentPage = 1;
-          this.loadTags();
+    // Guard against SSR - do not load folders and breadcrumbs on server
+    if (!this.isBrowser) {
+      return;
+    }
+
+    this.showFeaturesHint();
+
+    let lastWorkspaceId = this.workspaceStateService.getActiveWorkspaceId();
+
+    if (!this.isSelectionMode && !this.isSelectorMode) {
+      this.routeSub = this.route.paramMap.subscribe(params => {
+        const folderIdParam = params.get('folderId');
+        const wasRootOrIsInitializing = this.currentFolderId === null;
+        this.currentFolderId = folderIdParam ? Number(folderIdParam) : null;
+
+        if (wasRootOrIsInitializing || !this.currentFolderId) {
+          return;
         }
+
+        this.reload();
       });
     }
+
+    this.workspaceSub = this.workspaceStateService.activeWorkspaceId$.subscribe(
+      workspaceId => {
+        if (!workspaceId) {
+          return;
+        }
+
+        if (
+          lastWorkspaceId !== null &&
+          lastWorkspaceId !== workspaceId &&
+          this.currentFolderId !== null
+        ) {
+          void this.router.navigate(['/gallery']);
+        } else {
+          lastWorkspaceId = workspaceId;
+          this.reload();
+        }
+      },
+    );
+  }
+
+  private reload() {
+    this.tagsCurrentPage = 1;
+    this.loadTags();
+    this.loadFolders();
+    this.loadBreadcrumbs();
+    this.searchTerm();
   }
 
   private loadTags(search?: string): void {
@@ -447,9 +524,37 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
       });
     }
 
+    this.routeSub?.unsubscribe();
+    this.workspaceSub?.unsubscribe();
+    this.uploadBatchSubscription?.unsubscribe();
+    this.imagesSubscription?.unsubscribe();
+    this.loadingSubscription?.unsubscribe();
+    this.allImagesLoadedSubscription?.unsubscribe();
     this.resizeSubscription?.unsubscribe();
     this._hostVisibilityObserver?.disconnect();
     this._scrollObserver?.disconnect();
+  }
+
+  onFilesSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files.length > 0) {
+      const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+      if (workspaceId !== null) {
+        this.uploadService.uploadFiles(workspaceId, Array.from(input.files));
+      }
+      input.value = '';
+    }
+  }
+
+  openGoogleDrivePicker(): void {
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    if (workspaceId === null) return;
+
+    this.googleDriveService.openPicker().subscribe((files: File[]) => {
+      if (files && files.length > 0) {
+        this.uploadService.uploadFiles(workspaceId, files);
+      }
+    });
   }
 
   public trackByImage(index: number, image: GalleryItem): number | string {
@@ -935,6 +1040,16 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     if (this.favoritesOnly) {
       filters['favoritesOnly'] = true;
     }
+
+    // Folder filtering: when browsing without freeform query, filter by folder or root
+    if (!this.queryFilter.trim()) {
+      if (this.currentFolderId !== null) {
+        filters['folderId'] = this.currentFolderId;
+      } else {
+        filters['isRoot'] = true;
+      }
+    }
+
     if (!this.isSelectionMode && !this.isSelectorMode) {
       const state: GalleryFiltersState = {
         query: this.queryFilter,
@@ -955,5 +1070,552 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
   public onTagChange(tags: string[]): void {
     this.tagsFilter = tags;
     this.searchTerm();
+  }
+
+  loadFolders(): void {
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    if (!workspaceId) {
+      this.folders = [];
+      return;
+    }
+    this.isLoadingFolders = true;
+    this.folderService.getFolders(workspaceId, this.currentFolderId).subscribe({
+      next: folders => {
+        this.folders = folders;
+        this.isLoadingFolders = false;
+      },
+      error: err => {
+        console.error('Error loading folders:', err);
+        this.isLoadingFolders = false;
+      },
+    });
+  }
+
+  loadBreadcrumbs(): void {
+    if (this.currentFolderId === null) {
+      this.breadcrumbs = [];
+      return;
+    }
+
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    this.folderService
+      .getBreadcrumbs(this.currentFolderId, workspaceId ?? undefined)
+      .subscribe({
+        next: crumbs => {
+          this.breadcrumbs = crumbs;
+        },
+        error: err => {
+          console.error('Error loading breadcrumbs:', err);
+          if (!this.isSelectionMode && !this.isSelectorMode) {
+            const message =
+              err?.error?.detail || 'Folder not found in this workspace.';
+            this.snackBar.open(message, 'Close', {duration: 3000});
+            void this.router.navigate(['/gallery']);
+          }
+        },
+      });
+  }
+
+  navigateToFolder(folder: Folder): void {
+    if (!this.isSelectionMode && !this.isSelectorMode) {
+      void this.router.navigate(['/folders', folder.id]);
+    } else {
+      this.currentFolderId = folder.id;
+      this.loadFolders();
+      this.loadBreadcrumbs();
+      this.searchTerm();
+    }
+  }
+
+  navigateToBreadcrumb(breadcrumb: FolderBreadcrumb | null): void {
+    if (!this.isSelectionMode && !this.isSelectorMode) {
+      if (breadcrumb) {
+        void this.router.navigate(['/folders', breadcrumb.id]);
+      } else {
+        void this.router.navigate(['/gallery']);
+      }
+    } else {
+      this.currentFolderId = breadcrumb ? breadcrumb.id : null;
+      this.loadFolders();
+      this.loadBreadcrumbs();
+      this.searchTerm();
+    }
+  }
+
+  openCreateFolderDialog(): void {
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    if (!workspaceId) return;
+
+    const dialogRef = this.dialog.open(CreateFolderDialogComponent, {
+      data: {
+        workspaceId,
+        parentId: this.currentFolderId,
+        existingFolderNames: this.folders.map(f => f.name),
+      },
+    });
+
+    dialogRef.afterClosed().subscribe(result => {
+      if (result) {
+        this.folderService
+          .createFolder({
+            workspaceId,
+            parentId: this.currentFolderId,
+            name: result.name,
+            color: result.color,
+          })
+          .subscribe({
+            next: created => {
+              this.snackBar.open(`Folder "${created.name}" created`, 'Close', {
+                duration: 3000,
+              });
+              this.loadFolders();
+            },
+            error: err => {
+              console.error('Error creating folder:', err);
+              const message = err.error?.detail || 'Failed to create folder';
+              this.snackBar.open(message, 'Close', {
+                duration: 4000,
+              });
+            },
+          });
+      }
+    });
+  }
+
+  openEditFolderDialog(folder: Folder): void {
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    if (!workspaceId) return;
+
+    const dialogRef = this.dialog.open(CreateFolderDialogComponent, {
+      data: {
+        workspaceId,
+        parentId: folder.parentId,
+        folder,
+        existingFolderNames: this.folders.map(f => f.name),
+      },
+    });
+
+    dialogRef.afterClosed().subscribe(result => {
+      if (result) {
+        this.folderService
+          .updateFolder(folder.id, {
+            name: result.name,
+            color: result.color,
+          })
+          .subscribe({
+            next: updated => {
+              this.snackBar.open(
+                `Folder renamed to "${updated.name}"`,
+                'Close',
+                {duration: 3000},
+              );
+              this.loadFolders();
+              this.loadBreadcrumbs();
+            },
+            error: err => {
+              console.error('Error updating folder:', err);
+              const message = err.error?.detail || 'Failed to rename folder';
+              this.snackBar.open(message, 'Close', {
+                duration: 4000,
+              });
+            },
+          });
+      }
+    });
+  }
+
+  openDeleteFolderDialog(folder: Folder): void {
+    const dialogRef = this.dialog.open(ConfirmationDialogComponent, {
+      data: {
+        title: 'Delete Folder',
+        message: `Are you sure you want to delete folder "${folder.name}" and all its subfolders?`,
+      },
+    });
+
+    dialogRef.afterClosed().subscribe(confirmed => {
+      if (confirmed) {
+        this.folderService.deleteFolder(folder.id).subscribe({
+          next: () => {
+            this.snackBar.open(`Folder "${folder.name}" deleted`, 'Close', {
+              duration: 3000,
+            });
+            this.loadFolders();
+            this.searchTerm();
+          },
+          error: err => {
+            console.error('Error deleting folder:', err);
+            this.snackBar.open('Failed to delete folder', 'Close', {
+              duration: 3000,
+            });
+          },
+        });
+      }
+    });
+  }
+
+  openCopyFolderDialog(folder: Folder): void {
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    if (!workspaceId) return;
+
+    const dialogRef = this.dialog.open(CopyToWorkspaceDialogComponent, {
+      width: '450px',
+      data: {
+        itemCount: 1,
+        title: 'Copy Folder',
+        subtitle: `Select the target workspace for folder "${folder.name}" and its contents`,
+      },
+    });
+
+    dialogRef.afterClosed().subscribe((targetWorkspaceId: number | null) => {
+      if (targetWorkspaceId) {
+        this.executeCopyFolderToWorkspace(folder, targetWorkspaceId);
+      }
+    });
+  }
+
+  private executeCopyFolderToWorkspace(
+    folder: Folder,
+    targetWorkspaceId: number,
+  ): void {
+    this.isCopying = true;
+    const itemsToCopy = [{id: folder.id, type: 'folder'}];
+    this.galleryService.bulkCopy(itemsToCopy, targetWorkspaceId).subscribe({
+      next: () => {
+        this.snackBar.open(
+          `Folder "${folder.name}" copied successfully`,
+          'Close',
+          {duration: 3000},
+        );
+        this.isCopying = false;
+      },
+      error: err => {
+        console.error('Error copying folder to workspace:', err);
+        this.snackBar.open('Failed to copy folder', 'Close', {duration: 3000});
+        this.isCopying = false;
+      },
+    });
+  }
+
+  openMoveFolderDialog(folder: Folder): void {
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    if (!workspaceId) return;
+
+    const dialogRef = this.dialog.open(MoveToFolderDialogComponent, {
+      data: {
+        workspaceId,
+        itemCount: 1,
+        movingFolderIds: [folder.id],
+        currentFolderId: folder.parentId ?? null,
+      },
+    });
+
+    dialogRef
+      .afterClosed()
+      .subscribe((result: MoveToFolderDialogResult | null) => {
+        if (!result) {
+          return;
+        }
+
+        if (result.destinationFolderId !== undefined) {
+          this.folderService
+            .updateFolder(folder.id, {
+              parentId: result.destinationFolderId,
+            })
+            .subscribe({
+              next: () => {
+                this.snackBar.open('Folder moved successfully', 'Close', {
+                  duration: 3000,
+                });
+                this.loadFolders();
+              },
+              error: err => {
+                console.error('Error moving folder:', err);
+                this.snackBar.open('Failed to move folder', 'Close', {
+                  duration: 3000,
+                });
+              },
+            });
+        } else if (result.destinationWorkspaceId !== undefined) {
+          const destName = result.destinationName || 'Workspace';
+          this.executeMoveToWorkspace(
+            [],
+            [],
+            [folder.id],
+            result.destinationWorkspaceId,
+            destName,
+          );
+        }
+      });
+  }
+
+  openBatchMoveDialog(): void {
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    if (!workspaceId || this.selectedItems.size === 0) return;
+
+    const selected = Array.from(this.selectedItems);
+    const mediaItemIds = selected
+      .filter(id => id.startsWith('media_item:'))
+      .map(id => parseInt(id.split(':')[1]));
+    const sourceAssetIds = selected
+      .filter(id => id.startsWith('source_asset:'))
+      .map(id => parseInt(id.split(':')[1]));
+
+    const dialogRef = this.dialog.open(MoveToFolderDialogComponent, {
+      data: {
+        workspaceId,
+        itemCount: this.selectedItems.size,
+        currentFolderId: this.currentFolderId,
+      },
+    });
+
+    dialogRef
+      .afterClosed()
+      .subscribe((result: MoveToFolderDialogResult | null) => {
+        if (!result) {
+          return;
+        }
+        if (result.destinationFolderId !== undefined) {
+          const destName =
+            result.destinationFolderId === null
+              ? 'All Media'
+              : result.destinationName || 'Folder';
+          this.executeMove(
+            mediaItemIds,
+            sourceAssetIds,
+            [],
+            result.destinationFolderId,
+            destName,
+          );
+        } else if (result.destinationWorkspaceId !== undefined) {
+          const destName = result.destinationName || 'Workspace';
+          this.executeMoveToWorkspace(
+            mediaItemIds,
+            sourceAssetIds,
+            [],
+            result.destinationWorkspaceId,
+            destName,
+          );
+        }
+      });
+  }
+
+  onBreadcrumbDragOver(event: DragEvent, folderId: number | null): void {
+    if (this.currentFolderId === folderId) {
+      return;
+    }
+    if (event.dataTransfer?.types.includes('application/json')) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      this.dragOverBreadcrumbId = folderId === null ? 'root' : folderId;
+    }
+  }
+
+  onBreadcrumbDragLeave(event: DragEvent, folderId: number | null): void {
+    const currentTarget = event.currentTarget as HTMLElement;
+    const relatedTarget = event.relatedTarget as Node | null;
+    if (!currentTarget || !currentTarget.contains(relatedTarget)) {
+      if (
+        (folderId === null && this.dragOverBreadcrumbId === 'root') ||
+        this.dragOverBreadcrumbId === folderId
+      ) {
+        this.dragOverBreadcrumbId = null;
+      }
+    }
+  }
+
+  onBreadcrumbDrop(event: DragEvent, targetFolderId: number | null): void {
+    event.preventDefault();
+    this.dragOverBreadcrumbId = null;
+    if (this.currentFolderId === targetFolderId) {
+      return;
+    }
+    const data = event.dataTransfer?.getData('application/json');
+    if (data) {
+      try {
+        const payload: GalleryDragPayload = JSON.parse(data);
+        const targetName =
+          targetFolderId === null
+            ? 'All Media'
+            : this.breadcrumbs.find(b => b.id === targetFolderId)?.name ||
+              'Folder';
+        this.executeMove(
+          payload.mediaItemIds || [],
+          payload.sourceAssetIds || [],
+          payload.folderIds || [],
+          targetFolderId,
+          targetName,
+        );
+      } catch (e) {
+        console.error('Failed to parse drag payload on breadcrumb drop:', e);
+      }
+    }
+  }
+
+  onItemDroppedOnFolder(
+    targetFolder: Folder,
+    payload: GalleryDragPayload,
+  ): void {
+    if (this.currentFolderId === targetFolder.id) {
+      return;
+    }
+    this.executeMove(
+      payload.mediaItemIds || [],
+      payload.sourceAssetIds || [],
+      payload.folderIds || [],
+      targetFolder.id,
+      targetFolder.name,
+    );
+  }
+
+  private executeMove(
+    mediaItemIds: number[],
+    sourceAssetIds: number[],
+    folderIds: number[],
+    destinationFolderId: number | null,
+    destinationName: string,
+  ): void {
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    if (!workspaceId) return;
+
+    const totalCount =
+      mediaItemIds.length + sourceAssetIds.length + folderIds.length;
+    if (totalCount === 0) return;
+
+    // Optimistic UI update: remove moved items from current view
+    const movedMediaSet = new Set(mediaItemIds.map(id => `media_item:${id}`));
+    const movedAssetSet = new Set(
+      sourceAssetIds.map(id => `source_asset:${id}`),
+    );
+    const movedFolderSet = new Set(folderIds);
+
+    const prevImages = [...this.images];
+    const prevFolders = [...this.folders];
+
+    this.images = this.images.filter(
+      img =>
+        !movedMediaSet.has(`${img.itemType}:${img.id}`) &&
+        !movedAssetSet.has(`${img.itemType}:${img.id}`),
+    );
+    this.folders = this.folders.filter(f => !movedFolderSet.has(f.id));
+    this.updateGroups();
+
+    // Clear selection for moved items
+    for (const key of movedMediaSet) {
+      this.selectedItems.delete(key);
+    }
+    for (const key of movedAssetSet) {
+      this.selectedItems.delete(key);
+    }
+    if (this.selectedItems.size === 0) {
+      this.lastSelectedIndex = null;
+    }
+
+    this.isMoving = true;
+
+    this.folderService
+      .moveItems({
+        workspaceId,
+        mediaItemIds,
+        sourceAssetIds,
+        folderIds,
+        destinationFolderId,
+      })
+      .subscribe({
+        next: res => {
+          this.snackBar.open(
+            `${res.total_moved} item${res.total_moved === 1 ? '' : 's'} moved to "${destinationName}"`,
+            'Close',
+            {duration: 3000},
+          );
+          this.isMoving = false;
+          this.loadFolders();
+        },
+        error: err => {
+          console.error('Error moving items via drag and drop:', err);
+          // Rollback optimistic update
+          this.images = prevImages;
+          this.folders = prevFolders;
+          this.updateGroups();
+          this.isMoving = false;
+          this.snackBar.open('Failed to move items', 'Close', {
+            duration: 3000,
+          });
+        },
+      });
+  }
+
+  private executeMoveToWorkspace(
+    mediaItemIds: number[],
+    sourceAssetIds: number[],
+    folderIds: number[] = [],
+    destinationWorkspaceId: number,
+    destinationName: string,
+  ): void {
+    const totalCount =
+      mediaItemIds.length + sourceAssetIds.length + folderIds.length;
+    if (totalCount === 0) return;
+
+    // Optimistic UI update: remove moved items from current view
+    const movedMediaSet = new Set(mediaItemIds.map(id => `media_item:${id}`));
+    const movedAssetSet = new Set(
+      sourceAssetIds.map(id => `source_asset:${id}`),
+    );
+    const movedFolderSet = new Set(folderIds);
+
+    const prevImages = [...this.images];
+    const prevFolders = [...this.folders];
+
+    this.images = this.images.filter(
+      img =>
+        !movedMediaSet.has(`${img.itemType}:${img.id}`) &&
+        !movedAssetSet.has(`${img.itemType}:${img.id}`),
+    );
+    this.folders = this.folders.filter(f => !movedFolderSet.has(f.id));
+    this.updateGroups();
+
+    // Clear selection for moved items
+    for (const key of movedMediaSet) {
+      this.selectedItems.delete(key);
+    }
+    for (const key of movedAssetSet) {
+      this.selectedItems.delete(key);
+    }
+    if (this.selectedItems.size === 0) {
+      this.lastSelectedIndex = null;
+    }
+
+    const itemsToMove = [
+      ...mediaItemIds.map(id => ({id, type: 'media_item'})),
+      ...sourceAssetIds.map(id => ({id, type: 'source_asset'})),
+      ...folderIds.map(id => ({id, type: 'folder'})),
+    ];
+
+    this.isMoving = true;
+
+    this.galleryService
+      .bulkMove(itemsToMove, destinationWorkspaceId)
+      .subscribe({
+        next: res => {
+          this.snackBar.open(
+            `${res.moved_count} item${res.moved_count === 1 ? '' : 's'} moved to "${destinationName}"`,
+            'Close',
+            {duration: 3000},
+          );
+          this.searchTerm();
+          this.loadFolders();
+          this.isMoving = false;
+        },
+        error: err => {
+          console.error('Error moving items to workspace:', err);
+          // Rollback optimistic update
+          this.images = prevImages;
+          this.folders = prevFolders;
+          this.updateGroups();
+          this.isMoving = false;
+          this.snackBar.open('Failed to move items', 'Close', {
+            duration: 3000,
+          });
+        },
+      });
   }
 }

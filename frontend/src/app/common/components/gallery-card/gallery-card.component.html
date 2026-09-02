@@ -18,15 +18,20 @@
   class="card-root"
   [class.selected]="isSelected"
   [class.any-selected]="anyItemSelected"
+  [class.is-dragging]="isDragging"
+  [attr.draggable]="!isSelectorMode"
+  (dragstart)="onDragStart($event)"
+  (dragend)="onDragEnd($event)"
   (mouseenter)="onMouseEnter()"
   (mouseleave)="onMouseLeave()"
 >
   <a
-    [routerLink]="(isSelectionMode || anyItemSelected) ? null : getRoute()"
+    [routerLink]="(isSelectionMode || anyItemSelected || isDragging) ? null : getRoute()"
     [state]="{mediaItem: item}"
     (click)="onCardClick($event)"
     class="card-link"
     [class.selection-mode]="isSelectionMode"
+    draggable="false"
   >
     <ng-container *ngIf="item.mimeType?.startsWith('image/')">
       <img
@@ -37,6 +42,7 @@
         [alt]="getShortPrompt(item.prompt)"
         [class.active]="currentImageIndex === i"
         [class.inactive]="currentImageIndex !== i"
+        draggable="false"
         (load)="onMediaLoad(i)"
       />
       <!-- A "spacer" div that defines the aspect ratio of the container -->
@@ -54,6 +60,7 @@
           class="media-element"
           [class.active]="currentImageIndex === i"
           [class.inactive]="currentImageIndex !== i"
+          draggable="false"
           oncanplay="this.play()"
           onloadedmetadata="this.muted = true"
           muted
@@ -67,16 +74,33 @@
 
       <!-- Show thumbnail by default -->
       <ng-container *ngIf="hoveredVideoId !== item.id">
-        <img
-          *ngFor="let url of displayUrls; let i = index"
-          class="media-element"
-          loading="lazy"
-          [src]="url"
-          [alt]="getShortPrompt(item.prompt)"
-          [class.active]="currentImageIndex === i"
-          [class.inactive]="currentImageIndex !== i"
-          (load)="onMediaLoad(i)"
-        />
+        <ng-container *ngIf="hasThumbnail">
+          <img
+            *ngFor="let url of item.presignedThumbnailUrls; let i = index"
+            class="media-element"
+            loading="lazy"
+            [src]="url"
+            [alt]="getShortPrompt(item.prompt)"
+            [class.active]="currentImageIndex === i"
+            [class.inactive]="currentImageIndex !== i"
+            draggable="false"
+            (load)="onMediaLoad(i)"
+          />
+        </ng-container>
+        <ng-container *ngIf="!hasThumbnail">
+          <video
+            *ngFor="let url of item.presignedUrls; let i = index"
+            class="media-element"
+            [class.active]="currentImageIndex === i"
+            [class.inactive]="currentImageIndex !== i"
+            draggable="false"
+            preload="metadata"
+            muted
+            playsinline
+          >
+            <source [src]="url" [type]="item.mimeType" />
+          </video>
+        </ng-container>
         <!-- Play Button Overlay -->
         <div class="video-play-overlay">
           <svg
