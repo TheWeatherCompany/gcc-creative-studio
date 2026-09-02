@@ -24,7 +24,7 @@ import {environment} from '../../environments/environment';
 import {UserModel} from '../common/models/user.model';
 import {animate, style, transition, trigger} from '@angular/animations';
 import {BreakpointObserver, Breakpoints} from '@angular/cdk/layout';
-import {Subject} from 'rxjs';
+import {Subject, Subscription} from 'rxjs';
 import {takeUntil} from 'rxjs/operators';
 import {isPlatformBrowser} from '@angular/common';
 
@@ -61,6 +61,8 @@ export class HeaderComponent implements OnDestroy {
   toolsMenuHovered = false;
   private menuTimeout: any;
   isBrowser: boolean;
+  private routerSubscription: Subscription;
+  isGalleryActive = false;
 
   constructor(
     private sanitizer: DomSanitizer,
@@ -100,11 +102,18 @@ export class HeaderComponent implements OnDestroy {
       .subscribe(result => {
         this.isDesktop = result.matches;
       });
+
+    this.routerSubscription = this.router.events.subscribe(() => {
+      this.isGalleryActive =
+        this.router.isActive('/gallery', false) ||
+        this.router.url.startsWith('/folders');
+    });
   }
 
   ngOnDestroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
+    this.routerSubscription.unsubscribe();
   }
 
   private path = '../../assets/images';
@@ -147,12 +156,5 @@ export class HeaderComponent implements OnDestroy {
     this.menuTimeout = setTimeout(() => {
       this.toolsMenuHovered = false;
     }, 200);
-  }
-
-  isGalleryActive(): boolean {
-    return (
-      this.router.isActive('/gallery', false) ||
-      this.router.url.startsWith('/folders')
-    );
   }
 }
