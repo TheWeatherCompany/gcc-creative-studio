@@ -456,6 +456,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       composition: this.searchRequest.composition || null,
       useBrandGuidelines: this.searchRequest.useBrandGuidelines,
       enhancePrompt: this.searchRequest.enhancePrompt || false,
+      temperature: this.searchRequest.temperature ?? null,
       mode: this.currentMode,
     });
   }
@@ -481,6 +482,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     this.searchRequest.composition = state.composition;
     this.searchRequest.useBrandGuidelines = state.useBrandGuidelines;
     this.searchRequest.enhancePrompt = state.enhancePrompt;
+    this.searchRequest.temperature = state.temperature ?? undefined;
 
     this.negativePhrases = state.negativePrompt
       ? state.negativePrompt.split(', ').filter(Boolean)
