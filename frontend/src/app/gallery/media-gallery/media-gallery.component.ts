@@ -57,9 +57,6 @@ import {AssignTagsDialogComponent} from '../../common/components/assign-tags-dia
 import {UserRolesEnum} from '../../common/models/user.model';
 import {TagsManagementDialogComponent} from '../../common/components/tags-management-dialog/tags-management-dialog.component';
 import {ConfirmationDialogComponent} from '../../common/components/confirmation-dialog/confirmation-dialog.component';
-import {MediaUploadService} from '../../common/services/media-upload/media-upload.service';
-import {ACCEPTED_MEDIA_UPLOAD_FORMATS} from '../../common/services/media-upload/media-upload.constants';
-import {GoogleDriveService} from '../../common/services/google-drive/google-drive.service';
 import {
   Folder,
   FolderBreadcrumb,
@@ -149,7 +146,6 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
   }
   private routeSub: Subscription | undefined;
   private workspaceSub: Subscription | undefined;
-  private uploadBatchSubscription: Subscription | undefined;
   private imagesSubscription: Subscription | undefined;
   private allImagesLoadedSubscription: Subscription | undefined;
   private loadingSubscription: Subscription | undefined;
@@ -262,8 +258,6 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     private snackBar: MatSnackBar,
     public dialog: MatDialog,
     private tagsService: TagsService,
-    public uploadService: MediaUploadService,
-    private googleDriveService: GoogleDriveService,
     private folderService: FolderService,
     private route: ActivatedRoute,
     private router: Router,
@@ -278,8 +272,7 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
       .addSvgIcon(
         'gemini-spark-icon',
         this.setPath(`${this.path}/gemini-spark-icon.svg`),
-      )
-      .addSvgIcon('drive-icon', this.setPath(`${this.path}/drive-icon.svg`));
+      );
     const user = this.userService.getUserDetails();
     this.userId = user?.id as number;
   }
@@ -340,11 +333,6 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     this.allImagesLoadedSubscription =
       this.galleryService.allImagesLoaded.subscribe(loaded => {
         this.allImagesLoaded = loaded;
-      });
-
-    this.uploadBatchSubscription =
-      this.uploadService.uploadBatchComplete$.subscribe(() => {
-        this.searchTerm();
       });
 
     // Guard against SSR - do not load folders and breadcrumbs on server
@@ -525,35 +513,12 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
 
     this.routeSub?.unsubscribe();
     this.workspaceSub?.unsubscribe();
-    this.uploadBatchSubscription?.unsubscribe();
     this.imagesSubscription?.unsubscribe();
     this.loadingSubscription?.unsubscribe();
     this.allImagesLoadedSubscription?.unsubscribe();
     this.resizeSubscription?.unsubscribe();
     this._hostVisibilityObserver?.disconnect();
     this._scrollObserver?.disconnect();
-  }
-
-  onFilesSelected(event: Event): void {
-    const input = event.target as HTMLInputElement;
-    if (input.files && input.files.length > 0) {
-      const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
-      if (workspaceId !== null) {
-        this.uploadService.uploadFiles(workspaceId, Array.from(input.files));
-      }
-      input.value = '';
-    }
-  }
-
-  openGoogleDrivePicker(): void {
-    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
-    if (workspaceId === null) return;
-
-    this.googleDriveService.openPicker().subscribe((files: File[]) => {
-      if (files && files.length > 0) {
-        this.uploadService.uploadFiles(workspaceId, files);
-      }
-    });
   }
 
   public trackByImage(index: number, image: GalleryItem): number | string {
@@ -1040,13 +1005,24 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
       filters['favoritesOnly'] = true;
     }
 
-    // Folder filtering: when browsing without freeform query, filter by folder or root
-    if (!this.queryFilter.trim()) {
-      if (this.currentFolderId !== null) {
-        filters['folderId'] = this.currentFolderId;
-      } else {
-        filters['isRoot'] = true;
-      }
+    // Folder filtering. Inside a folder we always scope to that folder. At the
+    // root we only scope to `isRoot` while browsing unfiltered: any
+    // cross-cutting filter (search, tags, favorites, dates, model, media type)
+    // has to search the whole library, otherwise the backend's
+    // `folder_id IS NULL` predicate silently drops every matching item that
+    // lives inside a folder.
+    const hasCrossCuttingFilter =
+      !!this.queryFilter.trim() ||
+      this.tagsFilter.length > 0 ||
+      this.favoritesOnly ||
+      !!this.startDateFilter ||
+      !!this.endDateFilter ||
+      !!this.generationModelFilter ||
+      !!this.mediaTypeFilter;
+    if (this.currentFolderId !== null) {
+      filters['folderId'] = this.currentFolderId;
+    } else if (!hasCrossCuttingFilter) {
+      filters['isRoot'] = true;
     }
 
     if (!this.isSelectionMode && !this.isSelectorMode) {
@@ -1595,14 +1571,52 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
       .bulkMove(itemsToMove, destinationWorkspaceId)
       .subscribe({
         next: res => {
+          // bulk-move reports each row's outcome separately, so reconcile the
+          // optimistic removal against both lists. A row's identity is the
+          // (type, id) pair, never the id alone: ids are per-type, so
+          // media_item 5 and folder 5 are different rows.
+          const moved = res.moved ?? [];
+          const failed = res.failed ?? [];
+          const movedKeys = new Set(
+            moved.map(item => `${item.type}:${item.id}`),
+          );
+          const failedKeys = new Set(
+            failed.map(item => `${item.type}:${item.id}`),
+          );
+          const isStillHere = (key: string) =>
+            failedKeys.has(key) || !movedKeys.has(key);
+
+          this.images = prevImages.filter(img =>
+            isStillHere(`${img.itemType}:${img.id}`),
+          );
+          this.folders = prevFolders.filter(f => isStillHere(`folder:${f.id}`));
+          this.updateGroups();
+          this.isMoving = false;
+
+          if (failed.length > 0) {
+            // Partial success: no success message, and keep the reconciled
+            // view so the user can see exactly what stayed behind.
+            const reasons = Array.from(
+              new Set(
+                failed.map(item => item.reason).filter(reason => !!reason),
+              ),
+            );
+            const detail = reasons.length > 0 ? `: ${reasons.join('; ')}` : '';
+            this.snackBar.open(
+              `${failed.length} of ${totalCount} item${totalCount === 1 ? '' : 's'} could not be moved to "${destinationName}"${detail}`,
+              'Close',
+              {duration: 5000},
+            );
+            return;
+          }
+
           this.snackBar.open(
-            `${res.moved_count} item${res.moved_count === 1 ? '' : 's'} moved to "${destinationName}"`,
+            `${moved.length} item${moved.length === 1 ? '' : 's'} moved to "${destinationName}"`,
             'Close',
             {duration: 3000},
           );
           this.searchTerm();
           this.loadFolders();
-          this.isMoving = false;
         },
         error: err => {
           console.error('Error moving items to workspace:', err);

@@ -34,14 +34,11 @@ import {GalleryService} from '../gallery.service';
 import {UserService} from '../../common/services/user.service';
 import {WorkspaceStateService} from '../../services/workspace/workspace-state.service';
 import {TagsService} from '../../common/services/tags.service';
-import {MediaUploadService} from '../../common/services/media-upload/media-upload.service';
-import {GoogleDriveService} from '../../common/services/google-drive/google-drive.service';
 import {FolderService} from '../../common/services/folder.service';
 
 describe('MediaGalleryComponent', () => {
   let component: MediaGalleryComponent;
   let fixture: ComponentFixture<MediaGalleryComponent>;
-  let uploadService: MediaUploadService;
   let folderService: jasmine.SpyObj<FolderService>;
   let galleryService: GalleryService;
   let routerSpy: jasmine.SpyObj<Router>;
@@ -76,7 +73,6 @@ describe('MediaGalleryComponent', () => {
       ],
       schemas: [NO_ERRORS_SCHEMA],
       providers: [
-        MediaUploadService,
         {
           provide: FolderService,
           useValue: folderServiceSpy,
@@ -85,12 +81,6 @@ describe('MediaGalleryComponent', () => {
           provide: MatSnackBar,
           useValue: {
             open: jasmine.createSpy('open'),
-          },
-        },
-        {
-          provide: GoogleDriveService,
-          useValue: {
-            openPicker: () => of([]),
           },
         },
         {
@@ -106,7 +96,7 @@ describe('MediaGalleryComponent', () => {
             bulkDelete: () => of({deleted_count: 1}),
             bulkDownload: () => of(new Blob()),
             bulkCopy: () => of({}),
-            bulkMove: () => of({moved_count: 1}),
+            bulkMove: () => of({moved: [], failed: []}),
           },
         },
         {
@@ -161,7 +151,6 @@ describe('MediaGalleryComponent', () => {
 
     fixture = TestBed.createComponent(MediaGalleryComponent);
     component = fixture.componentInstance;
-    uploadService = TestBed.inject(MediaUploadService);
     folderService = TestBed.inject(
       FolderService,
     ) as jasmine.SpyObj<FolderService>;
@@ -171,6 +160,19 @@ describe('MediaGalleryComponent', () => {
 
   it('should create', () => {
     expect(component).toBeTruthy();
+  });
+
+  describe('Toolbar', () => {
+    it('should not render any upload entry point', () => {
+      const host = fixture.nativeElement as HTMLElement;
+
+      // The device-upload input and the "Add to Gallery" menu trigger were
+      // removed: neither backend endpoint nor Drive client id is available.
+      expect(host.querySelector('input[type="file"]')).toBeNull();
+      expect(host.textContent).not.toContain('Add to Gallery');
+      // Sanity check that the toolbar itself rendered.
+      expect(host.textContent).toContain('New Folder');
+    });
   });
 
   describe('ngOnInit filters restoration', () => {
@@ -219,6 +221,59 @@ describe('MediaGalleryComponent', () => {
       expect(component.onlyMyMedia).toBeFalse();
       expect(component.startDateFilter).toBeNull();
       expect(component.endDateFilter).toBeNull();
+    });
+  });
+
+  describe('Folder scoping of searches', () => {
+    it('should scope to the root while browsing the root unfiltered', () => {
+      const setFilters = spyOn(galleryService, 'setFilters');
+      component.currentFolderId = null;
+
+      component.searchTerm();
+
+      const filters = setFilters.calls.mostRecent().args[0];
+      expect(filters.isRoot).toBeTrue();
+      expect(filters.folderId).toBeUndefined();
+    });
+
+    it('should search the whole library for favorites at the root', () => {
+      const setFilters = spyOn(galleryService, 'setFilters');
+      component.currentFolderId = null;
+      component.favoritesOnly = true;
+
+      component.searchTerm();
+
+      const filters = setFilters.calls.mostRecent().args[0];
+      expect(filters.favoritesOnly).toBeTrue();
+      // Neither field: `isRoot` would drop every favorite inside a folder.
+      expect(filters.isRoot).toBeUndefined();
+      expect(filters.folderId).toBeUndefined();
+    });
+
+    it('should search the whole library for a tag filter at the root', () => {
+      const setFilters = spyOn(galleryService, 'setFilters');
+      component.currentFolderId = null;
+      component.tagsFilter = ['brand'];
+
+      component.searchTerm();
+
+      const filters = setFilters.calls.mostRecent().args[0];
+      expect(filters.tags).toEqual(['brand']);
+      expect(filters.isRoot).toBeUndefined();
+      expect(filters.folderId).toBeUndefined();
+    });
+
+    it('should keep favorites scoped to the folder being browsed', () => {
+      const setFilters = spyOn(galleryService, 'setFilters');
+      component.currentFolderId = 7;
+      component.favoritesOnly = true;
+
+      component.searchTerm();
+
+      const filters = setFilters.calls.mostRecent().args[0];
+      expect(filters.favoritesOnly).toBeTrue();
+      expect(filters.folderId).toBe(7);
+      expect(filters.isRoot).toBeUndefined();
     });
   });
 
@@ -321,7 +376,15 @@ describe('MediaGalleryComponent', () => {
     });
 
     it('should call galleryService.bulkMove when moving items across workspaces', () => {
-      spyOn(galleryService, 'bulkMove').and.returnValue(of({moved_count: 2}));
+      spyOn(galleryService, 'bulkMove').and.returnValue(
+        of({
+          moved: [
+            {id: 1, type: 'media_item'},
+            {id: 2, type: 'source_asset'},
+          ],
+          failed: [],
+        }),
+      );
       component.images = [
         {id: 1, itemType: 'media_item'} as any,
         {id: 2, itemType: 'source_asset'} as any,
@@ -352,7 +415,9 @@ describe('MediaGalleryComponent', () => {
     });
 
     it('should call galleryService.bulkMove when moving folder across workspaces', () => {
-      spyOn(galleryService, 'bulkMove').and.returnValue(of({moved_count: 1}));
+      spyOn(galleryService, 'bulkMove').and.returnValue(
+        of({moved: [{id: 10, type: 'folder'}], failed: []}),
+      );
       spyOn(component, 'loadFolders');
       component.folders = [
         {id: 10, name: 'Folder 1', workspace_id: 1, parent_id: null} as any,
@@ -376,6 +441,64 @@ describe('MediaGalleryComponent', () => {
       expect(component.loadFolders).toHaveBeenCalled();
     });
 
+    it('should restore failed rows and warn when bulkMove partially fails', () => {
+      const snackBar = TestBed.inject(MatSnackBar);
+      spyOn(galleryService, 'bulkMove').and.returnValue(
+        of({
+          moved: [{id: 1, type: 'media_item'}],
+          failed: [{id: 2, type: 'source_asset', reason: 'Not authorized'}],
+        }),
+      );
+      spyOn(component, 'searchTerm');
+      component.images = [
+        {id: 1, itemType: 'media_item'} as any,
+        {id: 2, itemType: 'source_asset'} as any,
+        {id: 3, itemType: 'media_item'} as any,
+      ];
+
+      (component as any).executeMoveToWorkspace(
+        [1],
+        [2],
+        [],
+        88,
+        'Target Workspace',
+      );
+
+      expect(component.images.map(img => `${img.itemType}:${img.id}`)).toEqual([
+        'source_asset:2',
+        'media_item:3',
+      ]);
+      expect(component.searchTerm).not.toHaveBeenCalled();
+      expect(snackBar.open).toHaveBeenCalledWith(
+        '1 of 2 items could not be moved to "Target Workspace": Not authorized',
+        'Close',
+        {duration: 5000},
+      );
+    });
+
+    it('should reconcile bulkMove results on the (type, id) pair, not the id alone', () => {
+      spyOn(galleryService, 'bulkMove').and.returnValue(
+        of({
+          moved: [{id: 5, type: 'media_item'}],
+          failed: [{id: 5, type: 'folder', reason: 'Not authorized'}],
+        }),
+      );
+      spyOn(component, 'searchTerm');
+      component.images = [{id: 5, itemType: 'media_item'} as any];
+      component.folders = [{id: 5, name: 'Folder 5'} as any];
+
+      (component as any).executeMoveToWorkspace(
+        [5],
+        [],
+        [5],
+        88,
+        'Target Workspace',
+      );
+
+      expect(component.images.length).toBe(0);
+      expect(component.folders.map(folder => folder.id)).toEqual([5]);
+    });
+
     it('should handle openMoveFolderDialog when destination workspace is chosen', () => {
       const mockDialogRef = {
         afterClosed: () =>
@@ -386,7 +509,9 @@ describe('MediaGalleryComponent', () => {
         component as any,
         'executeMoveToWorkspace',
       ).and.callThrough();
-      spyOn(galleryService, 'bulkMove').and.returnValue(of({moved_count: 1}));
+      spyOn(galleryService, 'bulkMove').and.returnValue(
+        of({moved: [{id: 10, type: 'folder'}], failed: []}),
+      );
 
       const folder = {
         id: 10,

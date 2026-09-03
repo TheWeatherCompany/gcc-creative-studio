@@ -42,6 +42,27 @@ import {
 } from '../common/models/search.model';
 import {WorkspaceStateService} from '../services/workspace/workspace-state.service';
 
+/** A row that POST /gallery/bulk-move successfully moved. */
+export interface BulkMoveResult {
+  id: number;
+  type: string;
+}
+
+/** A row bulk-move refused, carrying the reason to surface to the user. */
+export interface BulkMoveFailure extends BulkMoveResult {
+  reason: string;
+}
+
+/**
+ * Partial-success contract for bulk-move: every requested row lands in exactly
+ * one of the two lists. A row's identity is the (type, id) pair, since ids are
+ * per-type: media_item 5 and folder 5 are different rows.
+ */
+export interface BulkMoveResponse {
+  moved: BulkMoveResult[];
+  failed: BulkMoveFailure[];
+}
+
 @Injectable({
   providedIn: 'root',
 })
@@ -390,9 +411,9 @@ export class GalleryService implements OnDestroy {
   bulkMove(
     items: {id: number; type: string}[],
     targetWorkspaceId: number,
-  ): Observable<{moved_count: number}> {
+  ): Observable<BulkMoveResponse> {
     const url = `${environment.backendURL}/gallery/bulk-move`;
-    return this.http.post<{moved_count: number}>(url, {
+    return this.http.post<BulkMoveResponse>(url, {
       items,
       target_workspace_id: targetWorkspaceId,
     });
