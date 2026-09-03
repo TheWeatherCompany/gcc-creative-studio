@@ -51,6 +51,18 @@ export interface GenerationModelConfig {
   capabilities: ModelCapability;
 }
 
+// Canonical set of Gemini Omni video model API values. Keep in sync with the
+// backend GenerationModelEnum Omni members (see base_dto.GenerationModelEnum.is_omni).
+export const OMNI_MODEL_VALUES: readonly string[] = [
+  'gemini-omni-generate-preview',
+  'gemini-omni-flash-preview',
+  'gemini-omni-1.1-flash-preview',
+];
+
+export function isOmniModelValue(value?: string | null): boolean {
+  return !!value && OMNI_MODEL_VALUES.includes(value);
+}
+
 export const MODEL_CONFIGS: GenerationModelConfig[] = [
   // --- Image Models ---
   {

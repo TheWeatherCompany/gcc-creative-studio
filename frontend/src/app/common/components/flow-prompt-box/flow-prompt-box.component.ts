@@ -30,7 +30,10 @@ import {
 } from '@angular/core';
 import {MatSnackBar} from '@angular/material/snack-bar';
 import {ReferenceImage} from '../../models/search.model';
-import {GenerationModelConfig} from '../../config/model-config';
+import {
+  GenerationModelConfig,
+  isOmniModelValue,
+} from '../../config/model-config';
 import {MatIconModule} from '@angular/material/icon';
 import {CommonModule} from '@angular/common';
 import {FormsModule} from '@angular/forms';
@@ -367,14 +370,9 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     );
   }
 
-  isOmniModel(model?: any): boolean {
+  isOmniModel(model?: {value?: string}): boolean {
     const activeModel = model || this.getSelectedModelObject();
-    const val = activeModel?.value;
-    return (
-      val === 'gemini-omni-flash-preview' ||
-      val === 'gemini-omni-1.1-flash-preview' ||
-      val === 'gemini-omni'
-    );
+    return isOmniModelValue(activeModel?.value);
   }
 
   getSelectedModelResolutions(model?: any): ('1K' | '2K' | '4K')[] {

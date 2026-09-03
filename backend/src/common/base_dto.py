@@ -119,6 +119,15 @@ class GenerationModelEnum(str, Enum):
         ]
 
     @property
+    def is_omni(self) -> bool:
+        """Returns True if the model is a Gemini Omni video model."""
+        return self in [
+            GenerationModelEnum.GEMINI_OMNI,
+            GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW,
+            GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW,
+        ]
+
+    @property
     def valid_aspect_ratios(self) -> list["AspectRatioEnum"]:
         """Returns the valid aspect ratios for the model."""
         if self in [

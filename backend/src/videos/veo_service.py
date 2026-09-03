@@ -438,11 +438,7 @@ def _process_video_in_background(
 
                         start_time = time.monotonic()
 
-                        if request_dto.generation_model in [
-                            GenerationModelEnum.GEMINI_OMNI,
-                            GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW,
-                            GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW,
-                        ]:
+                        if request_dto.generation_model.is_omni:
                             worker_logger.info(
                                 "Running Gemini Omni video generation via Interactions API..."
                             )
@@ -1020,11 +1016,7 @@ def _process_video_in_background(
                                 operation.response.generated_videos or [],
                             )
 
-                        if request_dto.generation_model not in [
-                            GenerationModelEnum.GEMINI_OMNI,
-                            GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW,
-                            GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW,
-                        ]:
+                        if not request_dto.generation_model.is_omni:
                             valid_generated_videos = [
                                 img
                                 for img in all_generated_videos

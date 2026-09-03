@@ -236,11 +236,7 @@ class CreateVeoDto(BaseDto):
                 )
 
         # Validate model-specific resolution limits
-        if model in (
-            GenerationModelEnum.GEMINI_OMNI,
-            GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW,
-            GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW,
-        ):
+        if model.is_omni:
             allowed_resolutions = {"1K"}
         elif model in (
             GenerationModelEnum.VEO_3_1_LITE_GENERATE_001,
@@ -258,11 +254,7 @@ class CreateVeoDto(BaseDto):
 
         # Validate model-specific duration limits
         max_duration = 8
-        if model in (
-            GenerationModelEnum.GEMINI_OMNI,
-            GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW,
-            GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW,
-        ):
+        if model.is_omni:
             max_duration = 10
 
         if self.duration_seconds > max_duration:
