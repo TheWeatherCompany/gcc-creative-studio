@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class BulkMoveItemDto(BaseModel):
@@ -24,3 +24,27 @@ class BulkMoveItemDto(BaseModel):
 class BulkMoveDto(BaseModel):
     items: list[BulkMoveItemDto]
     target_workspace_id: int
+
+
+class BulkMoveResultDto(BaseModel):
+    """One row a bulk move relocated, identified by the (type, id) pair."""
+
+    id: int
+    type: str
+
+
+class BulkMoveFailureDto(BulkMoveResultDto):
+    """One row a bulk move refused, with a fixed, client-safe reason."""
+
+    reason: str
+
+
+class BulkMoveResponseDto(BaseModel):
+    """Partial-success contract: every requested row lands in exactly one list.
+
+    Identity is the (type, id) pair, because ids are per-type: media_item 5
+    and folder 5 are different rows.
+    """
+
+    moved: list[BulkMoveResultDto] = Field(default_factory=list)
+    failed: list[BulkMoveFailureDto] = Field(default_factory=list)

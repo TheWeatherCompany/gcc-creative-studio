@@ -15,10 +15,12 @@
 
 
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 
 from src.common.base_dto import (
     AspectRatioEnum,
@@ -31,6 +33,8 @@ from src.common.schema.media_item_model import (
     MediaItemModel,
     SourceAssetLink,
 )
+from src.folders.repository.folder_repository import FolderSubtreeChangedError
+from src.galleries.dto.bulk_move_dto import BulkMoveDto, BulkMoveItemDto
 from src.galleries.dto.gallery_search_dto import GallerySearchDto
 from src.galleries.dto.unified_gallery_response import (
     UnifiedGalleryItemResponse,
@@ -53,6 +57,10 @@ def fixture_service():
     mock_tags_repo = AsyncMock()
     mock_favorites_repo = AsyncMock()
     mock_folder_repo = AsyncMock()
+    mock_db = AsyncMock()
+    # Conditional moves succeed by default; tests that exercise a lost race
+    # override this with rowcount 0.
+    mock_db.execute.return_value = MagicMock(rowcount=1)
 
     service = GalleryService(
         media_repo=mock_media_repo,
@@ -67,6 +75,7 @@ def fixture_service():
         tags_repo=mock_tags_repo,
         favorites_repo=mock_favorites_repo,
         folder_repo=mock_folder_repo,
+        db=mock_db,
     )
 
     # Attach mocks for ease of use in tests
@@ -81,6 +90,7 @@ def fixture_service():
     service.mock_tags_repo = mock_tags_repo
     service.mock_favorites_repo = mock_favorites_repo
     service.mock_folder_repo = mock_folder_repo
+    service.mock_db = mock_db
 
     return service
 
@@ -686,159 +696,461 @@ async def test_get_media_by_id_with_both_source_references(service):
     )
 
 
+def make_row(item_id: int, workspace_id: int = 99, user_id: int | None = 1):
+    """Minimal media item / source asset shape that bulk_move reads."""
+    return SimpleNamespace(
+        id=item_id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        folder_id=7,
+    )
+
+
+def make_folder(folder_id: int, workspace_id: int = 99):
+    """Minimal folder shape that bulk_move reads off the locked row."""
+    return SimpleNamespace(
+        id=folder_id,
+        workspace_id=workspace_id,
+        name="Campaigns",
+    )
+
+
+def move_dto(*items):
+    """Builds a BulkMoveDto targeting workspace 88 from (id, type) pairs."""
+    return BulkMoveDto(
+        target_workspace_id=88,
+        items=[
+            BulkMoveItemDto(id=item_id, type=item_type)
+            for item_id, item_type in items
+        ],
+    )
+
+
+def executed_statements(mock_db) -> list:
+    """The statements handed to db.execute, in call order."""
+    return [call.args[0] for call in mock_db.execute.await_args_list]
+
+
+def as_pairs(results) -> list[tuple[str, int]]:
+    """The (type, id) identity of each result row."""
+    return [(row.type, row.id) for row in results]
+
+
+def integrity_error(constraint_name: str) -> IntegrityError:
+    """Builds an IntegrityError carrying a psycopg style constraint name."""
+    orig = SimpleNamespace(
+        diag=SimpleNamespace(constraint_name=constraint_name)
+    )
+    return IntegrityError("UPDATE folders ...", {}, orig)
+
+
+def record_transaction_calls(mock_db) -> list[str]:
+    """Records commit/rollback on the session in the order they happen."""
+    calls: list[str] = []
+
+    async def commit():
+        calls.append("commit")
+
+    async def rollback():
+        calls.append("rollback")
+
+    mock_db.commit.side_effect = commit
+    mock_db.rollback.side_effect = rollback
+    return calls
+
+
+MOVER = UserModel(
+    id=1,
+    email="user@test.com",
+    name="User",
+    roles=[UserRoleEnum.USER],
+)
+
+
 @pytest.mark.anyio
 async def test_bulk_move_media_item_success(service):
-    from pydantic import BaseModel
+    service.mock_media_repo.get_by_id.return_value = make_row(1)
 
-    from src.galleries.dto.bulk_move_dto import BulkMoveDto, BulkMoveItemDto
+    result = await service.bulk_move(move_dto((1, "media_item")), MOVER)
 
-    class DummyMedia(BaseModel):
-        id: int
-        workspace_id: int
-        folder_id: int | None = None
-        user_id: int
-        user_email: str
-        gcs_uris: list
+    assert as_pairs(result.moved) == [("media_item", 1)]
+    assert result.failed == []
 
-    bulk_dto = BulkMoveDto(
-        target_workspace_id=88,
-        items=[BulkMoveItemDto(id=1, type="media_item")],
-    )
-    current_user = UserModel(
-        id=1,
-        email="user@test.com",
-        name="User",
-        roles=[UserRoleEnum.USER],
-    )
+    # The write pins identity, the authorized source workspace and active
+    # state, so authorization and the update hit the same row atomically.
+    statement = executed_statements(service.mock_db)[0]
+    sql = str(statement)
+    assert "UPDATE media_items" in sql
+    assert "media_items.id = :id_1" in sql
+    assert "media_items.workspace_id = :workspace_id_1" in sql
+    assert "media_items.deleted_at IS NULL" in sql
+    assert "updated_at=now()" in sql
+    params = statement.compile().params
+    assert params["id_1"] == 1
+    assert params["workspace_id_1"] == 99
+    assert params["workspace_id"] == 88
+    assert params["folder_id"] is None
 
-    mock_media = DummyMedia(
-        id=1,
-        workspace_id=99,
-        folder_id=12,
-        user_id=1,
-        user_email="user@test.com",
-        gcs_uris=[],
-    )
-    service.mock_media_repo.get_by_id.return_value = mock_media
-
-    result = await service.bulk_move(bulk_dto, current_user)
-
-    assert result["moved_count"] == 1
-    service.mock_media_repo.update.assert_called_once_with(
-        1, {"workspace_id": 88, "folder_id": None}
-    )
+    # base_repository.update commits internally, so it can never be the write
+    # a service-owned transaction wraps.
+    service.mock_media_repo.update.assert_not_called()
 
 
 @pytest.mark.anyio
 async def test_bulk_move_source_asset_success(service):
-    from src.galleries.dto.bulk_move_dto import BulkMoveDto, BulkMoveItemDto
-    from src.source_assets.schema.source_asset_model import (
-        AssetScopeEnum,
-        AssetTypeEnum,
-        SourceAssetModel,
-    )
+    service.mock_source_asset_repo.get_by_id.return_value = make_row(5)
 
-    bulk_dto = BulkMoveDto(
-        target_workspace_id=88,
-        items=[BulkMoveItemDto(id=5, type="source_asset")],
-    )
-    current_user = UserModel(
-        id=1,
-        email="user@test.com",
-        name="User",
-        roles=[UserRoleEnum.USER],
-    )
+    result = await service.bulk_move(move_dto((5, "source_asset")), MOVER)
 
-    asset = SourceAssetModel(
-        id=5,
-        workspace_id=99,
-        folder_id=15,
-        user_id=1,
-        gcs_uri="gs://b",
-        original_filename="a",
-        file_hash="h",
-        scope=AssetScopeEnum.PRIVATE,
-        mime_type=MimeTypeEnum.IMAGE_PNG,
-        asset_type=AssetTypeEnum.GENERIC_IMAGE,
-    )
-    service.mock_source_asset_repo.get_by_id.return_value = asset
+    assert as_pairs(result.moved) == [("source_asset", 5)]
+    assert result.failed == []
 
-    result = await service.bulk_move(bulk_dto, current_user)
-    assert result["moved_count"] == 1
-    service.mock_source_asset_repo.update.assert_called_once_with(
-        5, {"workspace_id": 88, "folder_id": None}
-    )
+    statement = executed_statements(service.mock_db)[0]
+    sql = str(statement)
+    assert "UPDATE source_assets" in sql
+    assert "source_assets.workspace_id = :workspace_id_1" in sql
+    assert "source_assets.deleted_at IS NULL" in sql
+    params = statement.compile().params
+    assert params["id_1"] == 5
+    assert params["workspace_id_1"] == 99
+    assert params["workspace_id"] == 88
+    service.mock_source_asset_repo.update.assert_not_called()
 
 
 @pytest.mark.anyio
 async def test_bulk_move_folder_success(service):
-    from pydantic import BaseModel
-    from src.galleries.dto.bulk_move_dto import BulkMoveDto, BulkMoveItemDto
+    service.mock_folder_repo.get_folder_for_update.return_value = make_folder(
+        10,
+    )
 
-    class DummyFolder(BaseModel):
-        id: int
-        workspace_id: int
-        name: str
+    result = await service.bulk_move(move_dto((10, "folder")), MOVER)
 
-    bulk_dto = BulkMoveDto(
+    assert as_pairs(result.moved) == [("folder", 10)]
+    assert result.failed == []
+
+    # The root is locked first, and the workspace we authorize against is the
+    # locked row's, which is also what every subtree write is predicated on.
+    service.mock_folder_repo.get_folder_for_update.assert_awaited_once_with(10)
+    service.mock_workspace_auth.authorize.assert_any_call(
+        workspace_id=88, user=MOVER
+    )
+    service.mock_workspace_auth.authorize.assert_any_call(
+        workspace_id=99, user=MOVER
+    )
+    service.mock_folder_repo.move_folder_to_workspace.assert_awaited_once_with(
+        folder_id=10,
         target_workspace_id=88,
-        items=[BulkMoveItemDto(id=10, type="folder")],
+        authorized_source_workspace_id=99,
+        commit=False,
     )
-    current_user = UserModel(
-        id=1,
-        email="user@test.com",
-        name="User",
-        roles=[UserRoleEnum.USER],
-    )
-
-    folder = DummyFolder(id=10, workspace_id=99, name="Campaigns")
-    service.mock_folder_repo.get_folder_by_id.return_value = folder
-    service.mock_folder_repo.move_folder_to_workspace.return_value = {
-        "folders_moved": 2,
-        "media_moved": 3,
-        "assets_moved": 1,
-    }
-
-    result = await service.bulk_move(bulk_dto, current_user)
-    assert result["moved_count"] == 1
-    service.mock_workspace_auth.authorize.assert_any_call(
-        workspace_id=88, user=current_user
-    )
-    service.mock_workspace_auth.authorize.assert_any_call(
-        workspace_id=99, user=current_user
-    )
-    service.mock_folder_repo.move_folder_to_workspace.assert_called_once_with(
-        folder_id=10, target_workspace_id=88
-    )
+    assert service.mock_db.commit.await_count == 1
 
 
 @pytest.mark.anyio
 async def test_bulk_move_folder_same_workspace(service):
-    from pydantic import BaseModel
-    from src.galleries.dto.bulk_move_dto import BulkMoveDto, BulkMoveItemDto
-
-    class DummyFolder(BaseModel):
-        id: int
-        workspace_id: int
-        name: str
-
-    bulk_dto = BulkMoveDto(
-        target_workspace_id=88,
-        items=[BulkMoveItemDto(id=10, type="folder")],
-    )
-    current_user = UserModel(
-        id=1,
-        email="user@test.com",
-        name="User",
-        roles=[UserRoleEnum.USER],
+    service.mock_folder_repo.get_folder_for_update.return_value = make_folder(
+        10,
+        workspace_id=88,
     )
 
-    folder = DummyFolder(id=10, workspace_id=88, name="Campaigns")
-    service.mock_folder_repo.get_folder_by_id.return_value = folder
+    result = await service.bulk_move(move_dto((10, "folder")), MOVER)
 
-    result = await service.bulk_move(bulk_dto, current_user)
-    assert result["moved_count"] == 0
+    assert result.moved == []
+    assert as_pairs(result.failed) == [("folder", 10)]
+    assert result.failed[0].reason == "Already in the target workspace"
     service.mock_folder_repo.move_folder_to_workspace.assert_not_called()
+    service.mock_db.commit.assert_not_called()
+    assert service.mock_db.rollback.await_count == 1
+
+
+@pytest.mark.anyio
+async def test_bulk_move_partial_success_success_then_failure(service):
+    """The first item stays committed and the second is left untouched."""
+    service.mock_media_repo.get_by_id.return_value = make_row(1)
+    service.mock_source_asset_repo.get_by_id.return_value = make_row(
+        2,
+        workspace_id=77,
+    )
+    # The source asset lost its row: the conditional update matches nothing.
+    service.mock_db.execute.side_effect = [
+        MagicMock(rowcount=1),
+        MagicMock(rowcount=0),
+    ]
+    calls = record_transaction_calls(service.mock_db)
+
+    result = await service.bulk_move(
+        move_dto((1, "media_item"), (2, "source_asset")),
+        MOVER,
+    )
+
+    assert as_pairs(result.moved) == [("media_item", 1)]
+    assert as_pairs(result.failed) == [("source_asset", 2)]
+    assert result.failed[0].reason == "item changed or not found"
+
+    # The commit for item 1 landed before item 2 was rolled back, so the
+    # first item's move survives the second item's failure.
+    assert calls == ["commit", "rollback"]
+
+
+@pytest.mark.anyio
+async def test_bulk_move_partial_success_failure_then_success(service):
+    """A failed first item does not stop the loop from moving the second."""
+    service.mock_source_asset_repo.get_by_id.return_value = make_row(
+        2,
+        user_id=42,
+    )
+    service.mock_media_repo.get_by_id.return_value = make_row(1)
+    calls = record_transaction_calls(service.mock_db)
+
+    result = await service.bulk_move(
+        move_dto((2, "source_asset"), (1, "media_item")),
+        MOVER,
+    )
+
+    assert as_pairs(result.failed) == [("source_asset", 2)]
+    assert result.failed[0].reason == "Not authorized"
+    assert as_pairs(result.moved) == [("media_item", 1)]
+    assert calls == ["rollback", "commit"]
+
+
+@pytest.mark.anyio
+async def test_bulk_move_folder_subtree_failure_rolls_back(service):
+    """A subtree that changed mid-move loses every write it made."""
+    service.mock_folder_repo.get_folder_for_update.return_value = make_folder(
+        10,
+    )
+    service.mock_folder_repo.move_folder_to_workspace.side_effect = (
+        FolderSubtreeChangedError("subtree changed")
+    )
+
+    result = await service.bulk_move(move_dto((10, "folder")), MOVER)
+
+    assert result.moved == []
+    assert as_pairs(result.failed) == [("folder", 10)]
+    assert result.failed[0].reason == "item changed or not found"
+    service.mock_db.commit.assert_not_called()
+    assert service.mock_db.rollback.await_count == 1
+
+
+@pytest.mark.anyio
+async def test_bulk_move_results_identify_items_by_id_and_type(service):
+    """media_item 5 and folder 5 are different rows with the same id."""
+    service.mock_media_repo.get_by_id.return_value = make_row(5)
+    service.mock_folder_repo.get_folder_for_update.return_value = make_folder(5)
+    service.mock_folder_repo.move_folder_to_workspace.side_effect = (
+        FolderSubtreeChangedError("subtree changed")
+    )
+
+    result = await service.bulk_move(
+        move_dto((5, "media_item"), (5, "folder")),
+        MOVER,
+    )
+
+    assert as_pairs(result.moved) == [("media_item", 5)]
+    assert as_pairs(result.failed) == [("folder", 5)]
+    assert result.moved[0].model_dump() == {"id": 5, "type": "media_item"}
+    assert result.failed[0].model_dump() == {
+        "id": 5,
+        "type": "folder",
+        "reason": "item changed or not found",
+    }
+
+
+@pytest.mark.anyio
+async def test_bulk_move_lost_source_workspace_race_is_reported_failed(service):
+    """A row that left the authorized workspace matches no rows and fails."""
+    service.mock_media_repo.get_by_id.return_value = make_row(1)
+    service.mock_db.execute.return_value = MagicMock(rowcount=0)
+
+    result = await service.bulk_move(move_dto((1, "media_item")), MOVER)
+
+    assert result.moved == []
+    assert as_pairs(result.failed) == [("media_item", 1)]
+    assert result.failed[0].reason == "item changed or not found"
+    service.mock_db.commit.assert_not_called()
+    assert service.mock_db.rollback.await_count == 1
+
+
+@pytest.mark.anyio
+async def test_bulk_move_commits_once_after_the_service_owned_write(service):
+    """No collaborator commits before the service's own per-item commit."""
+    calls: list[str] = []
+    service.mock_media_repo.get_by_id.return_value = make_row(1)
+    service.mock_folder_repo.get_folder_for_update.return_value = make_folder(
+        10,
+    )
+
+    def record_execute(*_args, **_kwargs):
+        calls.append("execute")
+        return MagicMock(rowcount=1)
+
+    async def record_move(commit, **_kwargs):
+        # commit=False is what leaves the transaction to the service.
+        calls.append(f"move_folder(commit={commit})")
+
+    async def record_commit():
+        calls.append("commit")
+
+    service.mock_db.execute.side_effect = record_execute
+    service.mock_folder_repo.move_folder_to_workspace.side_effect = record_move
+    service.mock_db.commit.side_effect = record_commit
+
+    result = await service.bulk_move(
+        move_dto((1, "media_item"), (10, "folder")),
+        MOVER,
+    )
+
+    assert len(result.moved) == 2
+    assert calls == [
+        "execute",
+        "commit",
+        "move_folder(commit=False)",
+        "commit",
+    ]
+    service.mock_db.rollback.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_bulk_move_target_workspace_denied_is_top_level_403(service):
+    """Target authorization is common to the request, so it is not per item."""
+    service.mock_workspace_auth.authorize.side_effect = HTTPException(
+        status_code=403,
+        detail="You do not have permission to access this workspace.",
+    )
+    service.mock_media_repo.get_by_id.return_value = make_row(1)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.bulk_move(move_dto((1, "media_item")), MOVER)
+
+    assert exc_info.value.status_code == 403
+    service.mock_media_repo.get_by_id.assert_not_called()
+    service.mock_db.execute.assert_not_called()
+    service.mock_db.commit.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_bulk_move_source_workspace_denied_reason_is_sanitized(service):
+    """WorkspaceAuth's raw detail never reaches the client."""
+    service.mock_media_repo.get_by_id.return_value = make_row(1)
+
+    async def authorize(workspace_id, user):  # pylint: disable=unused-argument
+        if workspace_id == 99:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have permission to access this workspace.",
+            )
+
+    service.mock_workspace_auth.authorize.side_effect = authorize
+
+    result = await service.bulk_move(move_dto((1, "media_item")), MOVER)
+
+    assert as_pairs(result.failed) == [("media_item", 1)]
+    assert result.failed[0].reason == "Not authorized"
+    service.mock_db.execute.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_bulk_move_missing_item_is_reported_failed(service):
+    service.mock_media_repo.get_by_id.return_value = None
+    service.mock_folder_repo.get_folder_for_update.return_value = None
+
+    result = await service.bulk_move(
+        move_dto((1, "media_item"), (10, "folder")),
+        MOVER,
+    )
+
+    assert result.moved == []
+    assert as_pairs(result.failed) == [("media_item", 1), ("folder", 10)]
+    assert {row.reason for row in result.failed} == {"Not found"}
+    service.mock_db.execute.assert_not_called()
+    service.mock_folder_repo.move_folder_to_workspace.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_bulk_move_rejects_a_row_the_caller_does_not_own(service):
+    """Same per-item ownership guard bulk_delete applies in this file."""
+    service.mock_media_repo.get_by_id.return_value = make_row(1, user_id=42)
+
+    result = await service.bulk_move(move_dto((1, "media_item")), MOVER)
+
+    assert result.moved == []
+    assert as_pairs(result.failed) == [("media_item", 1)]
+    assert result.failed[0].reason == "Not authorized"
+    service.mock_db.execute.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_bulk_move_admin_may_move_a_row_owned_by_someone_else(service):
+    admin = UserModel(
+        id=2,
+        email="admin@test.com",
+        name="Admin",
+        roles=[UserRoleEnum.ADMIN],
+    )
+    service.mock_media_repo.get_by_id.return_value = make_row(1, user_id=42)
+
+    result = await service.bulk_move(move_dto((1, "media_item")), admin)
+
+    assert as_pairs(result.moved) == [("media_item", 1)]
+
+
+@pytest.mark.anyio
+async def test_bulk_move_unsupported_item_type_is_reported_failed(service):
+    result = await service.bulk_move(move_dto((3, "playlist")), MOVER)
+
+    assert result.moved == []
+    assert as_pairs(result.failed) == [("playlist", 3)]
+    assert result.failed[0].reason == "Unsupported item type"
+    service.mock_db.commit.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_bulk_move_folder_name_conflict_is_its_own_reason(service):
+    """Two movers racing for the same destination name is a known class."""
+    service.mock_folder_repo.get_folder_for_update.return_value = make_folder(
+        10,
+    )
+    service.mock_folder_repo.move_folder_to_workspace.side_effect = (
+        integrity_error("uq_folders_workspace_root_name_active")
+    )
+
+    result = await service.bulk_move(move_dto((10, "folder")), MOVER)
+
+    assert result.moved == []
+    assert result.failed[0].reason == "Name conflict at destination"
+    service.mock_db.commit.assert_not_called()
+    assert service.mock_db.rollback.await_count == 1
+
+
+@pytest.mark.anyio
+async def test_bulk_move_other_integrity_error_is_not_a_name_conflict(service):
+    service.mock_folder_repo.get_folder_for_update.return_value = make_folder(
+        10,
+    )
+    service.mock_folder_repo.move_folder_to_workspace.side_effect = (
+        integrity_error("folders_workspace_id_fkey")
+    )
+
+    result = await service.bulk_move(move_dto((10, "folder")), MOVER)
+
+    assert result.moved == []
+    assert result.failed[0].reason == "Move failed"
+    assert service.mock_db.rollback.await_count == 1
+
+
+@pytest.mark.anyio
+async def test_bulk_move_unexpected_error_reason_is_sanitized(service):
+    service.mock_media_repo.get_by_id.return_value = make_row(1)
+    service.mock_db.execute.side_effect = RuntimeError(
+        "connection to db-prod-1 as svc-account failed",
+    )
+
+    result = await service.bulk_move(move_dto((1, "media_item")), MOVER)
+
+    assert result.moved == []
+    assert result.failed[0].reason == "Move failed"
+    service.mock_db.commit.assert_not_called()
+    assert service.mock_db.rollback.await_count == 1
 
 
 @pytest.mark.anyio

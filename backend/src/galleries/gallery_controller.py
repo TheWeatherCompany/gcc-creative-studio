@@ -19,7 +19,7 @@ from src.common.dto.pagination_response_dto import PaginationResponseDto
 from src.galleries.dto.bulk_copy_dto import BulkCopyDto
 from src.galleries.dto.bulk_delete_dto import BulkDeleteDto
 from src.galleries.dto.bulk_download_dto import BulkDownloadDto
-from src.galleries.dto.bulk_move_dto import BulkMoveDto
+from src.galleries.dto.bulk_move_dto import BulkMoveDto, BulkMoveResponseDto
 from src.galleries.dto.gallery_response_dto import MediaItemResponse
 from src.galleries.dto.gallery_search_dto import GallerySearchDto
 from src.galleries.dto.unified_gallery_response import (
@@ -191,13 +191,17 @@ async def bulk_copy_items(
     )
 
 
-@router.post("/bulk-move")
+@router.post("/bulk-move", response_model=BulkMoveResponseDto)
 async def bulk_move_items(
     bulk_move_dto: BulkMoveDto,
     current_user: UserModel = Depends(get_current_user),
     service: GalleryService = Depends(),
-):
-    """Bulk move media items, source assets, and folders to another workspace."""
+) -> BulkMoveResponseDto:
+    """Bulk move media items, source assets, and folders to another workspace.
+
+    Reports partial success: each requested row comes back in either `moved`
+    or `failed`, identified by its (type, id) pair.
+    """
     return await service.bulk_move(
         bulk_move_dto=bulk_move_dto,
         current_user=current_user,
