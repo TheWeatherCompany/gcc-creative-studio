@@ -107,7 +107,9 @@ export class FolderCardComponent {
         ghost.style.gap = '6px';
         ghost.style.boxShadow = '0 6px 20px rgba(0, 0, 0, 0.4)';
         ghost.style.zIndex = '99999';
-        ghost.innerHTML = `<span>📁 Moving folder "${this.folder.name}"</span>`;
+        // textContent, not innerHTML: folder names are user-controlled and
+        // stored, so interpolating one into HTML is a stored XSS sink.
+        ghost.textContent = `📁 Moving folder "${this.folder.name}"`;
         document.body.appendChild(ghost);
         event.dataTransfer.setDragImage(ghost, 20, 20);
         setTimeout(() => {

@@ -332,7 +332,9 @@ export class GalleryCardComponent implements OnDestroy {
         ghost.style.gap = '6px';
         ghost.style.boxShadow = '0 6px 20px rgba(0, 0, 0, 0.4)';
         ghost.style.zIndex = '99999';
-        ghost.innerHTML = `<span>📁 Moving ${itemCount} ${itemCount === 1 ? 'item' : 'items'}</span>`;
+        // textContent for parity with folder-card: this interpolates only a
+        // number today, but the pattern must not be re-copied to a string.
+        ghost.textContent = `📁 Moving ${itemCount} ${itemCount === 1 ? 'item' : 'items'}`;
         document.body.appendChild(ghost);
         event.dataTransfer.setDragImage(ghost, 20, 20);
         setTimeout(() => {
