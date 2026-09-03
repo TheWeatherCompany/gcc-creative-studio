@@ -38,6 +38,11 @@ export interface ModelCapability {
   supportsLanguage?: boolean;
   supportsSeed?: boolean;
   supportsVideoReference?: boolean;
+  /**
+   * Whether sampling temperature can be set. Gemini image models accept it;
+   * Imagen does not expose it, and Gemini Omni rejects it outright.
+   */
+  supportsTemperature?: boolean;
 }
 
 export interface GenerationModelConfig {
@@ -92,6 +97,7 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       ], // All
       supportedResolutions: ['1K', '2K', '4K'],
       supportedDurations: [],
+      supportsTemperature: true,
       supportsGoogleSearch: true,
       supportsVideoReference: true,
     },
@@ -123,6 +129,7 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       ], // All
       supportedResolutions: ['1K'],
       supportedDurations: [],
+      supportsTemperature: true,
       supportsGoogleSearch: true,
       supportsVideoReference: true,
     },
@@ -150,6 +157,7 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       ], // All
       supportedResolutions: ['1K', '2K', '4K'],
       supportedDurations: [],
+      supportsTemperature: true,
       supportsGoogleSearch: true,
       supportsVideoReference: true,
     },
@@ -178,6 +186,7 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       supportedResolutions: ['1K', '2K', '4K'],
       supportedDurations: [],
       supportsVideoReference: true,
+      supportsTemperature: true,
     },
   },
 
