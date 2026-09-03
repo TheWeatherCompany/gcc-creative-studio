@@ -109,8 +109,6 @@ def upgrade() -> None:
                 mi.gcs_uris,
                 mi.thumbnail_uris,
                 mi.deleted_at,
-                mi.titles,
-                mi.descriptions,
                 jsonb_build_object(
                     'model', mi.model,
                     'prompt', mi.prompt,
@@ -122,11 +120,8 @@ def upgrade() -> None:
                     'lighting', mi.lighting,
                     'num_media', mi.num_media,
                     'generation_time', mi.generation_time,
-                    'file_name', mi.comment,
-                    'source_assets', mi.source_assets,
-                    'source_media_items', mi.source_media_items,
-                    'is_video', (mi.mime_type LIKE 'video%'),
-                    'is_audio', (mi.mime_type LIKE 'audio%'),
+                    'is_video', (mi.mime_type like 'video%'),
+                    'is_audio', (mi.mime_type like 'audio%'),
                     'tags', (
                         SELECT jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'color', t.color, 'workspace_id', t.workspace_id))
                         FROM media_item_tags mit
@@ -144,26 +139,19 @@ def upgrade() -> None:
                 sa.created_at,
                 'source_asset'::text AS item_type,
                 'completed'::text AS status,
-                CASE
-                    WHEN (sa.gcs_uri IS NOT NULL) THEN ARRAY[sa.gcs_uri]
-                    ELSE '{}'::text[]
-                END AS gcs_uris,
+                ARRAY[sa.gcs_uri] AS gcs_uris,
                 CASE
                     WHEN (sa.thumbnail_gcs_uri IS NOT NULL) THEN ARRAY[sa.thumbnail_gcs_uri]
                     ELSE '{}'::text[]
                 END AS thumbnail_uris,
                 sa.deleted_at,
-                sa.titles,
-                sa.descriptions,
                 jsonb_build_object(
-                    'file_name', sa.original_filename,
                     'original_filename', sa.original_filename,
                     'mime_type', sa.mime_type,
                     'aspect_ratio', sa.aspect_ratio,
                     'asset_type', sa.asset_type,
-                    'external_url', sa.external_url,
-                    'is_video', (sa.mime_type LIKE 'video%' OR sa.asset_type = 'youtube_video' OR sa.external_url IS NOT NULL),
-                    'is_audio', (sa.mime_type LIKE 'audio%'),
+                    'is_video', (sa.mime_type like 'video%'),
+                    'is_audio', (sa.mime_type like 'audio%'),
                     'tags', (
                         SELECT jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'color', t.color, 'workspace_id', t.workspace_id))
                         FROM source_asset_tags sat
@@ -202,8 +190,6 @@ def downgrade() -> None:
                 mi.gcs_uris,
                 mi.thumbnail_uris,
                 mi.deleted_at,
-                mi.titles,
-                mi.descriptions,
                 jsonb_build_object(
                     'model', mi.model,
                     'prompt', mi.prompt,
@@ -215,11 +201,8 @@ def downgrade() -> None:
                     'lighting', mi.lighting,
                     'num_media', mi.num_media,
                     'generation_time', mi.generation_time,
-                    'file_name', mi.comment,
-                    'source_assets', mi.source_assets,
-                    'source_media_items', mi.source_media_items,
-                    'is_video', (mi.mime_type LIKE 'video%'),
-                    'is_audio', (mi.mime_type LIKE 'audio%'),
+                    'is_video', (mi.mime_type like 'video%'),
+                    'is_audio', (mi.mime_type like 'audio%'),
                     'tags', (
                         SELECT jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'color', t.color, 'workspace_id', t.workspace_id))
                         FROM media_item_tags mit
@@ -236,26 +219,19 @@ def downgrade() -> None:
                 sa.created_at,
                 'source_asset'::text AS item_type,
                 'completed'::text AS status,
-                CASE
-                    WHEN (sa.gcs_uri IS NOT NULL) THEN ARRAY[sa.gcs_uri]
-                    ELSE '{}'::text[]
-                END AS gcs_uris,
+                ARRAY[sa.gcs_uri] AS gcs_uris,
                 CASE
                     WHEN (sa.thumbnail_gcs_uri IS NOT NULL) THEN ARRAY[sa.thumbnail_gcs_uri]
                     ELSE '{}'::text[]
                 END AS thumbnail_uris,
                 sa.deleted_at,
-                sa.titles,
-                sa.descriptions,
                 jsonb_build_object(
-                    'file_name', sa.original_filename,
                     'original_filename', sa.original_filename,
                     'mime_type', sa.mime_type,
                     'aspect_ratio', sa.aspect_ratio,
                     'asset_type', sa.asset_type,
-                    'external_url', sa.external_url,
-                    'is_video', (sa.mime_type LIKE 'video%' OR sa.asset_type = 'youtube_video' OR sa.external_url IS NOT NULL),
-                    'is_audio', (sa.mime_type LIKE 'audio%'),
+                    'is_video', (sa.mime_type like 'video%'),
+                    'is_audio', (sa.mime_type like 'audio%'),
                     'tags', (
                         SELECT jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'color', t.color, 'workspace_id', t.workspace_id))
                         FROM source_asset_tags sat
