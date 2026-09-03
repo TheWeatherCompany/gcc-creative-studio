@@ -1315,3 +1315,32 @@ def test_gemini_generate_image_omits_temperature_when_unset():
 
     config = mock_client.models.generate_content.call_args.kwargs["config"]
     assert config.temperature is None
+
+
+def test_gemini_generate_image_forwards_temperature_image_to_image():
+    """Temperature also reaches the model on the image-to-image path.
+
+    Text-to-image and image-to-image share one config-building block, but
+    they are separate worker call sites; this pins the reference-image shape
+    so a future refactor dropping temperature= on that branch is caught.
+    """
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = MagicMock(candidates=[])
+    reference_image = MagicMock(gcs_uri="gs://bucket/ref.png", mime_type="image/png")
+
+    gemini_generate_image(
+        gcs_service=MagicMock(),
+        vertexai_client=mock_client,
+        prompt="Make the sky orange",
+        model=GenerationModelEnum.GEMINI_2_5_FLASH_IMAGE,
+        bucket_name="bucket",
+        reference_images=[reference_image],
+        temperature=0.15,
+    )
+
+    call = mock_client.models.generate_content.call_args
+    assert call.kwargs["config"].temperature == 0.15
+    # The reference image is threaded in alongside the prompt, so we are
+    # genuinely on the image-to-image branch and not just text-to-image.
+    parts = call.kwargs["contents"][0].parts
+    assert any(getattr(p, "file_data", None) is not None for p in parts)
