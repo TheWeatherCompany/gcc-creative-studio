@@ -170,23 +170,6 @@ describe('HeaderComponent', () => {
   });
 
   describe('menu hover actions', () => {
-    it('should handle generation menu enter and leave', fakeAsync(() => {
-      component.onGenEnter();
-      expect(component.generationMenuHovered).toBeTrue();
-
-      component.onGenLeave();
-      expect(component.generationMenuHovered).toBeTrue();
-      tick(200);
-      expect(component.generationMenuHovered).toBeFalse();
-    }));
-
-    it('should clear generation menu timeout on enter', fakeAsync(() => {
-      component.onGenLeave();
-      component.onGenEnter();
-      tick(200);
-      expect(component.generationMenuHovered).toBeTrue();
-    }));
-
     it('should handle tools menu enter and leave', fakeAsync(() => {
       component.onToolsEnter();
       expect(component.toolsMenuHovered).toBeTrue();

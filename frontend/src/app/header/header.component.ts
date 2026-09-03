@@ -59,9 +59,7 @@ export class HeaderComponent implements OnDestroy {
   isDesktop = false;
   private readonly destroy$ = new Subject<void>();
   toolsMenuHovered = false;
-  generationMenuHovered = false;
   private menuTimeout: any;
-  private genMenuTimeout: any;
   isBrowser: boolean;
   private routerSubscription: Subscription;
   isGalleryActive = false;
@@ -157,19 +155,6 @@ export class HeaderComponent implements OnDestroy {
     // will cancel this timer, keeping the menu open.
     this.menuTimeout = setTimeout(() => {
       this.toolsMenuHovered = false;
-    }, 200);
-  }
-
-  onGenEnter() {
-    if (this.genMenuTimeout) {
-      clearTimeout(this.genMenuTimeout);
-    }
-    this.generationMenuHovered = true;
-  }
-
-  onGenLeave() {
-    this.genMenuTimeout = setTimeout(() => {
-      this.generationMenuHovered = false;
     }, 200);
   }
 }
