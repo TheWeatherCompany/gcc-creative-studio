@@ -1326,7 +1326,9 @@ def test_gemini_generate_image_forwards_temperature_image_to_image():
     """
     mock_client = MagicMock()
     mock_client.models.generate_content.return_value = MagicMock(candidates=[])
-    reference_image = MagicMock(gcs_uri="gs://bucket/ref.png", mime_type="image/png")
+    reference_image = MagicMock(
+        gcs_uri="gs://bucket/ref.png", mime_type="image/png"
+    )
 
     gemini_generate_image(
         gcs_service=MagicMock(),
