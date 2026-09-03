@@ -115,23 +115,28 @@ async def get_folder_tree(
 )
 async def get_folder_breadcrumbs(
     folder_id: int,
-    workspace_id: int | None = Query(
-        None,
-        description="Optional active workspace ID to validate folder membership",
+    workspace_id: int | None = Query(  # pylint: disable=unused-argument
+        default=None,
+        deprecated=True,
+        description="Deprecated and ignored: the folder's own workspace"
+        " is authorized instead",
     ),
     current_user: UserModel = Depends(get_current_user),
     service: FolderService = Depends(),
     workspace_auth: WorkspaceAuth = Depends(),
 ) -> list[FolderBreadcrumbDto]:
     """Get ancestor breadcrumbs from root to current folder."""
-    if workspace_id is not None:
-        await workspace_auth.authorize(
-            workspace_id=workspace_id,
-            user=current_user,
-        )
-    return await service.get_breadcrumbs(
-        folder_id=folder_id, workspace_id=workspace_id
+    # Resolve the folder first so authorization is always checked against the
+    # folder's own workspace: a caller-supplied workspace_id can neither skip
+    # the check nor widen it. A missing folder 404s before any workspace
+    # lookup; a folder the caller cannot reach 403s from WorkspaceAuth, which
+    # is what the PATCH and DELETE handlers below already do.
+    folder = await service.get_folder_by_id(folder_id=folder_id)
+    await workspace_auth.authorize(
+        workspace_id=folder.workspace_id,
+        user=current_user,
     )
+    return await service.get_breadcrumbs(folder_id=folder_id)
 
 
 @router.get(
@@ -140,23 +145,25 @@ async def get_folder_breadcrumbs(
 )
 async def get_folder(
     folder_id: int,
-    workspace_id: int | None = Query(
-        None,
-        description="Optional active workspace ID to validate folder membership",
+    workspace_id: int | None = Query(  # pylint: disable=unused-argument
+        default=None,
+        deprecated=True,
+        description="Deprecated and ignored: the folder's own workspace"
+        " is authorized instead",
     ),
     current_user: UserModel = Depends(get_current_user),
     service: FolderService = Depends(),
     workspace_auth: WorkspaceAuth = Depends(),
 ) -> FolderResponseDto:
     """Get single folder details by ID."""
-    if workspace_id is not None:
-        await workspace_auth.authorize(
-            workspace_id=workspace_id,
-            user=current_user,
-        )
-    return await service.get_folder_by_id(
-        folder_id=folder_id, workspace_id=workspace_id
+    # Same ordering as the breadcrumbs handler above: resolve, then authorize
+    # against the folder's own workspace unconditionally.
+    folder = await service.get_folder_by_id(folder_id=folder_id)
+    await workspace_auth.authorize(
+        workspace_id=folder.workspace_id,
+        user=current_user,
     )
+    return folder
 
 
 @router.patch(

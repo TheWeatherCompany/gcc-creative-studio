@@ -16,7 +16,7 @@
 
 from unittest.mock import AsyncMock
 import pytest
-from fastapi import status
+from fastapi import HTTPException, status
 
 from main import app
 from src.auth.auth_guard import get_current_user
@@ -41,6 +41,36 @@ def fixture_mock_workspace_auth():
     mock = AsyncMock()
     mock.authorize.return_value = True
     return mock
+
+
+def folder_in_workspace(workspace_id: int) -> FolderResponseDto:
+    """Builds a folder response that lives in the given workspace."""
+    return FolderResponseDto(
+        id=1,
+        workspace_id=workspace_id,
+        user_id=99,
+        user_email="owner@other-tenant.example.com",
+        name="Folder A",
+        parent_id=None,
+        item_count=5,
+        subfolder_count=0,
+    )
+
+
+def member_of_workspace_only(allowed_workspace_id: int):
+    """Authorize stand-in that accepts one workspace and 403s others."""
+
+    async def _authorize(
+        workspace_id: int, user
+    ):  # pylint: disable=unused-argument
+        if workspace_id != allowed_workspace_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to access this workspace.",
+            )
+        return True
+
+    return _authorize
 
 
 @pytest.fixture(name="override_folder_dependencies", autouse=True)
@@ -145,7 +175,13 @@ class TestGetFolderTree:
 class TestGetFolderBreadcrumbs:
     """Tests for GET /api/folders/{folder_id}/breadcrumbs."""
 
-    def test_get_breadcrumbs_success(self, api_client, mock_folder_service):
+    def test_get_breadcrumbs_member_success(
+        self, api_client, mock_folder_service, mock_workspace_auth, mock_user
+    ):
+        """A member of the folder's own workspace gets the trail."""
+        mock_folder_service.get_folder_by_id.return_value = folder_in_workspace(
+            7
+        )
         mock_folder_service.get_breadcrumbs.return_value = [
             FolderBreadcrumbDto(id=1, name="Root", parent_id=None),
             FolderBreadcrumbDto(id=2, name="Child", parent_id=1),
@@ -157,38 +193,65 @@ class TestGetFolderBreadcrumbs:
         assert len(data) == 2
         assert data[0]["name"] == "Root"
         assert data[1]["name"] == "Child"
-        mock_folder_service.get_breadcrumbs.assert_called_once_with(
-            folder_id=2, workspace_id=None
+        # Authorization runs even though the request omitted workspace_id, and
+        # it runs against the workspace the folder actually belongs to.
+        mock_workspace_auth.authorize.assert_awaited_once_with(
+            workspace_id=7, user=mock_user
         )
+        mock_folder_service.get_breadcrumbs.assert_called_once_with(folder_id=2)
 
-    def test_get_breadcrumbs_with_workspace_id(
+    def test_get_breadcrumbs_non_member_rejected(
         self, api_client, mock_folder_service, mock_workspace_auth
     ):
-        mock_folder_service.get_breadcrumbs.return_value = [
-            FolderBreadcrumbDto(id=2, name="Child", parent_id=None),
-        ]
+        """Omitting workspace_id no longer skips the authorization check."""
+        mock_folder_service.get_folder_by_id.return_value = folder_in_workspace(
+            7
+        )
+        mock_workspace_auth.authorize.side_effect = member_of_workspace_only(1)
+
+        response = api_client.get("/api/folders/2/breadcrumbs")
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        mock_folder_service.get_breadcrumbs.assert_not_called()
+
+    def test_get_breadcrumbs_spoofed_workspace_id_rejected(
+        self, api_client, mock_folder_service, mock_workspace_auth
+    ):
+        """A workspace_id the caller belongs to cannot unlock another."""
+        mock_folder_service.get_folder_by_id.return_value = folder_in_workspace(
+            7
+        )
+        mock_workspace_auth.authorize.side_effect = member_of_workspace_only(1)
 
         response = api_client.get("/api/folders/2/breadcrumbs?workspace_id=1")
-        assert response.status_code == status.HTTP_200_OK
-        mock_workspace_auth.authorize.assert_called_once()
-        mock_folder_service.get_breadcrumbs.assert_called_once_with(
-            folder_id=2, workspace_id=1
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert (
+            mock_workspace_auth.authorize.await_args.kwargs["workspace_id"] == 7
         )
+        mock_folder_service.get_breadcrumbs.assert_not_called()
+
+    def test_get_breadcrumbs_missing_folder_404s_before_authorization(
+        self, api_client, mock_folder_service, mock_workspace_auth
+    ):
+        mock_folder_service.get_folder_by_id.side_effect = HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Folder with ID 999 not found in this workspace.",
+        )
+
+        response = api_client.get("/api/folders/999/breadcrumbs")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        mock_workspace_auth.authorize.assert_not_called()
+        mock_folder_service.get_breadcrumbs.assert_not_called()
 
 
 class TestGetFolderById:
     """Tests for GET /api/folders/{folder_id}."""
 
-    def test_get_folder_by_id_success(self, api_client, mock_folder_service):
-        mock_folder_service.get_folder_by_id.return_value = FolderResponseDto(
-            id=1,
-            workspace_id=1,
-            user_id=1,
-            user_email="user@example.com",
-            name="Folder A",
-            parent_id=None,
-            item_count=5,
-            subfolder_count=0,
+    def test_get_folder_by_id_member_success(
+        self, api_client, mock_folder_service, mock_workspace_auth, mock_user
+    ):
+        """A member of the folder's own workspace gets the folder."""
+        mock_folder_service.get_folder_by_id.return_value = folder_in_workspace(
+            7
         )
 
         response = api_client.get("/api/folders/1")
@@ -197,29 +260,68 @@ class TestGetFolderById:
         assert data["id"] == 1
         assert data["itemCount"] == 5
         mock_folder_service.get_folder_by_id.assert_called_once_with(
-            folder_id=1, workspace_id=None
+            folder_id=1
+        )
+        mock_workspace_auth.authorize.assert_awaited_once_with(
+            workspace_id=7, user=mock_user
         )
 
-    def test_get_folder_by_id_with_workspace_id(
+    def test_get_folder_by_id_non_member_rejected(
         self, api_client, mock_folder_service, mock_workspace_auth
     ):
-        mock_folder_service.get_folder_by_id.return_value = FolderResponseDto(
-            id=1,
-            workspace_id=1,
-            user_id=1,
-            user_email="user@example.com",
-            name="Folder A",
-            parent_id=None,
-            item_count=5,
-            subfolder_count=0,
+        """Omitting workspace_id no longer skips the authorization check."""
+        mock_folder_service.get_folder_by_id.return_value = folder_in_workspace(
+            7
         )
+        mock_workspace_auth.authorize.side_effect = member_of_workspace_only(1)
+
+        response = api_client.get("/api/folders/1")
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert "permission" in response.json()["detail"]
+
+    def test_get_folder_by_id_spoofed_workspace_id_rejected(
+        self, api_client, mock_folder_service, mock_workspace_auth
+    ):
+        """A workspace_id the caller belongs to cannot unlock another."""
+        mock_folder_service.get_folder_by_id.return_value = folder_in_workspace(
+            7
+        )
+        mock_workspace_auth.authorize.side_effect = member_of_workspace_only(1)
 
         response = api_client.get("/api/folders/1?workspace_id=1")
-        assert response.status_code == status.HTTP_200_OK
-        mock_workspace_auth.authorize.assert_called_once()
-        mock_folder_service.get_folder_by_id.assert_called_once_with(
-            folder_id=1, workspace_id=1
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert (
+            mock_workspace_auth.authorize.await_args.kwargs["workspace_id"] == 7
         )
+
+    def test_get_folder_by_id_missing_folder_404s_before_authorization(
+        self, api_client, mock_folder_service, mock_workspace_auth
+    ):
+        mock_folder_service.get_folder_by_id.side_effect = HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Folder with ID 999 not found in this workspace.",
+        )
+
+        response = api_client.get("/api/folders/999")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        mock_workspace_auth.authorize.assert_not_called()
+
+
+class TestDeprecatedWorkspaceIdParam:
+    """The now-ignored workspace_id param must stay in the contract."""
+
+    def test_workspace_id_is_marked_deprecated(self, api_client):
+        del api_client  # only needed so the app is fully built
+        schema = app.openapi()
+        paths = (
+            "/api/folders/{folder_id}",
+            "/api/folders/{folder_id}/breadcrumbs",
+        )
+        for path in paths:
+            params = schema["paths"][path]["get"]["parameters"]
+            param = next(p for p in params if p["name"] == "workspace_id")
+            assert param["deprecated"] is True
+            assert param["required"] is False
 
 
 class TestUpdateFolder:

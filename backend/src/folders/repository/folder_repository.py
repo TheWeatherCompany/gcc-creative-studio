@@ -29,6 +29,18 @@ from src.folders.dto.folder_dto import (
 from src.folders.schema.folder_model import Folder, FolderModel
 from src.source_assets.schema.source_asset_model import SourceAsset
 
+# Hard ceiling for every recursive folder walk below. A parent cycle is still
+# reachable (the check-then-act window in FolderService is narrowed by a row
+# lock, not closed), and an unbounded WITH RECURSIVE over a cycle never
+# returns, so each CTE carries a depth column and stops at this many levels.
+# A truncated hierarchy is recoverable; a query that pins a connection forever
+# is not. Real folder trees are nowhere near 100 deep.
+MAX_FOLDER_DEPTH = 100
+
+
+class FolderSubtreeChangedError(RuntimeError):
+    """Raised when a folder subtree changed underneath a workspace move."""
+
 
 def generate_disambiguated_name(
     base_name: str, existing_names_lower: set[str]
@@ -107,6 +119,26 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         result = await self.db.execute(query)
         return {row[0] for row in result.fetchall()}
 
+    async def get_sibling_names_by_id(
+        self,
+        workspace_id: int,
+        parent_id: int | None,
+    ) -> dict[int, str]:
+        """Map active sibling folder IDs to their lowercase trimmed names."""
+        query = select(
+            self.model.id, func.lower(func.trim(self.model.name))
+        ).where(
+            self.model.workspace_id == workspace_id,
+            self.model.deleted_at.is_(None),
+        )
+        if parent_id is None:
+            query = query.where(self.model.parent_id.is_(None))
+        else:
+            query = query.where(self.model.parent_id == parent_id)
+
+        result = await self.db.execute(query)
+        return {row[0]: row[1] for row in result.fetchall()}
+
     async def get_unique_folder_name(
         self,
         workspace_id: int,
@@ -129,6 +161,22 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         query = select(self.model).where(self.model.id == folder_id)
         if not include_deleted:
             query = query.where(self.model.deleted_at.is_(None))
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
+    async def get_folder_for_update(self, folder_id: int) -> Folder | None:
+        """Fetch a single active folder, holding a row lock until commit."""
+        # populate_existing so a locked read always reflects the committed row
+        # rather than a copy the identity map is already holding.
+        query = (
+            select(self.model)
+            .where(
+                self.model.id == folder_id,
+                self.model.deleted_at.is_(None),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         result = await self.db.execute(query)
         return result.scalars().first()
 
@@ -256,12 +304,15 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 SELECT f.id, f.name, f.parent_id, b.depth + 1
                 FROM folders f
                 JOIN breadcrumbs b ON f.id = b.parent_id
-                WHERE f.deleted_at IS NULL
+                WHERE f.deleted_at IS NULL AND b.depth < :max_depth
             )
             SELECT id, name, parent_id FROM breadcrumbs ORDER BY depth DESC;
             """
         )
-        result = await self.db.execute(cte_query, {"folder_id": folder_id})
+        result = await self.db.execute(
+            cte_query,
+            {"folder_id": folder_id, "max_depth": MAX_FOLDER_DEPTH},
+        )
         rows = result.fetchall()
         return [
             FolderBreadcrumbDto(
@@ -275,16 +326,20 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         cte_query = text(
             """
             WITH RECURSIVE descendants AS (
-                SELECT id FROM folders WHERE id = :folder_id AND deleted_at IS NULL
+                SELECT id, 1 AS depth FROM folders
+                WHERE id = :folder_id AND deleted_at IS NULL
                 UNION ALL
-                SELECT f.id FROM folders f
+                SELECT f.id, d.depth + 1 FROM folders f
                 JOIN descendants d ON f.parent_id = d.id
-                WHERE f.deleted_at IS NULL
+                WHERE f.deleted_at IS NULL AND d.depth < :max_depth
             )
-            SELECT id FROM descendants;
+            SELECT DISTINCT id FROM descendants;
             """
         )
-        result = await self.db.execute(cte_query, {"folder_id": folder_id})
+        result = await self.db.execute(
+            cte_query,
+            {"folder_id": folder_id, "max_depth": MAX_FOLDER_DEPTH},
+        )
         return [row.id for row in result.fetchall()]
 
     async def get_tree(self, workspace_id: int) -> list[FolderTreeNodeDto]:
@@ -344,6 +399,7 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         media_item_ids: list[int],
         workspace_id: int,
         destination_folder_id: int | None,
+        commit: bool = True,
     ) -> int:
         """Move multiple media items to a destination folder."""
         if not media_item_ids:
@@ -357,7 +413,8 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
             .values(folder_id=destination_folder_id)
         )
         result = await self.db.execute(stmt)
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
         return result.rowcount
 
     async def move_source_assets(
@@ -365,6 +422,7 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         source_asset_ids: list[int],
         workspace_id: int,
         destination_folder_id: int | None,
+        commit: bool = True,
     ) -> int:
         """Move multiple source assets to a destination folder."""
         if not source_asset_ids:
@@ -378,7 +436,8 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
             .values(folder_id=destination_folder_id)
         )
         result = await self.db.execute(stmt)
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
         return result.rowcount
 
     async def move_folders(
@@ -386,6 +445,7 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         folder_ids: list[int],
         workspace_id: int,
         destination_folder_id: int | None,
+        commit: bool = True,
     ) -> int:
         """Move multiple folders to a destination parent folder with automatic name disambiguation."""
         if not folder_ids:
@@ -402,38 +462,68 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         if not folders:
             return 0
 
-        # Fetch existing sibling names in destination
-        existing_names = await self.get_existing_folder_names(
+        # Names already held in the destination, keyed by folder id. The
+        # exclusion has to be per-folder and by id: dropping a name globally
+        # because some folder in the batch already sits in the destination
+        # would hand that same name to a folder arriving from elsewhere and
+        # break the partial unique index.
+        sibling_names = await self.get_sibling_names_by_id(
             workspace_id=workspace_id,
             parent_id=destination_folder_id,
         )
-        for f in folders:
-            if f.parent_id == destination_folder_id:
-                existing_names.discard(f.name.strip().lower())
 
         moved_count = 0
         for f in folders:
-            if f.parent_id != destination_folder_id:
-                new_name = generate_disambiguated_name(f.name, existing_names)
-                f.name = new_name
-                f.parent_id = destination_folder_id
-                existing_names.add(new_name.strip().lower())
-                moved_count += 1
+            if f.parent_id == destination_folder_id:
+                continue
+            taken_names = {
+                name
+                for sibling_id, name in sibling_names.items()
+                if sibling_id != f.id
+            }
+            new_name = generate_disambiguated_name(f.name, taken_names)
+            f.name = new_name
+            f.parent_id = destination_folder_id
+            # Reserve the claimed name against the rest of the batch.
+            sibling_names[f.id] = new_name.strip().lower()
+            moved_count += 1
 
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
         return moved_count
 
     async def move_folder_to_workspace(
-        self, folder_id: int, target_workspace_id: int
-    ) -> dict[str, int]:
-        """Moves a folder hierarchy and all contained media items and source assets to a target workspace with root name disambiguation."""
+        self,
+        folder_id: int,
+        target_workspace_id: int,
+        authorized_source_workspace_id: int,
+        commit: bool = True,
+    ) -> None:
+        """Move a folder subtree (and its contents) into another workspace.
+
+        Every write is scoped to authorized_source_workspace_id as well as to
+        the materialized subtree, so a descendant that concurrently left the
+        workspace the caller was authorized for is never moved. When the
+        folder rows actually updated do not match that subtree, this raises
+        FolderSubtreeChangedError instead of leaving a partial move behind, so
+        the caller can report the item as failed. With commit=False the caller
+        owns the transaction, including the rollback.
+        """
         root_folder = await self.get_folder_by_id(folder_id)
-        if not root_folder:
-            return {"folders_moved": 0, "media_moved": 0, "assets_moved": 0}
+        if (
+            not root_folder
+            or root_folder.workspace_id != authorized_source_workspace_id
+        ):
+            raise FolderSubtreeChangedError(
+                f"Folder {folder_id} is not in workspace "
+                f"{authorized_source_workspace_id}."
+            )
 
         descendant_ids = await self.get_descendant_ids(folder_id)
-        if not descendant_ids:
-            return {"folders_moved": 0, "media_moved": 0, "assets_moved": 0}
+        if folder_id not in descendant_ids:
+            raise FolderSubtreeChangedError(
+                f"Folder {folder_id} disappeared while being moved."
+            )
 
         # Check for name collision at root level of target workspace
         existing_root_names = await self.get_existing_folder_names(
@@ -444,21 +534,53 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
             root_folder.name, existing_root_names
         )
 
-        # 1. Update media items belonging to any folder in the subtree
+        try:
+            await self._apply_workspace_move(
+                folder_id=folder_id,
+                target_workspace_id=target_workspace_id,
+                authorized_source_workspace_id=authorized_source_workspace_id,
+                descendant_ids=descendant_ids,
+                root_name=disambiguated_name,
+            )
+            if commit:
+                await self.db.commit()
+        except Exception:
+            if commit:
+                await self.db.rollback()
+            raise
+
+    async def _apply_workspace_move(
+        self,
+        folder_id: int,
+        target_workspace_id: int,
+        authorized_source_workspace_id: int,
+        descendant_ids: list[int],
+        root_name: str,
+    ) -> None:
+        """Reassigns one folder subtree and its contents to a workspace."""
+        # 1. Update media items belonging to any folder in the subtree. Their
+        # ids were never materialized, so there is no expected count to check;
+        # the workspace predicate is what keeps the write in bounds.
         media_stmt = (
             update(MediaItem)
-            .where(MediaItem.folder_id.in_(descendant_ids))
+            .where(
+                MediaItem.folder_id.in_(descendant_ids),
+                MediaItem.workspace_id == authorized_source_workspace_id,
+            )
             .values(workspace_id=target_workspace_id)
         )
-        media_res = await self.db.execute(media_stmt)
+        await self.db.execute(media_stmt)
 
         # 2. Update source assets belonging to any folder in the subtree
         asset_stmt = (
             update(SourceAsset)
-            .where(SourceAsset.folder_id.in_(descendant_ids))
+            .where(
+                SourceAsset.folder_id.in_(descendant_ids),
+                SourceAsset.workspace_id == authorized_source_workspace_id,
+            )
             .values(workspace_id=target_workspace_id)
         )
-        asset_res = await self.db.execute(asset_stmt)
+        await self.db.execute(asset_stmt)
 
         # 3. Update descendant child folders (excluding the root folder being moved)
         child_folder_ids = [fid for fid in descendant_ids if fid != folder_id]
@@ -467,34 +589,38 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 update(Folder)
                 .where(
                     Folder.id.in_(child_folder_ids),
+                    Folder.workspace_id == authorized_source_workspace_id,
                     Folder.deleted_at.is_(None),
                 )
                 .values(workspace_id=target_workspace_id)
             )
-            await self.db.execute(child_folders_stmt)
+            child_res = await self.db.execute(child_folders_stmt)
+            if child_res.rowcount != len(child_folder_ids):
+                raise FolderSubtreeChangedError(
+                    f"Expected to move {len(child_folder_ids)} subfolders of "
+                    f"folder {folder_id}, moved {child_res.rowcount}."
+                )
 
         # 4. Update the root folder being moved: set workspace_id, reset parent_id to None, and apply disambiguated name
         root_folder_stmt = (
             update(Folder)
             .where(
                 Folder.id == folder_id,
+                Folder.workspace_id == authorized_source_workspace_id,
                 Folder.deleted_at.is_(None),
             )
             .values(
                 workspace_id=target_workspace_id,
                 parent_id=None,
-                name=disambiguated_name,
+                name=root_name,
             )
         )
-        await self.db.execute(root_folder_stmt)
-
-        await self.db.commit()
-
-        return {
-            "folders_moved": len(descendant_ids),
-            "media_moved": media_res.rowcount,
-            "assets_moved": asset_res.rowcount,
-        }
+        root_res = await self.db.execute(root_folder_stmt)
+        if root_res.rowcount != 1:
+            raise FolderSubtreeChangedError(
+                f"Expected to move folder {folder_id}, moved "
+                f"{root_res.rowcount} rows."
+            )
 
     async def copy_folder_to_workspace(
         self,
@@ -518,12 +644,15 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 SELECT f.id, f.name, f.color, f.parent_id, d.depth + 1 AS depth
                 FROM folders f
                 JOIN descendants d ON f.parent_id = d.id
-                WHERE f.deleted_at IS NULL
+                WHERE f.deleted_at IS NULL AND d.depth < :max_depth
             )
             SELECT id, name, color, parent_id, depth FROM descendants ORDER BY depth ASC, id ASC;
             """
         )
-        res = await self.db.execute(cte_query, {"folder_id": folder_id})
+        res = await self.db.execute(
+            cte_query,
+            {"folder_id": folder_id, "max_depth": MAX_FOLDER_DEPTH},
+        )
         folder_rows = res.fetchall()
         if not folder_rows:
             return {"folders_copied": 0, "media_copied": 0, "assets_copied": 0}
@@ -539,6 +668,10 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
 
         id_map: dict[int, int] = {}
         for row in folder_rows:
+            if row.id in id_map:
+                # A depth-bounded walk over a cyclic subtree can yield the
+                # same folder twice; copy each source folder only once.
+                continue
             if row.id == folder_id:
                 new_folder = Folder(
                     workspace_id=target_workspace_id,

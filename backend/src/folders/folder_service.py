@@ -32,6 +32,21 @@ from src.users.user_model import UserModel
 
 logger = logging.getLogger(__name__)
 
+# The partial unique indexes that guard folder names. Only these two map to a
+# 409; any other IntegrityError is a genuine fault and has to propagate.
+FOLDER_NAME_CONSTRAINTS = frozenset(
+    {
+        "uq_folders_workspace_parent_name_active",
+        "uq_folders_workspace_root_name_active",
+    }
+)
+
+
+def _is_folder_name_conflict(exc: IntegrityError) -> bool:
+    """Reports whether an IntegrityError is a folder name uniqueness clash."""
+    name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+    return name in FOLDER_NAME_CONSTRAINTS
+
 
 class FolderService:
     """Service layer handling validation, hierarchy integrity, and business logic for folders."""
@@ -188,7 +203,22 @@ class FolderService:
                 )
 
             if new_parent_id is not None:
-                parent = await self.folder_repo.get_folder_by_id(new_parent_id)
+                # Serialise the cycle check with the write it guards: lock the
+                # moving folder and the target parent before reading the
+                # descendant set and hold both locks through the parent_id
+                # write and the commit below. Two moves that would jointly
+                # form a cycle contend for the same two rows, so the second
+                # one re-reads the descendants only after the first committed.
+                locked = await self._lock_folders_for_move(
+                    folder_id=folder.id, parent_id=new_parent_id
+                )
+                if folder.id not in locked:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Folder with ID {folder_id} not found.",
+                    )
+
+                parent = locked.get(new_parent_id)
                 if not parent or parent.workspace_id != folder.workspace_id:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
@@ -255,15 +285,40 @@ class FolderService:
 
         return await self.get_folder_by_id(folder.id)
 
+    async def _lock_folders_for_move(
+        self, folder_id: int, parent_id: int
+    ) -> dict[int, Folder]:
+        """Row-locks a folder and its target parent in ascending ID order."""
+        # Ascending ID order gives every concurrent mover the same lock order,
+        # so two moves over the same pair of folders queue instead of
+        # deadlocking. Missing entries mean the row is gone or soft-deleted.
+        locked: dict[int, Folder] = {}
+        for lock_id in sorted({folder_id, parent_id}):
+            row = await self.folder_repo.get_folder_for_update(lock_id)
+            if row is not None:
+                locked[lock_id] = row
+        return locked
+
     async def delete_folder(
         self, folder_id: int, user: UserModel
     ) -> dict[str, bool]:
-        """Soft deletes a folder and its subfolders."""
-        folder = await self.folder_repo.get_folder_by_id(folder_id)
-        if not folder:
+        """Soft deletes an empty folder, refusing a non-empty one."""
+        # Raises 404 when the folder is missing or already soft-deleted. This
+        # read, the emptiness check and the soft delete all run inside one
+        # transaction with no commit between them; soft_delete keeps its
+        # single trailing commit.
+        folder = await self.get_folder_by_id(folder_id=folder_id)
+
+        # Direct counts are enough to prove "fully empty": a subtree holding
+        # anything at all still shows a non-zero subfolder_count here. A soft
+        # delete would only stamp deleted_at on the folder rows and would
+        # strand the contained media items and source assets, so refuse.
+        if folder.item_count > 0 or folder.subfolder_count > 0:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Folder with ID {folder_id} not found.",
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Folder is not empty. Move or delete its contents first."
+                ),
             )
 
         success = await self.folder_repo.soft_delete(
@@ -306,21 +361,46 @@ class FolderService:
                         )
                 valid_folder_ids.append(f_id)
 
-        media_moved = await self.folder_repo.move_media_items(
-            media_item_ids=dto.media_item_ids,
-            workspace_id=dto.workspace_id,
-            destination_folder_id=dest_folder_id,
-        )
-        assets_moved = await self.folder_repo.move_source_assets(
-            source_asset_ids=dto.source_asset_ids,
-            workspace_id=dto.workspace_id,
-            destination_folder_id=dest_folder_id,
-        )
-        folders_moved = await self.folder_repo.move_folders(
-            folder_ids=valid_folder_ids,
-            workspace_id=dto.workspace_id,
-            destination_folder_id=dest_folder_id,
-        )
+        # One logical move is one transaction: the repository writes are told
+        # not to commit and the whole sequence is committed here, so a failure
+        # part way through cannot leave items in the destination while the
+        # frontend rolls its optimistic update back. The writes themselves are
+        # inside the try as well, because a partial index violation surfaces at
+        # flush or execute time, before the commit is reached.
+        try:
+            media_moved = await self.folder_repo.move_media_items(
+                media_item_ids=dto.media_item_ids,
+                workspace_id=dto.workspace_id,
+                destination_folder_id=dest_folder_id,
+                commit=False,
+            )
+            assets_moved = await self.folder_repo.move_source_assets(
+                source_asset_ids=dto.source_asset_ids,
+                workspace_id=dto.workspace_id,
+                destination_folder_id=dest_folder_id,
+                commit=False,
+            )
+            folders_moved = await self.folder_repo.move_folders(
+                folder_ids=valid_folder_ids,
+                workspace_id=dto.workspace_id,
+                destination_folder_id=dest_folder_id,
+                commit=False,
+            )
+            await self.folder_repo.db.commit()
+        except IntegrityError as e:
+            await self.folder_repo.db.rollback()
+            if _is_folder_name_conflict(e):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "A folder with this name already exists at the"
+                        " destination."
+                    ),
+                ) from e
+            raise
+        except Exception:
+            await self.folder_repo.db.rollback()
+            raise
 
         return {
             "media_items_moved": media_moved,
