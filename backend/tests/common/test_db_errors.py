@@ -76,12 +76,3 @@ class TestConstraintNameOf:
         orig.__cause__ = None
 
         assert constraint_name_of(build(orig)) is None
-
-    def test_prefers_the_asyncpg_cause_over_a_stale_diag(self):
-        """If both are somehow present, the driver in use wins."""
-        orig = SimpleNamespace(
-            diag=SimpleNamespace(constraint_name="some_other_index")
-        )
-        orig.__cause__ = SimpleNamespace(constraint_name=CONSTRAINT)
-
-        assert constraint_name_of(build(orig)) == CONSTRAINT

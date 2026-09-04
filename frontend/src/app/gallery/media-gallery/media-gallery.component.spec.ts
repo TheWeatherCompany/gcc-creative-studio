@@ -168,10 +168,14 @@ describe('MediaGalleryComponent', () => {
 
       // The device-upload input and the "Add to Gallery" menu trigger were
       // removed: neither backend endpoint nor Drive client id is available.
+      // Upstream still ships both, so this guards a deliberate divergence
+      // against a future sync quietly reintroducing them.
       expect(host.querySelector('input[type="file"]')).toBeNull();
       expect(host.textContent).not.toContain('Add to Gallery');
-      // Sanity check that the toolbar itself rendered.
-      expect(host.textContent).toContain('New Folder');
+      // Guard against a vacuous pass: if nothing rendered, the two absence
+      // assertions above would hold trivially. Keyed on element presence
+      // rather than button copy, so a relabel does not fail this spec.
+      expect(host.querySelectorAll('mat-icon').length).toBeGreaterThan(0);
     });
   });
 

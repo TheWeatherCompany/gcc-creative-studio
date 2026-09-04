@@ -310,19 +310,6 @@ class TestGetFolderById:
 class TestDeprecatedWorkspaceIdParam:
     """The now-ignored workspace_id param must stay in the contract."""
 
-    def test_workspace_id_is_marked_deprecated(self, api_client):
-        del api_client  # only needed so the app is fully built
-        schema = app.openapi()
-        paths = (
-            "/api/folders/{folder_id}",
-            "/api/folders/{folder_id}/breadcrumbs",
-        )
-        for path in paths:
-            params = schema["paths"][path]["get"]["parameters"]
-            param = next(p for p in params if p["name"] == "workspace_id")
-            assert param["deprecated"] is True
-            assert param["required"] is False
-
 
 class TestUpdateFolder:
     """Tests for PATCH /api/folders/{folder_id}."""

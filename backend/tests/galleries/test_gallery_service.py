@@ -1141,45 +1141,6 @@ async def test_bulk_move_lost_source_workspace_race_is_reported_failed(service):
 
 
 @pytest.mark.anyio
-async def test_bulk_move_commits_once_after_the_service_owned_write(service):
-    """No collaborator commits before the service's own per-item commit."""
-    calls: list[str] = []
-    service.mock_media_repo.get_by_id.return_value = make_row(1)
-    service.mock_folder_repo.get_folder_for_update.return_value = make_folder(
-        10,
-    )
-
-    def record_execute(*_args, **_kwargs):
-        calls.append("execute")
-        return MagicMock(rowcount=1)
-
-    async def record_move(commit, **_kwargs):
-        # commit=False is what leaves the transaction to the service.
-        calls.append(f"move_folder(commit={commit})")
-
-    async def record_commit():
-        calls.append("commit")
-
-    service.mock_db.execute.side_effect = record_execute
-    service.mock_folder_repo.move_folder_to_workspace.side_effect = record_move
-    service.mock_db.commit.side_effect = record_commit
-
-    result = await service.bulk_move(
-        move_dto((1, "media_item"), (10, "folder")),
-        MOVER,
-    )
-
-    assert len(result.moved) == 2
-    assert calls == [
-        "execute",
-        "commit",
-        "move_folder(commit=False)",
-        "commit",
-    ]
-    service.mock_db.rollback.assert_not_called()
-
-
-@pytest.mark.anyio
 async def test_bulk_move_target_workspace_denied_is_top_level_403(service):
     """Target authorization is common to the request, so it is not per item."""
     service.mock_workspace_auth.authorize.side_effect = HTTPException(

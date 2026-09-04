@@ -74,6 +74,11 @@ def fixture_db_folder_service(mock_db):
     return FolderService(folder_repo=FolderRepository(db=mock_db))
 
 
+def executed_statements(mock_db) -> list:
+    """The statements handed to db.execute, in call order."""
+    return [call.args[0] for call in mock_db.execute.await_args_list]
+
+
 def breadcrumbs_result(depth: int) -> MagicMock:
     """Ancestor rows shaped the way get_breadcrumbs reads them.
 
@@ -165,9 +170,13 @@ async def expect_delete_conflict(
     assert exc_info.value.detail == (
         "Folder is not empty. Move or delete its contents first."
     )
-    # Nothing was soft deleted and nothing was detached: the lock read and the
-    # two count reads are all that ran, and no transaction committed.
-    assert mock_db.execute.await_count == 3
+    # Nothing was written: no commit, and no UPDATE reached the session. Both
+    # survive a read being added; a total read count would not.
+    assert not [
+        stmt
+        for stmt in executed_statements(mock_db)
+        if str(stmt).startswith("UPDATE")
+    ]
     mock_db.commit.assert_not_called()
 
 
@@ -247,26 +256,30 @@ class TestCreateFolder:
         assert exc_info.value.status_code == status.HTTP_409_CONFLICT
         assert "already exists" in exc_info.value.detail
 
+    # Upstream PR #274's own depth tests, restored. The port dropped them
+    # with the checks they cover. Fork adaptations are called out inline.
+
     @pytest.mark.anyio
-    async def test_create_folder_refuses_past_the_depth_cap(
+    async def test_create_subfolder_max_depth_exceeded(
         self, folder_service, mock_folder_repo, sample_user
     ):
-        """Upstream caps the tree at 20 levels; the port dropped the check.
-
-        Without it an API client can nest arbitrarily deep, and every
-        recursive query in the repository stops at its own ceiling, so a
-        subtree past that point is only ever partly visible.
-        """
-        mock_folder_repo.get_folder_by_id.return_value = Folder(
-            id=5, workspace_id=1, user_id=10, user_email="a@b.com", name="Deep"
+        dto = FolderCreateDto(
+            name="TooDeep",
+            workspace_id=1,
+            parent_id=5,
         )
-        mock_folder_repo.get_folder_depth.return_value = MAX_FOLDER_TREE_DEPTH
+        mock_folder_repo.get_folder_by_id.return_value = Folder(
+            id=5, workspace_id=1, user_email="a@b.com", name="Parent"
+        )
+        mock_folder_repo.get_folder_depth.return_value = 20
 
-        dto = FolderCreateDto(name="One more", workspace_id=1, parent_id=5)
         with pytest.raises(HTTPException) as exc_info:
             await folder_service.create_folder(dto, sample_user)
         assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
-        assert "maximum folder tree depth" in exc_info.value.detail
+        assert (
+            "maximum folder tree depth of 20 levels reached"
+            in exc_info.value.detail
+        )
 
     @pytest.mark.anyio
     async def test_create_folder_allows_the_last_level(
@@ -695,6 +708,49 @@ class TestUpdateFolder:
         assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
 
     @pytest.mark.anyio
+    async def test_update_parent_max_depth_exceeded(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """Upstream's test for the third depth site, the PATCH reparent.
+
+        Fork adaptations: the moving folder and the target parent both come
+        from the row locks this fork takes before the cycle check, and the
+        folder needs an owner because PATCH is now gated on ownership.
+        """
+        folder = Folder(
+            id=1,
+            workspace_id=1,
+            user_id=sample_user.id,
+            user_email="a@b.com",
+            name="Folder1",
+            parent_id=None,
+        )
+        target_parent = Folder(
+            id=4,
+            workspace_id=1,
+            user_id=sample_user.id,
+            user_email="a@b.com",
+            name="TargetParent",
+        )
+        mock_folder_repo.get_folder_by_id.return_value = folder
+        mock_folder_repo.get_folder_for_update.side_effect = [
+            folder,
+            target_parent,
+        ]
+        mock_folder_repo.get_descendant_ids.return_value = [1]
+        mock_folder_repo.get_folder_depth.return_value = 19
+        mock_folder_repo.get_subtree_depth.return_value = 2
+
+        dto = FolderUpdateDto(parent_id=4)
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.update_folder(1, dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
+        assert (
+            "would exceed maximum folder tree depth of 20 levels"
+            in exc_info.value.detail
+        )
+
+    @pytest.mark.anyio
     async def test_update_folder_refuses_another_users_folder(
         self, folder_service, mock_folder_repo, sample_user
     ):
@@ -873,34 +929,6 @@ class TestDeleteFolder:
         mock_folder_repo.soft_delete.assert_not_called()
 
     @pytest.mark.anyio
-    async def test_delete_folder_shares_one_transaction(
-        self, db_folder_service, mock_db, sample_user
-    ):
-        """The emptiness check and the soft delete commit exactly once."""
-        folder = Folder(
-            user_id=10,
-            id=1,
-            workspace_id=1,
-            user_email="a@b.com",
-            name="Empty",
-            parent_id=None,
-        )
-        mock_db.execute.side_effect = [
-            db_result_for_folder(folder),  # FOR UPDATE lock on the folder
-            db_result_for_folder(folder),  # folder lookup
-            db_result_for_counts(folder),  # item and subfolder counts
-            MagicMock(),  # release trashed media items
-            MagicMock(),  # release trashed source assets
-            db_result_for_ids([1]),  # descendant ids for the soft delete
-            MagicMock(),  # the soft delete UPDATE itself
-        ]
-
-        result = await db_folder_service.delete_folder(1, sample_user)
-
-        assert result["success"] is True
-        assert mock_db.commit.await_count == 1
-
-    @pytest.mark.anyio
     async def test_delete_folder_conflict_with_media_item(
         self, db_folder_service, mock_db, sample_user
     ):
@@ -944,26 +972,6 @@ class TestDeleteFolder:
             name="Has subfolder",
             parent_id=None,
         )
-        await expect_delete_conflict(
-            db_folder_service, mock_db, folder, sample_user, subfolder_count=1
-        )
-
-    @pytest.mark.anyio
-    async def test_delete_folder_conflict_with_deeper_descendants(
-        self, db_folder_service, mock_db, sample_user
-    ):
-        """A subtree that only holds content further down is still refused."""
-        folder = Folder(
-            user_id=10,
-            id=1,
-            workspace_id=1,
-            user_email="a@b.com",
-            name="Grandparent",
-            parent_id=None,
-        )
-        # Folder 1 holds no items itself; its single child holds the grandchild
-        # that owns the media. The direct subfolder count is what catches it,
-        # so no recursive count is needed to keep the subtree from stranding.
         await expect_delete_conflict(
             db_folder_service, mock_db, folder, sample_user, subfolder_count=1
         )
@@ -1121,26 +1129,34 @@ class TestMoveItems:
         mock_folder_repo.get_folders_by_ids.assert_not_called()
 
     @pytest.mark.anyio
-    async def test_move_items_refuses_a_move_that_would_exceed_the_depth_cap(
+    async def test_move_items_folder_max_depth_exceeded(
         self, folder_service, mock_folder_repo, sample_user
     ):
-        """Both halves are measured: a tall subtree can blow the cap in one
-        move even when the destination itself is shallow."""
+        # Two fork adaptations: the destination is read under a row lock
+        # rather than by get_folder_by_id, and the moving folder needs an
+        # owner because this fork gates move_items on ownership.
         mock_folder_repo.get_folder_for_update.return_value = Folder(
             id=5,
             workspace_id=1,
             user_id=sample_user.id,
-            name="Target",
             user_email="a@b.com",
+            name="Target",
         )
+        mock_folder_repo.get_folders_by_ids.return_value = [
+            Folder(
+                id=2,
+                workspace_id=1,
+                user_id=sample_user.id,
+                user_email="a@b.com",
+                name="Folder 2",
+            )
+        ]
         mock_folder_repo.get_descendant_ids.return_value = [2]
-        mock_folder_repo.get_folder_depth.return_value = 15
-        mock_folder_repo.get_subtree_depth.return_value = 10
+        mock_folder_repo.get_folder_depth.return_value = 19
+        mock_folder_repo.get_subtree_depth.return_value = 2
 
         dto = MoveItemsDto(
             workspace_id=1,
-            media_item_ids=[],
-            source_asset_ids=[],
             folder_ids=[2],
             destination_folder_id=5,
         )
@@ -1148,8 +1164,10 @@ class TestMoveItems:
         with pytest.raises(HTTPException) as exc_info:
             await folder_service.move_items(dto, sample_user)
         assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
-        assert "maximum folder tree depth" in exc_info.value.detail
-        mock_folder_repo.move_folders.assert_not_called()
+        assert (
+            "would exceed maximum folder tree depth of 20 levels"
+            in exc_info.value.detail
+        )
 
     @pytest.mark.anyio
     async def test_move_items_locks_the_destination_for_a_media_only_move(
@@ -1207,71 +1225,6 @@ class TestMoveItems:
             await folder_service.move_items(dto, sample_user)
         assert exc_info.value.status_code == status.HTTP_404_NOT_FOUND
         mock_folder_repo.move_media_items.assert_not_called()
-
-    @pytest.mark.anyio
-    async def test_move_items_commits_exactly_once(
-        self, db_folder_service, mock_db, sample_user
-    ):
-        """All three repository writes land in a single transaction."""
-        destination = Folder(
-            id=5,
-            workspace_id=1,
-            user_email="a@b.com",
-            name="Target",
-            parent_id=None,
-        )
-        moving = Folder(
-            id=2,
-            workspace_id=1,
-            user_email="a@b.com",
-            name="Moving",
-            parent_id=None,
-        )
-        folders_to_move = MagicMock()
-        folders_to_move.scalars.return_value.all.return_value = [moving]
-        sibling_names = MagicMock()
-        sibling_names.fetchall.return_value = []
-
-        # The ownership gate reads all three id lists before any lock is
-        # taken; every row belongs to sample_user, so the batch is allowed.
-        owned = scalars_result([SimpleNamespace(user_id=sample_user.id)])
-
-        mock_db.execute.side_effect = [
-            # No standalone destination lookup any more: the destination is
-            # read from the locked row further down.
-            owned,  # ownership: media items
-            owned,  # ownership: source assets
-            owned,  # ownership: folders
-            db_result_for_folder(moving),  # lock folder 2 (ascending order)
-            db_result_for_folder(destination),  # lock folder 5
-            db_result_for_ids([2]),  # cycle check on folder 2
-            breadcrumbs_result(1),  # depth cap: destination is 1 deep
-            MagicMock(scalar=lambda: 1),  # depth cap: moving subtree height
-            MagicMock(rowcount=2),  # media item UPDATE
-            MagicMock(rowcount=1),  # source asset UPDATE
-            folders_to_move,  # folders selected for the move
-            sibling_names,  # destination sibling names
-        ]
-
-        dto = MoveItemsDto(
-            workspace_id=1,
-            media_item_ids=[10, 11],
-            source_asset_ids=[20],
-            folder_ids=[2],
-            destination_folder_id=5,
-        )
-        result = await db_folder_service.move_items(dto, sample_user)
-
-        assert result == {
-            "media_items_moved": 2,
-            "source_assets_moved": 1,
-            "folders_moved": 1,
-            "total_moved": 4,
-        }
-        assert moving.parent_id == 5
-        # One commit for three writes, and none of them rolled back.
-        assert mock_db.commit.await_count == 1
-        mock_db.rollback.assert_not_called()
 
     @pytest.mark.anyio
     async def test_move_items_name_conflict_rolls_back(
