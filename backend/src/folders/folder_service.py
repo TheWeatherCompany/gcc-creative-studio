@@ -27,6 +27,7 @@ from src.folders.dto.folder_dto import (
     MoveItemsDto,
 )
 from src.folders.repository.folder_repository import FolderRepository
+from src.common.db_errors import constraint_name_of
 from src.folders.schema.folder_model import Folder
 from src.users.user_model import UserModel
 
@@ -44,8 +45,7 @@ FOLDER_NAME_CONSTRAINTS = frozenset(
 
 def _is_folder_name_conflict(exc: IntegrityError) -> bool:
     """Reports whether an IntegrityError is a folder name uniqueness clash."""
-    name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
-    return name in FOLDER_NAME_CONSTRAINTS
+    return constraint_name_of(exc) in FOLDER_NAME_CONSTRAINTS
 
 
 class FolderService:

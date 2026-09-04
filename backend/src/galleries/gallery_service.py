@@ -69,6 +69,7 @@ from src.users.user_model import UserModel, UserRoleEnum
 from src.workspaces.repository.workspace_repository import WorkspaceRepository
 from src.workspaces.workspace_auth_guard import WorkspaceAuth
 from src.tags.repository.tags_repository import TagsRepository
+from src.common.db_errors import constraint_name_of
 from src.folders.folder_service import FOLDER_NAME_CONSTRAINTS
 from src.folders.repository.folder_repository import (
     FolderRepository,
@@ -909,9 +910,7 @@ class GalleryService:
                 # A folder name racing another mover for the same destination
                 # name is a known class; any other constraint break is not.
                 await self.db.rollback()
-                diag = getattr(exc.orig, "diag", None)
-                constraint = getattr(diag, "constraint_name", None)
-                if constraint in FOLDER_NAME_CONSTRAINTS:
+                if constraint_name_of(exc) in FOLDER_NAME_CONSTRAINTS:
                     reason = MOVE_REASON_NAME_CONFLICT
                 else:
                     logger.exception(

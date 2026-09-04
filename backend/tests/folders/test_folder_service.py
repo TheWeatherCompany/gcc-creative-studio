@@ -93,10 +93,18 @@ def db_result_for_ids(folder_ids: list[int]) -> MagicMock:
 
 
 def integrity_error(constraint_name: str) -> IntegrityError:
-    """Builds an IntegrityError carrying a psycopg style constraint name."""
-    orig = SimpleNamespace(
-        diag=SimpleNamespace(constraint_name=constraint_name)
-    )
+    """Builds an IntegrityError shaped the way asyncpg really raises one.
+
+    This project runs on asyncpg, where ``exc.orig`` is a SQLAlchemy adapter
+    exposing only ``sqlstate``/``pgcode`` and the constraint name lives on the
+    wrapped ``asyncpg`` error reachable via ``__cause__``. An earlier version
+    of this helper invented an ``exc.orig.diag`` attribute, which asyncpg never
+    produces, so the tests passed while the production extraction always
+    yielded None.
+    """
+    cause = SimpleNamespace(constraint_name=constraint_name, sqlstate="23505")
+    orig = SimpleNamespace(sqlstate="23505")
+    orig.__cause__ = cause
     return IntegrityError("UPDATE folders ...", {}, orig)
 
 
