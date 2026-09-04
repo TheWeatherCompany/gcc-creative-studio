@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from src.auth.auth_guard import get_current_user
 from src.galleries.gallery_controller import router
 from src.galleries.gallery_service import GalleryService
+from src.favorites.dto.favorite_response_dto import FavoriteResponseDto
 from src.users.user_model import UserModel, UserRoleEnum
 from src.workspaces.workspace_auth_guard import WorkspaceAuth
 
@@ -39,8 +40,12 @@ def fixture_mock_user():
 @pytest.fixture(name="mock_service")
 def fixture_mock_service():
     service = AsyncMock()
-    service.favorite_item = AsyncMock(return_value={"is_favorite": True})
-    service.unfavorite_item = AsyncMock(return_value={"is_favorite": False})
+    service.favorite_item = AsyncMock(
+        return_value=FavoriteResponseDto(is_favorite=True)
+    )
+    service.unfavorite_item = AsyncMock(
+        return_value=FavoriteResponseDto(is_favorite=False)
+    )
     return service
 
 
@@ -57,7 +62,7 @@ def fixture_client(mock_user, mock_service):
 def test_favorite_item(client, mock_service):
     response = client.post("/api/gallery/item/10/favorite")
     assert response.status_code == 200
-    assert response.json() == {"is_favorite": True}
+    assert response.json() == {"isFavorite": True}
     mock_service.favorite_item.assert_called_once()
     _, kwargs = mock_service.favorite_item.call_args
     assert kwargs["item_id"] == 10
@@ -66,7 +71,7 @@ def test_favorite_item(client, mock_service):
 def test_unfavorite_item(client, mock_service):
     response = client.delete("/api/gallery/item/10/favorite")
     assert response.status_code == 200
-    assert response.json() == {"is_favorite": False}
+    assert response.json() == {"isFavorite": False}
     mock_service.unfavorite_item.assert_called_once()
     _, kwargs = mock_service.unfavorite_item.call_args
     assert kwargs["item_id"] == 10
