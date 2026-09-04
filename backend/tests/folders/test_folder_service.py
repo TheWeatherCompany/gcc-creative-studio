@@ -412,7 +412,11 @@ class TestUpdateFolder:
         self, folder_service, mock_folder_repo, sample_user
     ):
         folder = Folder(
-            id=1, workspace_id=1, user_email="a@b.com", name="Old Name"
+            user_id=10,
+            id=1,
+            workspace_id=1,
+            user_email="a@b.com",
+            name="Old Name",
         )
         mock_folder_repo.get_folder_by_id.return_value = folder
         mock_folder_repo.is_folder_name_taken.return_value = False
@@ -436,7 +440,11 @@ class TestUpdateFolder:
         self, folder_service, mock_folder_repo, sample_user
     ):
         folder = Folder(
-            id=1, workspace_id=1, user_email="a@b.com", name="Old Name"
+            user_id=10,
+            id=1,
+            workspace_id=1,
+            user_email="a@b.com",
+            name="Old Name",
         )
         mock_folder_repo.get_folder_by_id.return_value = folder
         mock_folder_repo.is_folder_name_taken.return_value = True
@@ -452,7 +460,11 @@ class TestUpdateFolder:
         self, folder_service, mock_folder_repo, sample_user
     ):
         folder = Folder(
-            id=1, workspace_id=1, user_email="a@b.com", name="Old Name"
+            user_id=10,
+            id=1,
+            workspace_id=1,
+            user_email="a@b.com",
+            name="Old Name",
         )
         mock_folder_repo.get_folder_by_id.return_value = folder
 
@@ -466,6 +478,7 @@ class TestUpdateFolder:
         self, folder_service, mock_folder_repo, sample_user
     ):
         folder = Folder(
+            user_id=10,
             id=1,
             workspace_id=1,
             user_email="a@b.com",
@@ -473,6 +486,7 @@ class TestUpdateFolder:
             parent_id=None,
         )
         target_parent = Folder(
+            user_id=10,
             id=5,
             workspace_id=1,
             user_email="a@b.com",
@@ -508,9 +522,15 @@ class TestUpdateFolder:
         self, folder_service, mock_folder_repo, sample_user
     ):
         folder = Folder(
-            id=1, workspace_id=1, user_email="a@b.com", name="Parent"
+            user_id=10,
+            id=1,
+            workspace_id=1,
+            user_email="a@b.com",
+            name="Parent",
         )
-        child = Folder(id=3, workspace_id=1, user_email="a@b.com", name="Child")
+        child = Folder(
+            user_id=10, id=3, workspace_id=1, user_email="a@b.com", name="Child"
+        )
         mock_folder_repo.get_folder_by_id.side_effect = lambda fid: (
             folder if fid == 1 else child
         )
@@ -531,10 +551,14 @@ class TestUpdateFolder:
     ):
         """The cycle check reads descendants only after both rows are locked."""
         folder = Folder(
-            id=9, workspace_id=1, user_email="a@b.com", name="Mover"
+            user_id=10, id=9, workspace_id=1, user_email="a@b.com", name="Mover"
         )
         target_parent = Folder(
-            id=4, workspace_id=1, user_email="a@b.com", name="Target"
+            user_id=10,
+            id=4,
+            workspace_id=1,
+            user_email="a@b.com",
+            name="Target",
         )
         calls: list[str] = []
 
@@ -566,10 +590,14 @@ class TestUpdateFolder:
     ):
         """A folder soft deleted between the read and the lock is a 404."""
         folder = Folder(
-            id=1, workspace_id=1, user_email="a@b.com", name="Mover"
+            user_id=10, id=1, workspace_id=1, user_email="a@b.com", name="Mover"
         )
         target_parent = Folder(
-            id=5, workspace_id=1, user_email="a@b.com", name="Target"
+            user_id=10,
+            id=5,
+            workspace_id=1,
+            user_email="a@b.com",
+            name="Target",
         )
         mock_folder_repo.get_folder_by_id.return_value = folder
         mock_folder_repo.get_folder_for_update.side_effect = lambda fid: (
@@ -587,7 +615,11 @@ class TestUpdateFolder:
         self, folder_service, mock_folder_repo, sample_user
     ):
         folder = Folder(
-            id=1, workspace_id=1, user_email="a@b.com", name="Parent"
+            user_id=10,
+            id=1,
+            workspace_id=1,
+            user_email="a@b.com",
+            name="Parent",
         )
         mock_folder_repo.get_folder_by_id.return_value = folder
 
@@ -595,6 +627,67 @@ class TestUpdateFolder:
         with pytest.raises(HTTPException) as exc_info:
             await folder_service.update_folder(1, dto, sample_user)
         assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
+
+    @pytest.mark.anyio
+    async def test_update_folder_refuses_another_users_folder(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """PATCH reaches the same reparent sink move_items now guards.
+
+        The controller proves workspace membership only, so without this a
+        member could rename or reparent another member's folder through the
+        one endpoint the move_items gate does not cover.
+        """
+        mock_folder_repo.get_folder_by_id.return_value = Folder(
+            id=1,
+            workspace_id=1,
+            user_id=sample_user.id + 1,
+            user_email="other@b.com",
+            name="Theirs",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.update_folder(
+                1, FolderUpdateDto(name="Mine now"), sample_user
+            )
+        assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+        mock_folder_repo.db.commit.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_update_folder_allows_an_admin(
+        self, folder_service, mock_folder_repo
+    ):
+        """Admins keep the override here too."""
+        admin = UserModel(
+            id=99,
+            email="admin@example.com",
+            roles=[UserRoleEnum.ADMIN],
+            name="Admin",
+        )
+        folder = Folder(
+            id=1,
+            workspace_id=1,
+            user_id=1,
+            user_email="other@b.com",
+            name="Theirs",
+        )
+        mock_folder_repo.get_folder_by_id.return_value = folder
+        mock_folder_repo.list_by_parent.return_value = [
+            FolderResponseDto(
+                id=1,
+                workspace_id=1,
+                user_email="other@b.com",
+                name="Renamed",
+                parent_id=None,
+                item_count=0,
+                subfolder_count=0,
+            )
+        ]
+
+        result = await folder_service.update_folder(
+            1, FolderUpdateDto(name="Renamed"), admin
+        )
+        assert result.name == "Renamed"
 
 
 class TestDeleteFolder:

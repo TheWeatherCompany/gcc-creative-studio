@@ -16,12 +16,15 @@
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+import itertools
+
 import pytest
 
 from src.folders.repository.folder_repository import (
     MAX_FOLDER_DEPTH,
     FolderRepository,
     FolderSubtreeChangedError,
+    FolderSubtreeUnauthorizedError,
     generate_disambiguated_name,
 )
 from src.folders.schema.folder_model import Folder
@@ -51,6 +54,13 @@ def scalars_result(items: list) -> MagicMock:
     """Result whose scalars().all() yields the given items."""
     result = MagicMock()
     result.scalars.return_value.all.return_value = items
+    return result
+
+
+def row_present(present: bool) -> MagicMock:
+    """Result whose first() is a row or None, as the ownership gate reads it."""
+    result = MagicMock()
+    result.first.return_value = object() if present else None
     return result
 
 
@@ -405,10 +415,10 @@ class TestFolderRepository:
                 [SimpleNamespace(id=1), SimpleNamespace(id=2)]
             ),
             rows_result([("existingroot",)]),  # target root names
-            MagicMock(),  # media_item_tags DELETE
-            MagicMock(),  # source_asset_tags DELETE
             MagicMock(rowcount=3),  # media item UPDATE
             MagicMock(rowcount=2),  # source asset UPDATE
+            MagicMock(),  # media_item_tags DELETE
+            MagicMock(),  # source_asset_tags DELETE
             MagicMock(rowcount=child_rowcount),  # child folder UPDATE
             MagicMock(rowcount=root_rowcount),  # root folder UPDATE
         ]
@@ -470,20 +480,234 @@ class TestFolderRepository:
             name="Child",
             parent_id=5,
         )
+        subtree = [SimpleNamespace(id=5), SimpleNamespace(id=2)]
         mock_db.execute.side_effect = [
-            rows_result([SimpleNamespace(id=5), SimpleNamespace(id=2)]),
-            first_result(child),
-            first_result(root),
+            rows_result(subtree),  # snapshot
+            first_result(child),  # lock 2
+            first_result(root),  # lock 5
+            rows_result(subtree),  # re-read: nothing appeared, so stable
         ]
 
         locked = await folder_repo.lock_subtree_for_move(5)
 
         assert sorted(locked) == [2, 5]
         # Ascending, so 2 is locked before 5 even though 5 is the root.
-        lock_stmts = executed_statements(mock_db)[1:]
+        lock_stmts = [
+            stmt
+            for stmt in executed_statements(mock_db)
+            if "FOR UPDATE" in str(stmt)
+        ]
+        assert len(lock_stmts) == 2
         assert lock_stmts[0].compile().params["id_1"] == 2
         assert lock_stmts[1].compile().params["id_1"] == 5
-        assert all("FOR UPDATE" in str(stmt) for stmt in lock_stmts)
+
+    @pytest.mark.anyio
+    async def test_lock_subtree_for_move_picks_up_a_folder_that_appeared(
+        self, folder_repo, mock_db
+    ):
+        """The snapshot is unlocked, so the subtree can grow mid-lock.
+
+        Nobody can reparent into a folder this transaction already holds, so
+        re-reading until a pass adds nothing is what makes the set stable.
+        """
+        root = Folder(
+            id=5,
+            workspace_id=1,
+            user_email="a@b.com",
+            name="Root",
+            parent_id=None,
+        )
+        latecomer = Folder(
+            id=9,
+            workspace_id=1,
+            user_email="a@b.com",
+            name="Late",
+            parent_id=5,
+        )
+        mock_db.execute.side_effect = [
+            rows_result([SimpleNamespace(id=5)]),  # snapshot: root only
+            first_result(root),  # lock 5
+            rows_result(  # re-read: 9 was reparented in
+                [SimpleNamespace(id=5), SimpleNamespace(id=9)]
+            ),
+            first_result(latecomer),  # lock 9
+            rows_result(  # re-read: stable now
+                [SimpleNamespace(id=5), SimpleNamespace(id=9)]
+            ),
+        ]
+
+        locked = await folder_repo.lock_subtree_for_move(5)
+
+        assert sorted(locked) == [5, 9]
+
+    @pytest.mark.anyio
+    async def test_lock_subtree_for_move_gives_up_on_a_reparent_storm(
+        self, folder_repo, mock_db
+    ):
+        """A subtree that never settles is an error, not an infinite loop."""
+        counter = itertools.count(100)
+
+        def never_settles(*_args, **_kwargs):
+            # Every re-read reveals another folder, so no pass is ever clean.
+            next_id = next(counter)
+            return rows_result(
+                [SimpleNamespace(id=5), SimpleNamespace(id=next_id)]
+            )
+
+        def dispatch(statement, *_a, **_kw):
+            if "FOR UPDATE" in str(statement):
+                return first_result(
+                    Folder(
+                        id=5,
+                        workspace_id=1,
+                        user_email="a@b.com",
+                        name="Root",
+                        parent_id=None,
+                    )
+                )
+            return never_settles()
+
+        mock_db.execute.side_effect = dispatch
+
+        with pytest.raises(FolderSubtreeChangedError):
+            await folder_repo.lock_subtree_for_move(5)
+
+    @staticmethod
+    def ownership_gate_prefix(root_folder: Folder) -> list:
+        """The reads that precede the ownership gate on a workspace move."""
+        return [
+            first_result(root_folder),  # root folder lookup
+            rows_result(  # subtree ids
+                [SimpleNamespace(id=1), SimpleNamespace(id=2)]
+            ),
+            rows_result([("existingroot",)]),  # target root names
+        ]
+
+    @staticmethod
+    def owned_root() -> Folder:
+        return Folder(
+            id=1,
+            workspace_id=1,
+            user_email="a@b.com",
+            name="ExistingRoot",
+            parent_id=None,
+        )
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "gate_results,expected_reads",
+        [
+            ([row_present(True)], 4),
+            ([row_present(False), row_present(True)], 5),
+            ([row_present(False), row_present(False), row_present(True)], 6),
+        ],
+        ids=["media_item", "source_asset", "subfolder"],
+    )
+    async def test_move_folder_to_workspace_refuses_a_foreign_owner(
+        self, folder_repo, mock_db, gate_results, expected_reads
+    ):
+        """A non-admin mover must own every row in the subtree.
+
+        Owning the root is not enough: otherwise the per-item ownership check
+        is bypassable by putting someone else's content in a folder you own
+        and moving the folder instead of the content.
+        """
+        root = self.owned_root()
+        mock_db.execute.side_effect = (
+            self.ownership_gate_prefix(root) + gate_results
+        )
+
+        with pytest.raises(FolderSubtreeUnauthorizedError):
+            await folder_repo.move_folder_to_workspace(
+                folder_id=1,
+                target_workspace_id=2,
+                authorized_source_workspace_id=1,
+                restrict_to_user_id=42,
+            )
+
+        # It stops at the offending row and never reaches a write.
+        assert mock_db.execute.await_count == expected_reads
+        mock_db.commit.assert_not_called()
+        mock_db.rollback.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_ownership_gate_scopes_by_workspace_and_excludes_the_owner(
+        self, folder_repo, mock_db
+    ):
+        """The gate looks for rows whose owner is not the mover.
+
+        A NULL owner has to count as "not yours", so the predicate is
+        IS DISTINCT FROM rather than !=, which in SQL never matches NULL.
+        """
+        root = self.owned_root()
+        mock_db.execute.side_effect = self.ownership_gate_prefix(root) + [
+            row_present(True)
+        ]
+
+        with pytest.raises(FolderSubtreeUnauthorizedError):
+            await folder_repo.move_folder_to_workspace(
+                folder_id=1,
+                target_workspace_id=2,
+                authorized_source_workspace_id=1,
+                restrict_to_user_id=42,
+            )
+
+        gate_stmt = executed_statements(mock_db)[3]
+        sql = str(gate_stmt)
+        assert "FROM media_items" in sql
+        assert "IS DISTINCT FROM" in sql
+        params = gate_stmt.compile().params
+        assert 42 in params.values()  # the mover, excluded from the match
+        assert 1 in params.values()  # the authorized source workspace
+
+    @pytest.mark.anyio
+    async def test_move_folder_to_workspace_allows_a_fully_owned_subtree(
+        self, folder_repo, mock_db
+    ):
+        """Everything owned by the mover passes the gate and moves."""
+        root = self.owned_root()
+        mock_db.execute.side_effect = self.ownership_gate_prefix(root) + [
+            row_present(False),  # no foreign media items
+            row_present(False),  # no foreign source assets
+            row_present(False),  # no foreign subfolders
+            MagicMock(rowcount=3),  # media item UPDATE
+            MagicMock(rowcount=2),  # source asset UPDATE
+            MagicMock(),  # media_item_tags DELETE
+            MagicMock(),  # source_asset_tags DELETE
+            MagicMock(rowcount=1),  # child folder UPDATE
+            MagicMock(rowcount=1),  # root folder UPDATE
+        ]
+
+        await folder_repo.move_folder_to_workspace(
+            folder_id=1,
+            target_workspace_id=2,
+            authorized_source_workspace_id=1,
+            restrict_to_user_id=42,
+        )
+
+        mock_db.commit.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_admin_move_runs_no_ownership_queries(
+        self, folder_repo, mock_db
+    ):
+        """restrict_to_user_id=None is the admin override, and costs nothing."""
+        root = self.owned_root()
+        mock_db.execute.side_effect = self.workspace_move_results(root)
+
+        await folder_repo.move_folder_to_workspace(
+            folder_id=1,
+            target_workspace_id=2,
+            authorized_source_workspace_id=1,
+            restrict_to_user_id=None,
+        )
+
+        # The scripted sequence has no ownership reads in it at all, so the
+        # gate being skipped is what keeps the later results aligned.
+        assert mock_db.execute.await_count == len(
+            self.workspace_move_results(root)
+        )
+        mock_db.commit.assert_called_once()
 
     @pytest.mark.anyio
     async def test_move_folder_to_workspace(self, folder_repo, mock_db):
@@ -507,11 +731,32 @@ class TestFolderRepository:
         # Every write is fenced by the workspace the caller was authorized
         # for, so a descendant that left that workspace cannot be dragged
         # along by id alone.
-        for stmt in executed_statements(mock_db)[5:]:
+        updates = [
+            stmt
+            for stmt in executed_statements(mock_db)
+            if str(stmt).startswith("UPDATE")
+        ]
+        assert len(updates) == 4
+        for stmt in updates:
             assert "workspace_id = :workspace_id_1" in str(stmt)
             params = stmt.compile().params
             assert params["workspace_id_1"] == 1
             assert params["workspace_id"] == 99
+
+        # The tag deletes run after the updates and match on the workspace the
+        # rows have now, so a row that raced out never loses its tags.
+        deletes = [
+            stmt
+            for stmt in executed_statements(mock_db)
+            if str(stmt).startswith("DELETE")
+        ]
+        assert len(deletes) == 2
+        first_update = executed_statements(mock_db).index(updates[0])
+        first_delete = executed_statements(mock_db).index(deletes[0])
+        assert first_update < first_delete
+        for stmt in deletes:
+            # 99 is the target workspace: the rows have already been moved.
+            assert stmt.compile().params["workspace_id_1"] == 99
 
     @pytest.mark.anyio
     async def test_move_folder_to_workspace_can_defer_commit(

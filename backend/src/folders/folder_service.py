@@ -196,6 +196,16 @@ class FolderService:
                 detail=f"Folder with ID {folder_id} not found.",
             )
 
+        # The controller only proves workspace membership. This route can
+        # rename and reparent, reaching the same sink move_items guards, so
+        # without an owner check a member could reorganise another member's
+        # hierarchy through the endpoint that move_items does not cover.
+        if UserRoleEnum.ADMIN not in user.roles and folder.user_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to modify this folder.",
+            )
+
         is_moving = False
         new_parent_id = folder.parent_id
 

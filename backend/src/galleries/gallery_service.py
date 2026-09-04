@@ -35,7 +35,7 @@ from src.common.schema.media_item_model import (
 )
 from src.common.storage_service import GcsService
 from src.database import get_db
-from src.galleries.dto.bulk_copy_dto import BulkCopyDto
+from src.galleries.dto.bulk_copy_dto import BulkCopyDto, BulkCopyItemDto
 from src.galleries.dto.bulk_delete_dto import BulkDeleteDto
 from src.galleries.dto.bulk_download_dto import BulkDownloadDto
 from src.galleries.dto.bulk_move_dto import (
@@ -763,6 +763,31 @@ class GalleryService:
             temp_file.close()
             raise e
 
+    def _reject_copy_of_another_users_row(
+        self, row, item: BulkCopyItemDto, current_user: UserModel
+    ) -> None:
+        """Refuses to copy a row the caller does not own.
+
+        Copying is not a read: the new row is attributed to the copier, so
+        without this a workspace member could duplicate another member's
+        content into a workspace only they control and end up owning it.
+        Mirrors the admin-or-owner gate _authorize_item_move applies to
+        moves, since copy reaches the same outcome by a different verb.
+        """
+        is_admin = UserRoleEnum.ADMIN in current_user.roles
+        if is_admin or getattr(row, "user_id", None) == current_user.id:
+            return
+        logger.warning(
+            "User %s unauthorized to copy %s %s",
+            current_user.id,
+            item.type,
+            item.id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to copy one or more of these items.",
+        )
+
     async def bulk_copy(
         self,
         bulk_copy_dto: BulkCopyDto,
@@ -787,6 +812,9 @@ class GalleryService:
                     await self.workspace_auth.authorize(
                         workspace_id=media_item.workspace_id,
                         user=current_user,
+                    )
+                    self._reject_copy_of_another_users_row(
+                        media_item, item, current_user
                     )
 
                     # Create a new MediaItem instance with updated workspace_id
@@ -823,6 +851,9 @@ class GalleryService:
                         workspace_id=asset.workspace_id,
                         user=current_user,
                     )
+                    self._reject_copy_of_another_users_row(
+                        asset, item, current_user
+                    )
 
                     # Create a new SourceAsset instance with updated workspace_id
                     new_asset_data = asset.model_dump(
@@ -857,14 +888,28 @@ class GalleryService:
                         user=current_user,
                     )
 
+                    self._reject_copy_of_another_users_row(
+                        folder, item, current_user
+                    )
+
+                    is_admin = UserRoleEnum.ADMIN in current_user.roles
                     await self.folder_repo.copy_folder_to_workspace(
                         folder_id=folder.id,
                         target_workspace_id=bulk_copy_dto.target_workspace_id,
                         user_id=current_user.id,
                         user_email=current_user.email,
+                        # Owning the root is not enough, same as for a move.
+                        restrict_to_user_id=(
+                            None if is_admin else current_user.id
+                        ),
                     )
                     copied_count += 1
 
+            except HTTPException:
+                # An authorization refusal is the caller's problem, not a
+                # per-item hiccup to log and skip: swallowing it here would
+                # report a smaller copied_count and no reason why.
+                raise
             except Exception as e:
                 logger.error(f"Error copying {item.type} {item.id}: {e}")
 

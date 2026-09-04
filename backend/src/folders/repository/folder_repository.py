@@ -38,6 +38,11 @@ from src.tags.schema.tags_model import media_item_tags, source_asset_tags
 # is not. Real folder trees are nowhere near 100 deep.
 MAX_FOLDER_DEPTH = 100
 
+# How many times a subtree lock will re-read and pick up folders that appeared
+# mid-lock before giving up. Two passes settle any quiet system; more than a
+# handful means something is reparenting continuously.
+_SUBTREE_LOCK_PASSES = 5
+
 
 class FolderSubtreeChangedError(RuntimeError):
     """Raised when a folder subtree changed underneath a workspace move."""
@@ -204,13 +209,27 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         whole subtree here, sorted, before any write keeps every mover on one
         global order. Missing entries mean the row is gone or soft-deleted.
         """
-        descendant_ids = await self.get_descendant_ids(folder_id)
+        # The descendant read is unlocked, so a folder can be reparented into
+        # the subtree between the snapshot and the last lock. Re-read after
+        # locking and pick up anything that appeared: nobody can reparent into
+        # a folder this transaction already holds, so once a pass adds nothing
+        # the set is stable. Bounded, because each pass either terminates or
+        # grows the set, and a caller in a reparent storm should get an error
+        # rather than loop forever.
         locked: dict[int, Folder] = {}
-        for lock_id in sorted({folder_id, *descendant_ids}):
-            row = await self.get_folder_for_update(lock_id)
-            if row is not None:
-                locked[lock_id] = row
-        return locked
+        for _ in range(_SUBTREE_LOCK_PASSES):
+            wanted = {folder_id, *await self.get_descendant_ids(folder_id)}
+            missing = sorted(wanted - locked.keys())
+            if not missing:
+                return locked
+            for lock_id in missing:
+                row = await self.get_folder_for_update(lock_id)
+                if row is not None:
+                    locked[lock_id] = row
+
+        raise FolderSubtreeChangedError(
+            f"Folder {folder_id} subtree kept changing while being locked."
+        )
 
     async def get_folders_by_ids(
         self, folder_ids: list[int], workspace_id: int
@@ -672,33 +691,6 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 restrict_to_user_id=restrict_to_user_id,
             )
 
-        # 0. Sever workspace-scoped tag associations before the rows change
-        # workspace. A tag belongs to the source workspace, so a row that kept
-        # its tag associations after landing in target_workspace_id would stay
-        # associated with tags that workspace never created. Upstream deletes
-        # these here and the port dropped it. Scoped the same way the writes
-        # below are, so a row that raced out of the authorized source
-        # workspace keeps its tags untouched along with its workspace.
-        media_tags_delete = delete(media_item_tags).where(
-            media_item_tags.c.media_item_id.in_(
-                select(MediaItem.id).where(
-                    MediaItem.folder_id.in_(descendant_ids),
-                    MediaItem.workspace_id == authorized_source_workspace_id,
-                )
-            )
-        )
-        await self.db.execute(media_tags_delete)
-
-        asset_tags_delete = delete(source_asset_tags).where(
-            source_asset_tags.c.source_asset_id.in_(
-                select(SourceAsset.id).where(
-                    SourceAsset.folder_id.in_(descendant_ids),
-                    SourceAsset.workspace_id == authorized_source_workspace_id,
-                )
-            )
-        )
-        await self.db.execute(asset_tags_delete)
-
         # 1. Update media items belonging to any folder in the subtree. Their
         # ids were never materialized, so there is no expected count to check;
         # the workspace predicate is what keeps the write in bounds.
@@ -722,6 +714,34 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
             .values(workspace_id=target_workspace_id)
         )
         await self.db.execute(asset_stmt)
+
+        # 2b. Sever workspace-scoped tag associations, keyed on the rows
+        # that actually landed in the target workspace. A tag belongs to the
+        # source workspace, so a row keeping its associations after the move
+        # would point at tags the target workspace never created. Upstream
+        # deletes these and the port dropped it. Deleting AFTER the updates
+        # and matching on target_workspace_id matters: each statement takes
+        # its own snapshot under READ COMMITTED, so deleting first would
+        # strip tags from a row that then raced out and never moved.
+        media_tags_delete = delete(media_item_tags).where(
+            media_item_tags.c.media_item_id.in_(
+                select(MediaItem.id).where(
+                    MediaItem.folder_id.in_(descendant_ids),
+                    MediaItem.workspace_id == target_workspace_id,
+                )
+            )
+        )
+        await self.db.execute(media_tags_delete)
+
+        asset_tags_delete = delete(source_asset_tags).where(
+            source_asset_tags.c.source_asset_id.in_(
+                select(SourceAsset.id).where(
+                    SourceAsset.folder_id.in_(descendant_ids),
+                    SourceAsset.workspace_id == target_workspace_id,
+                )
+            )
+        )
+        await self.db.execute(asset_tags_delete)
 
         # 3. Update descendant child folders (excluding the root folder being moved)
         child_folder_ids = [fid for fid in descendant_ids if fid != folder_id]
@@ -820,6 +840,7 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         target_workspace_id: int,
         user_id: int,
         user_email: str | None = None,
+        restrict_to_user_id: int | None = None,
     ) -> dict[str, int]:
         """Copies a folder hierarchy and all contained media items and source assets to a target workspace with root name disambiguation."""
         root_folder = await self.get_folder_by_id(folder_id)
@@ -857,6 +878,18 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         disambiguated_root_name = generate_disambiguated_name(
             root_folder.name, existing_root_names
         )
+
+        # Copying is exfiltration too: the new rows are attributed to the
+        # copier, so without this a workspace member could duplicate another
+        # member's subtree into a workspace only they control and own the
+        # copy. Gated exactly like a move, and before the first write.
+        if restrict_to_user_id is not None:
+            await self._reject_if_subtree_has_other_owners(
+                folder_id=folder_id,
+                descendant_ids=[row.id for row in folder_rows],
+                authorized_source_workspace_id=root_folder.workspace_id,
+                restrict_to_user_id=restrict_to_user_id,
+            )
 
         id_map: dict[int, int] = {}
         for row in folder_rows:

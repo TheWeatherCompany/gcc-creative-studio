@@ -1331,6 +1331,7 @@ async def test_bulk_copy_folder_success(service):
         id: int
         workspace_id: int
         name: str
+        user_id: int | None = None
 
     bulk_dto = BulkCopyDto(
         target_workspace_id=88,
@@ -1343,7 +1344,7 @@ async def test_bulk_copy_folder_success(service):
         roles=[UserRoleEnum.USER],
     )
 
-    folder = DummyFolder(id=10, workspace_id=99, name="Campaigns")
+    folder = DummyFolder(id=10, workspace_id=99, name="Campaigns", user_id=1)
     service.mock_folder_repo.get_folder_by_id.return_value = folder
     service.mock_folder_repo.copy_folder_to_workspace.return_value = {
         "folders_copied": 2,
@@ -1364,4 +1365,95 @@ async def test_bulk_copy_folder_success(service):
         target_workspace_id=88,
         user_id=1,
         user_email="user@test.com",
+        restrict_to_user_id=1,
     )
+
+
+@pytest.mark.anyio
+async def test_bulk_copy_refuses_another_users_folder(service):
+    """Copy reaches the same outcome as move, so it needs the same gate.
+
+    The copy is attributed to the copier, so an ungated copy lets a
+    workspace member take ownership of another member's subtree by
+    duplicating it into a workspace only they control.
+    """
+    from pydantic import BaseModel
+    from src.galleries.dto.bulk_copy_dto import BulkCopyDto, BulkCopyItemDto
+
+    class DummyFolder(BaseModel):
+        id: int
+        workspace_id: int
+        name: str
+        user_id: int | None = None
+
+    bulk_dto = BulkCopyDto(
+        target_workspace_id=88,
+        items=[BulkCopyItemDto(id=10, type="folder")],
+    )
+    service.mock_folder_repo.get_folder_by_id.return_value = DummyFolder(
+        id=10, workspace_id=99, name="Campaigns", user_id=MOVER.id + 1
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.bulk_copy(bulk_dto, MOVER)
+
+    assert exc_info.value.status_code == 403
+    service.mock_folder_repo.copy_folder_to_workspace.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_bulk_copy_refuses_another_users_media_item(service):
+    """Same gate on the single-item branch."""
+    from src.galleries.dto.bulk_copy_dto import BulkCopyDto, BulkCopyItemDto
+
+    bulk_dto = BulkCopyDto(
+        target_workspace_id=88,
+        items=[BulkCopyItemDto(id=1, type="media_item")],
+    )
+    service.mock_media_repo.get_by_id.return_value = make_row(
+        1, user_id=MOVER.id + 1
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.bulk_copy(bulk_dto, MOVER)
+
+    assert exc_info.value.status_code == 403
+    service.mock_media_repo.create.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_bulk_copy_lets_an_admin_copy_anything(service):
+    """Admins keep the override, and skip the subtree restriction."""
+    from pydantic import BaseModel
+    from src.galleries.dto.bulk_copy_dto import BulkCopyDto, BulkCopyItemDto
+
+    class DummyFolder(BaseModel):
+        id: int
+        workspace_id: int
+        name: str
+        user_id: int | None = None
+
+    bulk_dto = BulkCopyDto(
+        target_workspace_id=88,
+        items=[BulkCopyItemDto(id=10, type="folder")],
+    )
+    admin = UserModel(
+        id=5,
+        email="admin@test.com",
+        name="Admin",
+        roles=[UserRoleEnum.ADMIN],
+    )
+    service.mock_folder_repo.get_folder_by_id.return_value = DummyFolder(
+        id=10, workspace_id=99, name="Campaigns", user_id=999
+    )
+    service.mock_folder_repo.copy_folder_to_workspace.return_value = {
+        "folders_copied": 1,
+        "media_copied": 0,
+        "assets_copied": 0,
+    }
+
+    result = await service.bulk_copy(bulk_dto, admin)
+
+    assert result["copied_count"] == 1
+    _, kwargs = service.mock_folder_repo.copy_folder_to_workspace.call_args
+    assert kwargs["restrict_to_user_id"] is None
