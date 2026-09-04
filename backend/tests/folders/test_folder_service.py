@@ -98,8 +98,10 @@ def db_result_for_counts(
 def db_result_for_ids(folder_ids: list[int]) -> MagicMock:
     """Result shaped the way the recursive descendant CTE returns rows."""
     result = MagicMock()
+    # depth comes back from the CTE too: the repository refuses a walk that
+    # hit the ceiling, so a shallow depth here means "complete subtree".
     result.fetchall.return_value = [
-        SimpleNamespace(id=folder_id) for folder_id in folder_ids
+        SimpleNamespace(id=folder_id, depth=1) for folder_id in folder_ids
     ]
     return result
 
@@ -697,7 +699,14 @@ class TestDeleteFolder:
     async def test_delete_empty_folder_success(
         self, folder_service, mock_folder_repo, sample_user
     ):
-        folder = Folder(id=1, workspace_id=1, user_email="a@b.com", name="F")
+        folder = Folder(
+            id=1,
+            workspace_id=1,
+            user_id=10,
+            user_email="a@b.com",
+            name="F",
+        )
+        mock_folder_repo.get_folder_for_update.return_value = folder
         mock_folder_repo.get_folder_by_id.return_value = folder
         mock_folder_repo.list_by_parent.return_value = [
             FolderResponseDto(
@@ -725,10 +734,73 @@ class TestDeleteFolder:
         )
 
     @pytest.mark.anyio
+    async def test_delete_folder_refuses_another_users_folder(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """Delete was the last route trusting workspace membership alone.
+
+        In a PUBLIC-scope workspace that is every authenticated user, so an
+        empty folder belonging to someone else was anyone's to remove.
+        """
+        mock_folder_repo.get_folder_for_update.return_value = Folder(
+            id=1,
+            workspace_id=1,
+            user_id=sample_user.id + 1,
+            user_email="other@b.com",
+            name="Theirs",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.delete_folder(1, sample_user)
+        assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+        mock_folder_repo.soft_delete.assert_not_called()
+        # Nothing is detached either: a refusal must not touch their content.
+        mock_folder_repo.release_trashed_contents.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_delete_folder_allows_an_admin(
+        self, folder_service, mock_folder_repo
+    ):
+        """Admins keep the override, consistent with the other routes."""
+        admin = UserModel(
+            id=99,
+            email="admin@example.com",
+            roles=[UserRoleEnum.ADMIN],
+            name="Admin",
+        )
+        folder = Folder(
+            id=1,
+            workspace_id=1,
+            user_id=1,
+            user_email="other@b.com",
+            name="Theirs",
+        )
+        mock_folder_repo.get_folder_for_update.return_value = folder
+        mock_folder_repo.get_folder_by_id.return_value = folder
+        mock_folder_repo.list_by_parent.return_value = [
+            FolderResponseDto(
+                id=1,
+                workspace_id=1,
+                user_email="other@b.com",
+                name="Theirs",
+                parent_id=None,
+                item_count=0,
+                subfolder_count=0,
+            )
+        ]
+        mock_folder_repo.soft_delete.return_value = True
+
+        result = await folder_service.delete_folder(1, admin)
+        assert result["success"] is True
+
+    @pytest.mark.anyio
     async def test_delete_folder_not_found(
         self, folder_service, mock_folder_repo, sample_user
     ):
         """A missing folder is a 404, not a 409."""
+        # The locked read is what runs first now, so that is where 404 comes
+        # from; the ownership check must never see a None row.
+        mock_folder_repo.get_folder_for_update.return_value = None
         mock_folder_repo.get_folder_by_id.return_value = None
 
         with pytest.raises(HTTPException) as exc_info:
@@ -742,6 +814,7 @@ class TestDeleteFolder:
     ):
         """The emptiness check and the soft delete commit exactly once."""
         folder = Folder(
+            user_id=10,
             id=1,
             workspace_id=1,
             user_email="a@b.com",
@@ -768,6 +841,7 @@ class TestDeleteFolder:
         self, db_folder_service, mock_db, sample_user
     ):
         folder = Folder(
+            user_id=10,
             id=1,
             workspace_id=1,
             user_email="a@b.com",
@@ -783,6 +857,7 @@ class TestDeleteFolder:
         self, db_folder_service, mock_db, sample_user
     ):
         folder = Folder(
+            user_id=10,
             id=1,
             workspace_id=1,
             user_email="a@b.com",
@@ -798,6 +873,7 @@ class TestDeleteFolder:
         self, db_folder_service, mock_db, sample_user
     ):
         folder = Folder(
+            user_id=10,
             id=1,
             workspace_id=1,
             user_email="a@b.com",
@@ -814,6 +890,7 @@ class TestDeleteFolder:
     ):
         """A subtree that only holds content further down is still refused."""
         folder = Folder(
+            user_id=10,
             id=1,
             workspace_id=1,
             user_email="a@b.com",
@@ -835,7 +912,7 @@ class TestMoveItems:
     async def test_move_items_success(
         self, folder_service, mock_folder_repo, sample_user
     ):
-        mock_folder_repo.get_folder_by_id.return_value = Folder(
+        mock_folder_repo.get_folder_for_update.return_value = Folder(
             id=5, workspace_id=1, user_email="a@b.com", name="Target"
         )
         mock_folder_repo.get_descendant_ids.return_value = [2]
@@ -869,7 +946,7 @@ class TestMoveItems:
     async def test_move_items_into_itself_error(
         self, folder_service, mock_folder_repo, sample_user
     ):
-        mock_folder_repo.get_folder_by_id.return_value = Folder(
+        mock_folder_repo.get_folder_for_update.return_value = Folder(
             id=5, workspace_id=1, user_email="a@b.com", name="Target"
         )
 
@@ -980,6 +1057,63 @@ class TestMoveItems:
         mock_folder_repo.get_folders_by_ids.assert_not_called()
 
     @pytest.mark.anyio
+    async def test_move_items_locks_the_destination_for_a_media_only_move(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """The destination must be locked even with no folders in the batch.
+
+        Otherwise a concurrent cross-workspace move of the destination can
+        land between validation and the write, leaving items in one workspace
+        pointing at a folder in another, visible in neither view.
+        """
+        mock_folder_repo.get_folder_for_update.return_value = Folder(
+            id=5,
+            workspace_id=1,
+            user_id=sample_user.id,
+            name="Target",
+            user_email="a@b.com",
+        )
+        mock_folder_repo.move_media_items.return_value = 1
+        mock_folder_repo.move_source_assets.return_value = 0
+        mock_folder_repo.move_folders.return_value = 0
+        dto = MoveItemsDto(
+            workspace_id=1,
+            media_item_ids=[10],
+            source_asset_ids=[],
+            folder_ids=[],
+            destination_folder_id=5,
+        )
+
+        await folder_service.move_items(dto, sample_user)
+
+        mock_folder_repo.get_folder_for_update.assert_any_await(5)
+
+    @pytest.mark.anyio
+    async def test_move_items_404s_when_the_locked_destination_moved_away(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """Validation reads the locked row, so a moved destination is caught."""
+        mock_folder_repo.get_folder_for_update.return_value = Folder(
+            id=5,
+            workspace_id=2,  # no longer in the requested workspace
+            user_id=sample_user.id,
+            name="Target",
+            user_email="a@b.com",
+        )
+        dto = MoveItemsDto(
+            workspace_id=1,
+            media_item_ids=[10],
+            source_asset_ids=[],
+            folder_ids=[],
+            destination_folder_id=5,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.move_items(dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_404_NOT_FOUND
+        mock_folder_repo.move_media_items.assert_not_called()
+
+    @pytest.mark.anyio
     async def test_move_items_commits_exactly_once(
         self, db_folder_service, mock_db, sample_user
     ):
@@ -1008,7 +1142,8 @@ class TestMoveItems:
         owned = scalars_result([SimpleNamespace(user_id=sample_user.id)])
 
         mock_db.execute.side_effect = [
-            db_result_for_folder(destination),  # destination lookup
+            # No standalone destination lookup any more: the destination is
+            # read from the locked row further down.
             owned,  # ownership: media items
             owned,  # ownership: source assets
             owned,  # ownership: folders
@@ -1046,7 +1181,7 @@ class TestMoveItems:
         self, folder_service, mock_folder_repo, sample_user
     ):
         """A name clash at the destination is a 409 and nothing sticks."""
-        mock_folder_repo.get_folder_by_id.return_value = Folder(
+        mock_folder_repo.get_folder_for_update.return_value = Folder(
             id=5, workspace_id=1, user_email="a@b.com", name="Target"
         )
         mock_folder_repo.get_descendant_ids.return_value = [2]
@@ -1073,7 +1208,7 @@ class TestMoveItems:
         self, folder_service, mock_folder_repo, sample_user
     ):
         """Only the two folder name indexes map to a 409."""
-        mock_folder_repo.get_folder_by_id.return_value = Folder(
+        mock_folder_repo.get_folder_for_update.return_value = Folder(
             id=5, workspace_id=1, user_email="a@b.com", name="Target"
         )
         mock_folder_repo.db.commit.side_effect = integrity_error(
@@ -1095,7 +1230,7 @@ class TestMoveItems:
         self, folder_service, mock_folder_repo, sample_user
     ):
         """Any failure rolls the whole move back instead of half applying."""
-        mock_folder_repo.get_folder_by_id.return_value = Folder(
+        mock_folder_repo.get_folder_for_update.return_value = Folder(
             id=5, workspace_id=1, user_email="a@b.com", name="Target"
         )
         mock_folder_repo.move_source_assets.side_effect = RuntimeError("boom")

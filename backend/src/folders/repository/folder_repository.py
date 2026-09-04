@@ -48,6 +48,19 @@ class FolderSubtreeChangedError(RuntimeError):
     """Raised when a folder subtree changed underneath a workspace move."""
 
 
+class FolderSubtreeTooDeepError(FolderSubtreeChangedError):
+    """Raised when a subtree walk hit MAX_FOLDER_DEPTH and was cut short.
+
+    Every caller of get_descendant_ids needs the COMPLETE set: the ownership
+    gate would miss foreign-owned rows past the ceiling, a subtree move would
+    strand the remainder in the old workspace, a soft delete would leave
+    orphans, and a cycle check could miss the cycle it exists to catch. A
+    partial answer is therefore an error, not a smaller answer. Subclasses
+    FolderSubtreeChangedError so bulk_move already reports the item as failed
+    instead of returning a 500.
+    """
+
+
 class FolderSubtreeUnauthorizedError(FolderSubtreeChangedError):
     """Raised when a non-admin mover does not own every row in the subtree.
 
@@ -426,14 +439,26 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 JOIN descendants d ON f.parent_id = d.id
                 WHERE f.deleted_at IS NULL AND d.depth < :max_depth
             )
-            SELECT DISTINCT id FROM descendants;
+            SELECT DISTINCT id, depth FROM descendants;
             """
         )
         result = await self.db.execute(
             cte_query,
             {"folder_id": folder_id, "max_depth": MAX_FOLDER_DEPTH},
         )
-        return [row.id for row in result.fetchall()]
+        rows = result.fetchall()
+
+        # Reaching the ceiling means the walk stopped early, so this list is
+        # a prefix of the subtree rather than the subtree. Callers rely on it
+        # being complete, so refuse instead of handing back a partial answer.
+        if any(row.depth >= MAX_FOLDER_DEPTH for row in rows):
+            raise FolderSubtreeTooDeepError(
+                f"Folder {folder_id} is nested deeper than "
+                f"{MAX_FOLDER_DEPTH} levels, so its subtree cannot be read "
+                f"completely."
+            )
+
+        return [row.id for row in rows]
 
     async def get_tree(self, workspace_id: int) -> list[FolderTreeNodeDto]:
         """Fetch full folder hierarchy tree for a workspace."""
@@ -531,6 +556,11 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
             .where(
                 MediaItem.id.in_(media_item_ids),
                 MediaItem.workspace_id == workspace_id,
+                # The ownership gate only loads active rows, so without this
+                # a soft-deleted id resolves to no row, passes the gate
+                # unchecked, and still gets moved: the owner would restore it
+                # into a folder someone else picked.
+                MediaItem.deleted_at.is_(None),
             )
             .values(folder_id=destination_folder_id)
         )
@@ -554,6 +584,11 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
             .where(
                 SourceAsset.id.in_(source_asset_ids),
                 SourceAsset.workspace_id == workspace_id,
+                # The ownership gate only loads active rows, so without this
+                # a soft-deleted id resolves to no row, passes the gate
+                # unchecked, and still gets moved: the owner would restore it
+                # into a folder someone else picked.
+                SourceAsset.deleted_at.is_(None),
             )
             .values(folder_id=destination_folder_id)
         )
@@ -883,7 +918,14 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         # copier, so without this a workspace member could duplicate another
         # member's subtree into a workspace only they control and own the
         # copy. Gated exactly like a move, and before the first write.
+        #
+        # The subtree is locked FIRST. The gate and the media/asset reads
+        # further down are separate statements, so without a lock another
+        # member could move their content into the subtree after the gate
+        # approved it and have it copied anyway, which reopens the bypass
+        # under concurrency.
         if restrict_to_user_id is not None:
+            await self.lock_subtree_for_move(folder_id)
             await self._reject_if_subtree_has_other_owners(
                 folder_id=folder_id,
                 descendant_ids=[row.id for row in folder_rows],
@@ -925,6 +967,9 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         # Copy media items in any of the copied folders
         media_stmt = select(MediaItem).where(
             MediaItem.folder_id.in_(old_folder_ids),
+            # Pinned to the workspace the folder was read from, so a row that
+            # raced in from elsewhere is not copied along with the subtree.
+            MediaItem.workspace_id == root_folder.workspace_id,
             MediaItem.deleted_at.is_(None),
         )
         media_res = await self.db.execute(media_stmt)
@@ -983,6 +1028,7 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         # Copy source assets in any of the copied folders
         asset_stmt = select(SourceAsset).where(
             SourceAsset.folder_id.in_(old_folder_ids),
+            SourceAsset.workspace_id == root_folder.workspace_id,
             SourceAsset.deleted_at.is_(None),
         )
         asset_res = await self.db.execute(asset_stmt)

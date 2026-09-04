@@ -906,12 +906,34 @@ class GalleryService:
                     )
                     copied_count += 1
 
+            except FolderSubtreeUnauthorizedError as exc:
+                # This is a RuntimeError, not an HTTPException, so without its
+                # own clause it fell through to the generic handler below and
+                # the endpoint answered 200 with a quietly smaller
+                # copied_count: an authorization refusal reported as success.
+                await self.db.rollback()
+                logger.warning(
+                    "User %s unauthorized to copy folder %s subtree",
+                    current_user.id,
+                    item.id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        "You are not authorized to copy one or more of these"
+                        " items."
+                    ),
+                ) from exc
             except HTTPException:
                 # An authorization refusal is the caller's problem, not a
                 # per-item hiccup to log and skip: swallowing it here would
                 # report a smaller copied_count and no reason why.
+                await self.db.rollback()
                 raise
             except Exception as e:
+                # Roll back before the next item, or a failed statement leaves
+                # the session poisoned for the rest of the batch.
+                await self.db.rollback()
                 logger.error(f"Error copying {item.type} {item.id}: {e}")
 
         return {"copied_count": copied_count}

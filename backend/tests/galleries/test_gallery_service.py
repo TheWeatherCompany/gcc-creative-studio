@@ -1422,6 +1422,43 @@ async def test_bulk_copy_refuses_another_users_media_item(service):
 
 
 @pytest.mark.anyio
+async def test_bulk_copy_surfaces_a_subtree_refusal_as_403(service):
+    """A refusal from the repository gate must not be reported as success.
+
+    FolderSubtreeUnauthorizedError is a RuntimeError, so it used to fall
+    through to the generic per-item handler, get logged, and leave the
+    endpoint answering 200 with a quietly smaller copied_count.
+    """
+    from pydantic import BaseModel
+    from src.galleries.dto.bulk_copy_dto import BulkCopyDto, BulkCopyItemDto
+
+    class DummyFolder(BaseModel):
+        id: int
+        workspace_id: int
+        name: str
+        user_id: int | None = None
+
+    bulk_dto = BulkCopyDto(
+        target_workspace_id=88,
+        items=[BulkCopyItemDto(id=10, type="folder")],
+    )
+    # Owned by the caller, so the root check passes and the refusal can only
+    # come from the subtree gate inside the repository.
+    service.mock_folder_repo.get_folder_by_id.return_value = DummyFolder(
+        id=10, workspace_id=99, name="Campaigns", user_id=MOVER.id
+    )
+    service.mock_folder_repo.copy_folder_to_workspace.side_effect = (
+        FolderSubtreeUnauthorizedError("subtree has other owners")
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.bulk_copy(bulk_dto, MOVER)
+
+    assert exc_info.value.status_code == 403
+    assert service.mock_db.rollback.await_count == 1
+
+
+@pytest.mark.anyio
 async def test_bulk_copy_lets_an_admin_copy_anything(service):
     """Admins keep the override, and skip the subtree restriction."""
     from pydantic import BaseModel

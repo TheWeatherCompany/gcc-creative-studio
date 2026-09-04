@@ -24,6 +24,7 @@ from src.folders.repository.folder_repository import (
     MAX_FOLDER_DEPTH,
     FolderRepository,
     FolderSubtreeChangedError,
+    FolderSubtreeTooDeepError,
     FolderSubtreeUnauthorizedError,
     generate_disambiguated_name,
 )
@@ -191,14 +192,34 @@ class TestFolderRepository:
 
     @pytest.mark.anyio
     async def test_get_descendant_ids(self, folder_repo, mock_db):
-        mock_row1 = MagicMock(id=1)
-        mock_row2 = MagicMock(id=2)
+        mock_row1 = MagicMock(id=1, depth=1)
+        mock_row2 = MagicMock(id=2, depth=2)
         mock_result = MagicMock()
         mock_result.fetchall.return_value = [mock_row1, mock_row2]
         mock_db.execute.return_value = mock_result
 
         res = await folder_repo.get_descendant_ids(1)
         assert res == [1, 2]
+
+    @pytest.mark.anyio
+    async def test_get_descendant_ids_refuses_a_truncated_walk(
+        self, folder_repo, mock_db
+    ):
+        """A walk that hit the ceiling returns a prefix, not the subtree.
+
+        Every caller needs the complete set: the ownership gate would miss
+        foreign-owned rows past the ceiling, and a subtree move would strand
+        the remainder, so a partial answer has to be an error.
+        """
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = [
+            MagicMock(id=1, depth=1),
+            MagicMock(id=2, depth=MAX_FOLDER_DEPTH),
+        ]
+        mock_db.execute.return_value = mock_result
+
+        with pytest.raises(FolderSubtreeTooDeepError):
+            await folder_repo.get_descendant_ids(1)
 
     @pytest.mark.anyio
     async def test_get_tree(self, folder_repo, mock_db):
@@ -228,7 +249,7 @@ class TestFolderRepository:
 
     @pytest.mark.anyio
     async def test_soft_delete(self, folder_repo, mock_db):
-        mock_row1 = MagicMock(id=1)
+        mock_row1 = MagicMock(id=1, depth=1)
         mock_result = MagicMock()
         mock_result.fetchall.return_value = [mock_row1]
         mock_db.execute.return_value = mock_result
@@ -412,7 +433,7 @@ class TestFolderRepository:
         return [
             first_result(root_folder),  # root folder lookup
             rows_result(  # subtree ids
-                [SimpleNamespace(id=1), SimpleNamespace(id=2)]
+                [SimpleNamespace(id=1, depth=1), SimpleNamespace(id=2, depth=1)]
             ),
             rows_result([("existingroot",)]),  # target root names
             MagicMock(rowcount=3),  # media item UPDATE
@@ -480,7 +501,10 @@ class TestFolderRepository:
             name="Child",
             parent_id=5,
         )
-        subtree = [SimpleNamespace(id=5), SimpleNamespace(id=2)]
+        subtree = [
+            SimpleNamespace(id=5, depth=1),
+            SimpleNamespace(id=2, depth=1),
+        ]
         mock_db.execute.side_effect = [
             rows_result(subtree),  # snapshot
             first_result(child),  # lock 2
@@ -525,14 +549,16 @@ class TestFolderRepository:
             parent_id=5,
         )
         mock_db.execute.side_effect = [
-            rows_result([SimpleNamespace(id=5)]),  # snapshot: root only
+            rows_result(
+                [SimpleNamespace(id=5, depth=1)]
+            ),  # snapshot: root only
             first_result(root),  # lock 5
             rows_result(  # re-read: 9 was reparented in
-                [SimpleNamespace(id=5), SimpleNamespace(id=9)]
+                [SimpleNamespace(id=5, depth=1), SimpleNamespace(id=9, depth=1)]
             ),
             first_result(latecomer),  # lock 9
             rows_result(  # re-read: stable now
-                [SimpleNamespace(id=5), SimpleNamespace(id=9)]
+                [SimpleNamespace(id=5, depth=1), SimpleNamespace(id=9, depth=1)]
             ),
         ]
 
@@ -551,7 +577,10 @@ class TestFolderRepository:
             # Every re-read reveals another folder, so no pass is ever clean.
             next_id = next(counter)
             return rows_result(
-                [SimpleNamespace(id=5), SimpleNamespace(id=next_id)]
+                [
+                    SimpleNamespace(id=5, depth=1),
+                    SimpleNamespace(id=next_id, depth=2),
+                ]
             )
 
         def dispatch(statement, *_a, **_kw):
@@ -578,7 +607,7 @@ class TestFolderRepository:
         return [
             first_result(root_folder),  # root folder lookup
             rows_result(  # subtree ids
-                [SimpleNamespace(id=1), SimpleNamespace(id=2)]
+                [SimpleNamespace(id=1, depth=1), SimpleNamespace(id=2, depth=1)]
             ),
             rows_result([("existingroot",)]),  # target root names
         ]

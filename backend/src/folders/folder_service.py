@@ -335,7 +335,22 @@ class FolderService:
         # move's commit and delete a folder that just gained content. This is
         # the same lock _lock_folders_for_move and move_items take on a
         # destination folder, so the two now queue on one row.
-        await self.folder_repo.get_folder_for_update(folder_id)
+        locked = await self.folder_repo.get_folder_for_update(folder_id)
+        if locked is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Folder with ID {folder_id} not found.",
+            )
+
+        # Delete was the last mutation route trusting workspace membership
+        # alone, which in a PUBLIC-scope workspace is every authenticated
+        # user. Checked against the locked row, so the owner cannot change
+        # under us between here and the write.
+        if UserRoleEnum.ADMIN not in user.roles and locked.user_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to delete this folder.",
+            )
 
         # Raises 404 when the folder is missing or already soft-deleted. This
         # read, the emptiness check and the soft delete all run inside one
@@ -412,15 +427,6 @@ class FolderService:
     ) -> dict[str, int]:
         """Batch moves media items, source assets, and folders to a destination folder."""
         dest_folder_id = dto.destination_folder_id
-        if dest_folder_id is not None:
-            dest_folder = await self.folder_repo.get_folder_by_id(
-                dest_folder_id
-            )
-            if not dest_folder or dest_folder.workspace_id != dto.workspace_id:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Destination folder not found in this workspace.",
-                )
 
         # Reject the whole batch unless the caller owns every requested row.
         # Ownership is immutable once a row exists, so unlike workspace_id it
@@ -439,9 +445,32 @@ class FolderService:
         # this batch touches is locked up front in ascending ID order, matching
         # _lock_folders_for_move, so batches contend in one direction only and
         # queue instead of deadlocking. The locks are held to the commit below.
-        if dest_folder_id is not None and dto.folder_ids:
-            for lock_id in sorted({dest_folder_id, *dto.folder_ids}):
-                await self.folder_repo.get_folder_for_update(lock_id)
+        lock_ids = set(dto.folder_ids)
+        if dest_folder_id is not None:
+            lock_ids.add(dest_folder_id)
+        locked: dict[int, Folder] = {}
+        for lock_id in sorted(lock_ids):
+            row = await self.folder_repo.get_folder_for_update(lock_id)
+            if row is not None:
+                locked[lock_id] = row
+
+        # Validate the destination from the LOCKED row, not from an earlier
+        # read. The foreign key only constrains folders.id, so a destination
+        # that moved workspaces between validation and the write would leave
+        # items in workspace A pointing at a folder now in workspace B, and
+        # such an item shows up in neither folder nor root browsing. Locking
+        # the destination even when only media or assets are moving is what
+        # makes a concurrent cross-workspace move of it queue behind us.
+        if dest_folder_id is not None:
+            destination = locked.get(dest_folder_id)
+            if (
+                destination is None
+                or destination.workspace_id != dto.workspace_id
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Destination folder not found in this workspace.",
+                )
 
         # Validate folder moves against cycle creation
         valid_folder_ids: list[int] = []
