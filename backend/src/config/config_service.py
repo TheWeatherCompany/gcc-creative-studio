@@ -57,10 +57,12 @@ class ConfigService(BaseSettings):
     # GENERATION_MAX_WORKERS env var (e.g. on Cloud Run) after a quota check.
     GENERATION_MAX_WORKERS: int = 4
 
-    # Per-user fairness cap: the maximum number of in-flight (PROCESSING) video
-    # generations a single user may have at once. This keeps one user from
-    # occupying every slot of the shared GENERATION_MAX_WORKERS pool and
-    # starving other users. Override via the GENERATION_MAX_PER_USER env var.
+    # Per-user fairness cap: the maximum number of in-flight (PROCESSING)
+    # generations a single user may have at once, counted separately per media
+    # type (so images and videos get their own allowance rather than competing
+    # for one). This keeps one user from occupying every slot of the shared
+    # GENERATION_MAX_WORKERS pool and starving other users. Override via the
+    # GENERATION_MAX_PER_USER env var.
     #
     # Read GENERATION_EFFECTIVE_MAX_PER_USER, not this value: the cap only means
     # anything if it stays below the pool size, and with the default pool of 4 a

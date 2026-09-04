@@ -1319,6 +1319,78 @@ class ImagenService:
         self.source_asset_repo = source_asset_repo
         self.cfg = config_service
 
+    async def _enforce_per_user_cap(self, user: UserModel) -> None:
+        """Rejects the request if the user already has the maximum number of
+        in-flight image generations. This is a fairness guard so one user cannot
+        occupy every slot of the shared generation pool.
+
+        Counted per media type, so a user's images and videos get separate
+        allowances rather than competing for one.
+
+        Note: the count-then-submit is not atomic, so bursts of simultaneous
+        requests can briefly exceed the cap by a small margin. That is
+        acceptable for a fairness limit; it is not a hard quota boundary.
+        """
+        active = await self.media_repo.count_active_generations(
+            user_id=user.id,
+            mime_type_prefix="image/",
+        )
+        limit = config_service.GENERATION_EFFECTIVE_MAX_PER_USER
+        if active >= limit:
+            logger.info(
+                "Rejected image generation: per-user in-flight cap reached.",
+                extra={
+                    "json_fields": {
+                        "user_id": user.id,
+                        "active_generations": active,
+                        "limit": limit,
+                    },
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    f"You already have {active} image generations in progress. "
+                    f"Please wait for one to finish before starting another "
+                    f"(limit {limit})."
+                ),
+            )
+
+    async def list_active_image_generations(
+        self,
+        user: UserModel,
+    ) -> list[MediaItemResponse]:
+        """Returns the caller's in-flight image generations.
+
+        The frontend tracks generation jobs in memory, so a reload (or a second
+        tab) loses the cards while the rows still count against the per-user
+        cap. This rebuilds them from exactly the rows the cap counts.
+
+        Deliberately not workspace-scoped, because the cap is not either: a job
+        started in another workspace still occupies one of the user's slots and
+        so still needs a card. The user is taken from the token rather than the
+        request, so there is nothing here that can be pointed at someone else.
+        """
+        # Derived from the cap rather than hardcoded, so raising the cap cannot
+        # leave a user with in-flight jobs that have no card. The headroom
+        # covers the cap's non-atomic count-then-submit overshoot.
+        limit = config_service.GENERATION_EFFECTIVE_MAX_PER_USER * 2 + 10
+        items = await self.media_repo.list_active_generations(
+            user_id=user.id,
+            mime_type_prefix="image/",
+            limit=limit,
+        )
+        # In-flight jobs have no output yet, so the presigned lists are empty:
+        # the same shape the submit endpoints return for a fresh placeholder.
+        return [
+            MediaItemResponse(
+                **item.model_dump(),
+                presigned_urls=[],
+                presigned_thumbnail_urls=[],
+            )
+            for item in items
+        ]
+
     async def start_upload_upscale_job(
         self,
         user: UserModel,
@@ -1361,6 +1433,10 @@ class ImagenService:
         Returns:
             A MediaItemResponse representing the placeholder item.
         """
+        # Enforce the per-user in-flight cap before doing any work. An upscale
+        # produces an image/* PROCESSING row like any other generation, so it
+        # has to respect the same cap that counts those rows.
+        await self._enforce_per_user_cap(user)
 
         # --- Validation for Existing Assets (Sync Check) ---
         target_gcs_uri = None
@@ -1499,6 +1575,9 @@ class ImagenService:
         """Immediately creates a placeholder MediaItem and starts the image
         generation in the background.
         """
+        # 0. Enforce the per-user in-flight cap before doing any work.
+        await self._enforce_per_user_cap(user)
+
         # Create a placeholder document
         placeholder_item = MediaItemModel(
             workspace_id=request_dto.workspace_id,
@@ -1562,6 +1641,9 @@ class ImagenService:
             pre-generated ID.
 
         """
+        # 1. Enforce the per-user in-flight cap before doing any work.
+        await self._enforce_per_user_cap(user)
+
         # 2. Create a placeholder document
         # Do not allow manually setting ID for auto-increment columns
         placeholder_item = MediaItemModel(

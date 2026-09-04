@@ -91,6 +91,32 @@ async def generate_images(
         ) from e
 
 
+@router.get(
+    "/active",
+    response_model=list[MediaItemResponse],
+    summary="List the caller's in-flight image generations",
+)
+async def list_active_image_generations(
+    current_user: UserModel = Depends(get_current_user),
+    service: ImagenService = Depends(),
+):
+    """Returns the image generations the caller currently has in flight.
+
+    Used by the frontend to rebuild its job cards after a reload. No workspace
+    parameter: the per-user cap spans workspaces, so this must too. The user
+    comes from the token, so a caller can only ever see their own jobs.
+    """
+    try:
+        return await service.list_active_image_generations(user=current_user)
+    except HTTPException as http_exception:
+        raise http_exception
+    except Exception as e:
+        raise HTTPException(
+            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        ) from e
+
+
 @router.post("/generate-images-for-vto")
 async def generate_images_vto(
     image_request: VtoDto,

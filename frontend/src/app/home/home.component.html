@@ -17,7 +17,7 @@
 <div class="lg:container lg:mx-auto">
   <div class="home-margin grid grid-cols-1">
     <!-- Video Homepage -->
-    <ng-container *ngIf="isLoading && !isImageGenerating; else videoOrGallery">
+    <ng-container *ngIf="isLoading; else videoOrGallery">
       <div class="video-container">
         <div class="w-full h-full flex justify-center items-center">
           <mat-progress-spinner
@@ -28,25 +28,108 @@
       </div>
     </ng-container>
     <ng-template #videoOrGallery>
-      <!-- Loading Overlay for Image Generation -->
-      <div *ngIf="isImageGenerating"
-        class="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black bg-opacity-70 rounded-xl">
-        <mat-progress-spinner mode="indeterminate" [diameter]="50" color="primary"></mat-progress-spinner>
-        <p class="!mt-6 text-white text-lg">
-          Generating Images...
-        </p>
-        <p class="text-gray-400 text-sm">
-          This may take a few moments. You can safely navigate away.
-        </p>
-      </div>
+      <!-- Image generation results. Multiple generations can run at once; each
+           is a card that flips from a spinner to the finished image in place.
+           No full-screen overlay blocks starting another generation. -->
+      <ng-container *ngIf="activeImageJobs$ | async as jobs">
+        <!-- Grid of in-flight and finished job cards -->
+        <div
+          *ngIf="!imagenDocuments && jobs.length > 0"
+          class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+        >
+          <div
+            *ngFor="let job of jobs; trackBy: trackJobById"
+            class="relative rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800 aspect-square flex items-center justify-center"
+          >
+            <!-- Processing -->
+            <div
+              *ngIf="job.status === JobStatus.PROCESSING"
+              class="flex flex-col items-center justify-center p-4 text-center"
+            >
+              <mat-progress-spinner
+                color="primary"
+                mode="indeterminate"
+                [diameter]="40"
+              ></mat-progress-spinner>
+              <p class="!mt-4 text-white text-sm">
+                Your image is being generated...
+              </p>
+              <p class="text-gray-400 text-xs">
+                This may take a few moments. You can safely navigate away.
+              </p>
+              <!-- Stops tracking this card only; the generation itself keeps
+                   running and will land in the gallery. Gives the user a way
+                   out of a card that is no longer making progress. -->
+              <button
+                mat-button
+                (click)="dismissJob(job)"
+                class="!mt-2 !text-xs"
+                matTooltip="Hide this card. The image will still finish and appear in your gallery."
+              >
+                Hide
+              </button>
+            </div>
 
-      <ng-container
-        *ngIf="
-          (imagenDocuments?.presignedUrls?.length || 0) === 0;
-          else imageGallery
-        "
-      >
-        <div class="video-container">
+            <!-- Completed -->
+            <button
+              *ngIf="job.status === JobStatus.COMPLETED"
+              type="button"
+              (click)="openJob(job)"
+              class="w-full h-full"
+            >
+              <img
+                *ngIf="
+                  job.presignedThumbnailUrls && job.presignedThumbnailUrls[0];
+                  else noThumb
+                "
+                [src]="job.presignedThumbnailUrls[0]"
+                class="w-full h-full object-cover"
+                alt="Generated image"
+              />
+              <ng-template #noThumb>
+                <div
+                  class="flex items-center justify-center w-full h-full text-white"
+                >
+                  <mat-icon class="!w-12 !h-12 !text-5xl">image</mat-icon>
+                </div>
+              </ng-template>
+              <div
+                class="absolute bottom-0 inset-x-0 bg-black/60 text-white text-xs py-1.5 flex items-center justify-center gap-1"
+              >
+                <mat-icon class="!text-base !w-4 !h-4">visibility</mat-icon>
+                View
+              </div>
+            </button>
+
+            <!-- Failed -->
+            <div
+              *ngIf="job.status === JobStatus.FAILED"
+              class="flex flex-col items-center justify-center p-4 text-center"
+            >
+              <mat-icon class="text-red-500 !w-10 !h-10 !text-4xl"
+                >error_outline</mat-icon
+              >
+              <p class="mt-2 text-white text-sm">Image generation failed</p>
+              <p
+                class="text-gray-400 text-xs max-w-xs w-full line-clamp-3 px-2"
+                [title]="job.errorMessage || job.error_message"
+              >
+                {{ job.errorMessage || job.error_message }}
+              </p>
+              <button
+                mat-button
+                color="warn"
+                (click)="dismissJob(job)"
+                class="!mt-2"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+        <!-- Hero: only when nothing is in flight and nothing is open -->
+        <ng-container *ngIf="!imagenDocuments && jobs.length === 0">
+          <div class="video-container">
           <!-- Text for Tablet and beyond -->
           <div
             class="hidden md:flex justify-center items-center w-full h-full absolute"
@@ -105,14 +188,19 @@
               Welcome to Creative Studio
             </div>
           </div>
-        </div>
-      </ng-container>
-      <!-- Image Gallery -->
-      <ng-template #imageGallery>
-        <div class="grid grid-cols-1 gap-4">
+          </div>
+        </ng-container>
+
+        <!-- Inline lightbox for the generation the user opened -->
+        <div *ngIf="imagenDocuments as job" class="grid grid-cols-1 gap-4">
+          <div>
+            <button mat-stroked-button (click)="backToResults()">
+              <mat-icon>arrow_back</mat-icon>
+              <span class="ml-1">Back to results</span>
+            </button>
+          </div>
           <app-media-lightbox
-            *ngIf="imagenDocuments"
-            [mediaItem]="imagenDocuments"
+            [mediaItem]="job"
             [initialIndex]="0"
             [showSeeMoreInfoButton]="true"
             [showDeleteButton]="true"
@@ -124,7 +212,7 @@
           ></app-media-lightbox>
           <div #promptBoxTarget></div>
         </div>
-      </ng-template>
+      </ng-container>
     </ng-template>
 
     <!-- Control Options -->
@@ -378,7 +466,7 @@
         <app-flow-prompt-box class="w-full max-w-2xl block" [prompt]="searchRequest.prompt"
           [aspectRatio]="selectedAspectRatio" [outputs]="searchRequest.numberOfMedia || 1" [mode]="currentMode"
           [modes]="modes" [aspectRatioOptions]="aspectRatioOptions" [generationModels]="generationModels"
-          [isLoading]="isImageGenerating" [selectedGenerationModel]="selectedGenerationModel"
+          [isLoading]="isSubmittingImage" [selectedGenerationModel]="selectedGenerationModel"
           [referenceImages]="referenceImages" [resolution]="searchRequest.resolution"
           (promptChanged)="onPromptChanged($event)" (aspectRatioChanged)="onAspectRatioChanged($event)"
           (resolutionChanged)="onResolutionChanged($event)" (outputsChanged)="onOutputsChanged($event)"

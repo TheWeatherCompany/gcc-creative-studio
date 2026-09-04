@@ -18,7 +18,7 @@ import {HttpClientTestingModule} from '@angular/common/http/testing';
 import {MatDialog} from '@angular/material/dialog';
 import {MatSnackBar} from '@angular/material/snack-bar';
 import {Router} from '@angular/router';
-import {of} from 'rxjs';
+import {of, Subject, throwError} from 'rxjs';
 import {Injector, CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
 
 import {HomeComponent} from './home.component';
@@ -73,9 +73,15 @@ describe('HomeComponent', () => {
   beforeEach(async () => {
     mockSearchService = jasmine.createSpyObj(
       'SearchService',
-      ['startImagenGeneration', 'rewritePrompt', 'getRandomPrompt'],
+      [
+        'startImagenGeneration',
+        'rewritePrompt',
+        'getRandomPrompt',
+        'restoreActiveImageJobs',
+        'removeImageJob',
+      ],
       {
-        activeImageJob$: of(null),
+        activeImageJobs$: of([]),
         imagePrompt: '',
       },
     );
@@ -163,7 +169,7 @@ describe('HomeComponent', () => {
 
   it('should initialize with default UI state', () => {
     expect(component.isLoading).toBeFalse();
-    expect(component.isImageGenerating).toBeFalse();
+    expect(component.isSubmittingImage).toBeFalse();
     expect(component.currentMode).toBe('Text to Image');
     expect(component.negativePhrases.length).toBe(0);
   });
@@ -294,7 +300,70 @@ describe('HomeComponent', () => {
     );
     component.searchTerm();
     expect(mockSearchService.startImagenGeneration).toHaveBeenCalled();
-    expect(component.isImageGenerating).toBeTrue();
+    // The submit flag only covers the request itself. Once it resolves the
+    // Generate button is live again, so a second generation can be queued
+    // while the first is still running server-side.
+    expect(component.isSubmittingImage).toBeFalse();
+  });
+
+  it('should disable generate only for the submit, not the generation', () => {
+    component.searchRequest.prompt = 'a test prompt';
+    const submit = new Subject<any>();
+    mockSearchService.startImagenGeneration.and.returnValue(submit as any);
+
+    component.searchTerm();
+    // The POST is still open: the button is disabled so the same request
+    // cannot be fired twice.
+    expect(component.isSubmittingImage).toBeTrue();
+
+    // The job is accepted and now runs server-side as its own card. The
+    // button must come back so another generation can be queued: this flag
+    // used to stay set for the whole generation.
+    submit.next({id: 1, status: 'processing'});
+    submit.complete();
+    expect(component.isSubmittingImage).toBeFalse();
+  });
+
+  it('should restore hidden cards when the per-user cap rejects a submit', () => {
+    component.searchRequest.prompt = 'a test prompt';
+    mockSearchService.startImagenGeneration.and.returnValue(
+      throwError(() => ({status: 429})),
+    );
+    // ngOnInit already restored once; only the rejection's call should count.
+    mockSearchService.restoreActiveImageJobs.calls.reset();
+
+    component.searchTerm();
+
+    // Otherwise "you already have N in progress" lands on an empty screen.
+    expect(mockSearchService.restoreActiveImageJobs).toHaveBeenCalled();
+  });
+
+  it('should restore in-flight generations on init', () => {
+    expect(mockSearchService.restoreActiveImageJobs).toHaveBeenCalled();
+  });
+
+  it('should only open completed jobs in the lightbox', () => {
+    component.imagenDocuments = null;
+
+    component.openJob({id: 1, status: 'processing'} as any);
+    expect(component.imagenDocuments).toBeNull();
+
+    const completed = {id: 2, status: 'completed'} as any;
+    component.openJob(completed);
+    expect(component.imagenDocuments).toBe(completed);
+
+    component.backToResults();
+    expect(component.imagenDocuments).toBeNull();
+  });
+
+  it('should stop tracking a dismissed job and close it if open', () => {
+    const job = {id: 7, status: 'failed'} as any;
+    component.imagenDocuments = job;
+
+    component.dismissJob(job);
+
+    expect(mockSearchService.removeImageJob).toHaveBeenCalledWith(7);
+    expect(component.imagenDocuments).toBeNull();
   });
 
   it('should show snackbar if prompt is empty on searchTerm', () => {

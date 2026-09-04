@@ -313,6 +313,7 @@ export class AuthService {
     // outgoing user's cards and their polling would survive into the next
     // sign-in in the same tab.
     this.searchService.clearActiveVideoJobs();
+    this.searchService.clearActiveImageJobs();
   }
 
   /**

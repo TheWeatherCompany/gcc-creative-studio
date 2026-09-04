@@ -35,6 +35,7 @@ import {
   handleErrorSnackbar,
   handleSuccessSnackbar,
 } from '../../utils/handleMessageSnackbar';
+import {GenerationJobTracker} from './generation-job-tracker';
 
 export interface RewritePromptRequest {
   targetType: 'image' | 'video';
@@ -44,11 +45,6 @@ export interface ConcatenationInput {
   id: number;
   type: 'media_item' | 'source_asset';
 }
-// How many consecutive failed polls to tolerate before giving up on a job.
-// Generous on purpose: the request is retried on the normal 15s poll tick, so
-// this rides out roughly a minute of backend or network trouble.
-const MAX_CONSECUTIVE_POLL_FAILURES = 4;
-
 export interface ConcatenateVideosDto {
   workspaceId: number;
   name: string;
@@ -60,16 +56,14 @@ export interface ConcatenateVideosDto {
   providedIn: 'root',
 })
 export class SearchService {
-  // Video generation supports multiple concurrent jobs per user. We track the
-  // list of in-flight/finished jobs and poll each one independently, keyed by
-  // its media item id.
-  private activeVideoJobs = new BehaviorSubject<MediaItem[]>([]);
-  public activeVideoJobs$ = this.activeVideoJobs.asObservable();
-  private videoPollingSubscriptions = new Map<number, Subscription>();
+  // Video and image generation both support multiple concurrent jobs per user:
+  // each tracker holds the list of in-flight/finished jobs for its media type
+  // and polls each one independently, keyed by media item id.
+  private readonly videoJobs: GenerationJobTracker;
+  public readonly activeVideoJobs$: Observable<MediaItem[]>;
 
-  private activeImageJob = new BehaviorSubject<MediaItem | null>(null);
-  public activeImageJob$ = this.activeImageJob.asObservable();
-  private imagePollingSubscription: Subscription | null = null;
+  private readonly imageJobs: GenerationJobTracker;
+  public readonly activeImageJobs$: Observable<MediaItem[]>;
 
   private activeAudioJob = new BehaviorSubject<MediaItem | null>(null);
   public activeAudioJob$ = this.activeAudioJob.asObservable();
@@ -86,7 +80,33 @@ export class SearchService {
   constructor(
     private http: HttpClient,
     private _snackBar: MatSnackBar,
-  ) {}
+  ) {
+    // Built here rather than in a field initializer: with ES2022 class fields
+    // those run before the constructor assigns the injected parameters.
+    this.videoJobs = new GenerationJobTracker(
+      {
+        mediaLabel: 'Video',
+        successMessage: 'Your video is ready!',
+        initialPollDelayMs: 5000,
+        pollIntervalMs: 15000,
+      },
+      mediaId => this.getVeoMediaItem(mediaId),
+      this._snackBar,
+    );
+    this.activeVideoJobs$ = this.videoJobs.jobs$;
+
+    this.imageJobs = new GenerationJobTracker(
+      {
+        mediaLabel: 'Image',
+        successMessage: 'Your images are ready!',
+        initialPollDelayMs: 2000,
+        pollIntervalMs: 5000,
+      },
+      mediaId => this.getImagenMediaItem(mediaId),
+      this._snackBar,
+    );
+    this.activeImageJobs$ = this.imageJobs.jobs$;
+  }
 
   searchImagen(searchRequest: ImagenRequest) {
     const searchURL = `${environment.backendURL}/images/generate-images`;
@@ -100,53 +120,39 @@ export class SearchService {
    */
   startImagenGeneration(searchRequest: ImagenRequest): Observable<MediaItem> {
     const searchURL = `${environment.backendURL}/images/generate-images`;
-    return this.http.post<MediaItem>(searchURL, searchRequest).pipe(
-      tap(initialItem => {
-        this.activeImageJob.next(initialItem);
-        this.startImagenPolling(initialItem.id);
-      }),
-    );
+    return this.http
+      .post<MediaItem>(searchURL, searchRequest)
+      .pipe(tap(initialItem => this.imageJobs.start(initialItem)));
   }
 
-  clearActiveImageJob() {
-    this.activeImageJob.next(null);
+  /**
+   * Re-attaches tracking to the image generations that are still running
+   * server-side. See restoreActiveVideoJobs for why this needs a dedicated
+   * endpoint rather than a gallery search.
+   */
+  restoreActiveImageJobs(): void {
+    const url = `${environment.backendURL}/images/active`;
+    this.http.get<MediaItem[]>(url).subscribe({
+      next: items => {
+        for (const item of items ?? []) {
+          this.imageJobs.track(item);
+        }
+      },
+      error: err => {
+        // Non-fatal: the user just does not get their in-flight cards back.
+        console.error('Could not restore in-flight image generations', err);
+      },
+    });
   }
 
-  private startImagenPolling(mediaId: number): void {
-    this.stopImagenPolling();
-    this.imagePollingSubscription = timer(2000, 5000) // Start after 2s, then every 5s
-      .pipe(
-        switchMap(() => this.getImagenMediaItem(mediaId)),
-        tap(latestItem => {
-          this.activeImageJob.next(latestItem);
-          if (
-            latestItem.status === JobStatus.COMPLETED ||
-            latestItem.status === JobStatus.FAILED
-          ) {
-            this.stopImagenPolling();
-            if (latestItem.status === JobStatus.COMPLETED) {
-              handleSuccessSnackbar(this._snackBar, 'Your images are ready!');
-            } else {
-              handleErrorSnackbar(
-                this._snackBar,
-                {message: latestItem.errorMessage || latestItem.error_message},
-                `Image generation failed: ${latestItem.errorMessage || latestItem.error_message}`,
-              );
-            }
-          }
-        }),
-        catchError(err => {
-          console.error('Polling failed', err);
-          this.stopImagenPolling();
-          return EMPTY;
-        }),
-      )
-      .subscribe();
+  /** Removes a single image job from the active list and stops its polling. */
+  removeImageJob(mediaId: number): void {
+    this.imageJobs.remove(mediaId);
   }
 
-  private stopImagenPolling(): void {
-    this.imagePollingSubscription?.unsubscribe();
-    this.imagePollingSubscription = null;
+  /** Clears all active image jobs and stops every poll. */
+  clearActiveImageJobs(): void {
+    this.imageJobs.clear();
   }
 
   getImagenMediaItem(mediaId: number): Observable<MediaItem> {
@@ -168,39 +174,15 @@ export class SearchService {
     return this.http.post<MediaItem>(searchURL, searchRequest).pipe(
       // The 'tap' operator lets us perform a side-effect (like starting polling)
       // without affecting the value passed to the component's subscription.
-      tap(initialItem => {
-        // 1. Add the initial "processing" item to the list of active jobs.
-        this.upsertVideoJob(initialItem);
-        // 2. Start polling this job in the background.
-        this.startVeoPolling(initialItem.id);
-      }),
+      tap(initialItem => this.videoJobs.start(initialItem)),
     );
   }
 
   concatenateVideos(payload: ConcatenateVideosDto): Observable<MediaItem> {
     const url = `${environment.backendURL}/videos/concatenate`;
-    return this.http.post<MediaItem>(url, payload).pipe(
-      tap(initialResponse => {
-        this.upsertVideoJob(initialResponse);
-        this.startVeoPolling(initialResponse.id);
-      }),
-    );
-  }
-
-  /**
-   * Inserts a job into the active list, or replaces the existing entry with the
-   * same id (so a poll update swaps the item in place without reordering).
-   */
-  private upsertVideoJob(item: MediaItem): void {
-    const jobs = this.activeVideoJobs.value;
-    const index = jobs.findIndex(job => job.id === item.id);
-    if (index === -1) {
-      this.activeVideoJobs.next([...jobs, item]);
-      return;
-    }
-    const next = jobs.slice();
-    next[index] = item;
-    this.activeVideoJobs.next(next);
+    return this.http
+      .post<MediaItem>(url, payload)
+      .pipe(tap(initialResponse => this.videoJobs.start(initialResponse)));
   }
 
   /**
@@ -238,116 +220,17 @@ export class SearchService {
    * and polling here too. A job already being tracked is left alone.
    */
   trackVideoJob(item: MediaItem): void {
-    if (this.videoPollingSubscriptions.has(item.id)) {
-      return;
-    }
-    this.upsertVideoJob(item);
-    if (item.status === JobStatus.PROCESSING) {
-      this.startVeoPolling(item.id);
-    }
+    this.videoJobs.track(item);
   }
 
   /** Removes a single job from the active list and stops its polling. */
   removeVideoJob(mediaId: number): void {
-    this.stopVeoPolling(mediaId);
-    this.activeVideoJobs.next(
-      this.activeVideoJobs.value.filter(job => job.id !== mediaId),
-    );
+    this.videoJobs.remove(mediaId);
   }
 
   /** Clears all active video jobs and stops every poll. */
   clearActiveVideoJobs() {
-    this.videoPollingSubscriptions.forEach(sub => sub.unsubscribe());
-    this.videoPollingSubscriptions.clear();
-    this.activeVideoJobs.next([]);
-  }
-
-  /**
-   * Polls the status of a single media item until it reaches a terminal state.
-   * Each job is polled by its own subscription so multiple generations can run
-   * concurrently without clobbering each other.
-   * @param mediaId The ID of the job to poll.
-   */
-  private startVeoPolling(mediaId: number): void {
-    this.stopVeoPolling(mediaId); // Replace any existing poll for this id.
-
-    // A generation runs for minutes, so one failed poll (a 500, a token-refresh
-    // blip, a dropped connection) must not end the tracking. Handle the error
-    // inside the inner request so the outer timer keeps ticking, and only give
-    // up after several consecutive failures.
-    let consecutiveFailures = 0;
-
-    const subscription = timer(5000, 15000) // Start after 5s, then every 15s
-      .pipe(
-        switchMap(() =>
-          this.getVeoMediaItem(mediaId).pipe(
-            catchError(err => {
-              console.error('Polling failed', err);
-              consecutiveFailures++;
-              if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
-                this.abandonVideoJob(mediaId);
-              }
-              return EMPTY;
-            }),
-          ),
-        ),
-        tap(latestItem => {
-          consecutiveFailures = 0;
-          // Swap the latest status into the active list.
-          this.upsertVideoJob(latestItem);
-
-          // If this job is finished, stop polling it.
-          if (
-            latestItem.status === JobStatus.COMPLETED ||
-            latestItem.status === JobStatus.FAILED
-          ) {
-            this.stopVeoPolling(mediaId);
-            if (latestItem.status === JobStatus.COMPLETED) {
-              handleSuccessSnackbar(this._snackBar, 'Your video is ready!');
-            } else {
-              handleErrorSnackbar(
-                this._snackBar,
-                {message: latestItem.errorMessage || latestItem.error_message},
-                `Video generation failed: ${latestItem.errorMessage || latestItem.error_message}`,
-              );
-            }
-          }
-        }),
-        // Safety net: an error thrown outside the request itself would
-        // otherwise kill the poll and strand the card on PROCESSING.
-        catchError(err => {
-          console.error('Video polling stream failed', err);
-          this.abandonVideoJob(mediaId);
-          return EMPTY;
-        }),
-      )
-      .subscribe();
-
-    this.videoPollingSubscriptions.set(mediaId, subscription);
-  }
-
-  /**
-   * Stops polling a job and marks it terminally. Called when polling can no
-   * longer make progress: without this the card spins forever with no Dismiss
-   * button and no explanation. The generation itself may well still finish,
-   * hence the pointer to the gallery rather than a flat "it failed".
-   */
-  private abandonVideoJob(mediaId: number): void {
-    this.stopVeoPolling(mediaId);
-    const job = this.activeVideoJobs.value.find(item => item.id === mediaId);
-    if (!job) return;
-    this.upsertVideoJob({
-      ...job,
-      status: JobStatus.FAILED,
-      errorMessage:
-        'Lost track of this generation. It may still be running: ' +
-        'check your gallery in a few minutes.',
-    });
-  }
-
-  private stopVeoPolling(mediaId: number): void {
-    this.videoPollingSubscriptions.get(mediaId)?.unsubscribe();
-    this.videoPollingSubscriptions.delete(mediaId);
+    this.videoJobs.clear();
   }
 
   /**
