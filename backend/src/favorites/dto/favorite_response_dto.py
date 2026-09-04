@@ -12,16 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from pydantic import BaseModel, ConfigDict
-from pydantic.alias_generators import to_camel
+from src.common.base_dto import BaseDto
 
 
-class FavoriteResponseDto(BaseModel):
-  """Response DTO for favorite/unfavorite operations."""
+class FavoriteResponseDto(BaseDto):
+    """The current user's favorite state for a single media item.
 
-  is_favorite: bool
+    Inherits BaseDto's camelCase alias generator so the wire format matches
+    the `isFavorite` field the gallery list responses already emit.
+    """
 
-  model_config = ConfigDict(
-    populate_by_name=True,
-    alias_generator=to_camel,
-  )
+    is_favorite: bool

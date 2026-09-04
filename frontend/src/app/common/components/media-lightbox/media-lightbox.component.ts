@@ -151,8 +151,8 @@ export class MediaLightboxComponent
       : this.galleryService.unfavorite(item.id);
 
     request$.subscribe({
-      next: response => {
-        item.isFavorite = response.isFavorite;
+      next: isFavorite => {
+        item.isFavorite = isFavorite;
         this.isFavoriteUpdating = false;
       },
       error: err => {

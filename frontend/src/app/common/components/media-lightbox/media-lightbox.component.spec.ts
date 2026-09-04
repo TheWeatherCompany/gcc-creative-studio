@@ -23,15 +23,27 @@ import {MatSnackBarModule} from '@angular/material/snack-bar';
 import {NoopAnimationsModule} from '@angular/platform-browser/animations';
 import {CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
 
+import {of, throwError} from 'rxjs';
+
 import {MediaLightboxComponent} from './media-lightbox.component';
 import {TagsService} from '../../services/tags.service';
 import {WorkspaceStateService} from '../../../services/workspace/workspace-state.service';
+import {GalleryService} from '../../../gallery/gallery.service';
+import {MediaItem} from '../../models/media-item.model';
 
 describe('MediaLightboxComponent', () => {
   let component: MediaLightboxComponent;
   let fixture: ComponentFixture<MediaLightboxComponent>;
+  let galleryService: jasmine.SpyObj<
+    Pick<GalleryService, 'favorite' | 'unfavorite'>
+  >;
 
   beforeEach(async () => {
+    galleryService = jasmine.createSpyObj('GalleryService', [
+      'favorite',
+      'unfavorite',
+    ]);
+
     await TestBed.configureTestingModule({
       declarations: [MediaLightboxComponent],
       imports: [MatDialogModule, MatSnackBarModule, NoopAnimationsModule],
@@ -49,6 +61,7 @@ describe('MediaLightboxComponent', () => {
             getActiveWorkspaceId: () => 1,
           },
         },
+        {provide: GalleryService, useValue: galleryService},
       ],
       schemas: [CUSTOM_ELEMENTS_SCHEMA],
     }).compileComponents();
@@ -60,5 +73,44 @@ describe('MediaLightboxComponent', () => {
 
   it('should create', () => {
     expect(component).toBeTruthy();
+  });
+
+  describe('favorite toggle', () => {
+    beforeEach(() => {
+      component.mediaItem = {id: 42, isFavorite: false} as MediaItem;
+    });
+
+    // Same shipped bug as the gallery card: the response used to overwrite
+    // the optimistic flip with undefined and the heart went dark.
+    it('leaves the heart lit after a successful favorite', () => {
+      galleryService.favorite.and.returnValue(of(true));
+
+      component.toggleFavorite();
+
+      expect(galleryService.favorite).toHaveBeenCalledWith(42);
+      expect(component.isFavorite).toBeTrue();
+      expect(component.isFavoriteUpdating).toBeFalse();
+    });
+
+    it('leaves the heart unlit after a successful unfavorite', () => {
+      component.mediaItem!.isFavorite = true;
+      galleryService.unfavorite.and.returnValue(of(false));
+
+      component.toggleFavorite();
+
+      expect(galleryService.unfavorite).toHaveBeenCalledWith(42);
+      expect(component.isFavorite).toBeFalse();
+    });
+
+    it('reverts the optimistic flip when the request fails', () => {
+      galleryService.favorite.and.returnValue(
+        throwError(() => new Error('boom')),
+      );
+
+      component.toggleFavorite();
+
+      expect(component.isFavorite).toBeFalse();
+      expect(component.isFavoriteUpdating).toBeFalse();
+    });
   });
 });
