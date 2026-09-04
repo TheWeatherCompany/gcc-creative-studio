@@ -27,7 +27,6 @@ import {trigger, transition, style, animate, state} from '@angular/animations';
 
 @Component({
   selector: 'app-notification-container',
-  standalone: true,
   imports: [CommonModule, MatIconModule, ToastMessageComponent],
   templateUrl: './notification-container.component.html',
   styleUrls: ['./notification-container.component.scss'],

@@ -33,6 +33,7 @@ import {MediaTemplatesService} from '../admin/media-templates-management/media-t
   selector: 'app-fun-templates',
   templateUrl: './fun-templates.component.html',
   styleUrl: './fun-templates.component.scss',
+  standalone: false,
 })
 export class FunTemplatesComponent implements OnInit, OnDestroy {
   private platformId = inject(PLATFORM_ID);

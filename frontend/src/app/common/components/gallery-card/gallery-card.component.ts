@@ -41,6 +41,7 @@ import {handleErrorSnackbar} from '../../../utils/handleMessageSnackbar';
   selector: 'app-gallery-card',
   templateUrl: './gallery-card.component.html',
   styleUrls: ['./gallery-card.component.scss'],
+  standalone: false,
 })
 export class GalleryCardComponent implements OnDestroy {
   isAdmin = false;

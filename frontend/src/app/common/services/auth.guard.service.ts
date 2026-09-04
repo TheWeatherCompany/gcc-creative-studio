@@ -49,6 +49,8 @@ export class AuthGuardService implements CanActivate {
     | Promise<boolean | UrlTree>
     | boolean
     | UrlTree {
+    // Vestigial: SSR was removed, so this always runs in the browser and the
+    // server-side branch below is now unreachable. Left in place for now.
     if (!isPlatformBrowser(this.platformId)) {
       // --- SERVER SIDE ---
       // Allow navigation to render the basic app shell.

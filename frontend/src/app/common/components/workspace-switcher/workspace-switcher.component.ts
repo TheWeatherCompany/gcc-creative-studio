@@ -47,6 +47,7 @@ import {
   selector: 'app-workspace-switcher',
   templateUrl: './workspace-switcher.component.html',
   styleUrls: ['./workspace-switcher.component.scss'],
+  standalone: false,
 })
 export class WorkspaceSwitcherComponent implements OnInit {
   workspaces: Workspace[] = [];
@@ -137,7 +138,7 @@ export class WorkspaceSwitcherComponent implements OnInit {
         if (error?.status === 401 || error?.status === 403) {
           console.warn(
             `Workspaces not loaded: the API returned ${error.status}. ` +
-              `Leaving this to the auth layer.`,
+              'Leaving this to the auth layer.',
           );
           return;
         }

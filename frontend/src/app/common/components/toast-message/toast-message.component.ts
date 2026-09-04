@@ -29,7 +29,6 @@ import {MatIconModule} from '@angular/material/icon';
 
 @Component({
   selector: 'app-toast-message',
-  standalone: true,
   imports: [CommonModule, MatIconModule],
   templateUrl: './toast-message.component.html',
   styleUrls: ['./toast-message.component.scss'],

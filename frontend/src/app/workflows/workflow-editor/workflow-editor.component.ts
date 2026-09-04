@@ -59,6 +59,7 @@ import {WorkflowFormService} from './workflow-form.service';
   templateUrl: './workflow-editor.component.html',
   styleUrls: ['./workflow-editor.component.scss'],
   providers: [WorkflowFormService],
+  standalone: false,
 })
 export class WorkflowEditorComponent implements OnInit, OnDestroy {
   private platformId = inject(PLATFORM_ID);

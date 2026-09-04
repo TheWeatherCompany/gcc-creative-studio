@@ -48,6 +48,7 @@ export function safeReturnUrl(candidate: string | null): string {
   selector: 'app-login',
   templateUrl: './login.component.html',
   styleUrls: ['./login.component.scss'],
+  standalone: false,
 })
 export class LoginComponent {
   loader = false;

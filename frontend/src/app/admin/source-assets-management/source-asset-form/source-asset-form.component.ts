@@ -27,6 +27,7 @@ import {
   selector: 'app-source-asset-form',
   templateUrl: './source-asset-form.component.html',
   styleUrls: ['./source-asset-form.component.scss'],
+  standalone: false,
 })
 export class SourceAssetFormComponent implements OnInit {
   form: FormGroup;

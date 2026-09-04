@@ -35,6 +35,7 @@ import {Subscription} from 'rxjs';
   selector: 'app-media-template-form',
   templateUrl: './media-template-form.component.html',
   styleUrls: ['./media-template-form.component.scss'],
+  standalone: false,
 })
 export class MediaTemplateFormComponent implements OnInit, OnDestroy {
   form: FormGroup;

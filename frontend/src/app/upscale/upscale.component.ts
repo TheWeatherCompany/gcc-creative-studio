@@ -46,6 +46,7 @@ interface AssetPair {
   selector: 'app-upscale',
   templateUrl: './upscale.component.html',
   styleUrls: ['./upscale.component.scss'],
+  standalone: false,
 })
 export class UpscaleComponent implements OnInit, OnDestroy {
   assetPair: AssetPair = {original: null, upscaled: null};

@@ -36,6 +36,7 @@ import {ControlValueAccessor, NG_VALUE_ACCESSOR} from '@angular/forms';
     },
   ],
   encapsulation: ViewEncapsulation.None,
+  standalone: false,
 })
 export class StudioSliderComponent implements ControlValueAccessor {
   @Input() min = 0;

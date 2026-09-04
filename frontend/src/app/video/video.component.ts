@@ -79,6 +79,7 @@ import {NumPos} from '../common/components/flow-prompt-box/flow-prompt-box.compo
   selector: 'app-video',
   templateUrl: './video.component.html',
   styleUrl: './video.component.scss',
+  standalone: false,
 })
 export class VideoComponent implements OnInit, AfterViewInit {
   // Emits the list of the user's in-flight and finished video jobs. Multiple

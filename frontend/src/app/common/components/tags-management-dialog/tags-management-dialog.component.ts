@@ -25,6 +25,7 @@ import {UserService} from '../../../common/services/user.service';
   selector: 'app-tags-management-dialog',
   templateUrl: './tags-management-dialog.component.html',
   styleUrl: './tags-management-dialog.component.scss',
+  standalone: false,
 })
 export class TagsManagementDialogComponent implements OnInit {
   tags: TagModel[] = [];

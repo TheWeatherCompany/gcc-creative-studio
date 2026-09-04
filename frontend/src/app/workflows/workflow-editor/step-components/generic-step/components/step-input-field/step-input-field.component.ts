@@ -22,6 +22,7 @@ import {StepInput} from '../../step.model';
   selector: 'app-step-input-field',
   templateUrl: './step-input-field.component.html',
   styleUrls: ['./step-input-field.component.scss'],
+  standalone: false,
 })
 export class StepInputFieldComponent {
   @Input() control!: FormControl;

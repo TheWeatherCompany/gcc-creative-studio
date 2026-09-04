@@ -56,6 +56,7 @@ export interface DropdownOption {
       ]),
     ]),
   ],
+  standalone: false,
 })
 export class StudioDropdownComponent {
   @Input() options: DropdownOption[] = [];

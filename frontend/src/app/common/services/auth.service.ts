@@ -179,8 +179,8 @@ export class AuthService {
   private noSession(operation: string, error: unknown): Observable<null> {
     console.error(
       `Okta ${operation} failed; continuing without a token. If this repeats ` +
-        `for signed-in users, check that this origin is a Trusted Origin ` +
-        `with CORS enabled in Okta.`,
+        'for signed-in users, check that this origin is a Trusted Origin ' +
+        'with CORS enabled in Okta.',
       error,
     );
     return of(null);
@@ -320,6 +320,7 @@ export class AuthService {
    *
    * Deferred rather than done in the constructor because AuthService is
    * constructed during SSR hydration too, and start() schedules timers.
+   * (Vestigial: SSR was removed, so hydration no longer happens; harmless.)
    */
   private ensureStarted(): void {
     if (this.started || !this.oktaAuth) return;

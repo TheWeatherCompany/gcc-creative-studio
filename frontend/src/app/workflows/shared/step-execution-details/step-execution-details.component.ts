@@ -23,6 +23,7 @@ import {STEP_CONFIGS_MAP} from '../step-configs.map';
   selector: 'app-step-execution-details',
   templateUrl: './step-execution-details.component.html',
   styleUrls: ['./step-execution-details.component.scss'],
+  standalone: false,
 })
 export class StepExecutionDetailsComponent implements OnInit {
   @Input() stepId = '';
