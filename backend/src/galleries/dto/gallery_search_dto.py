@@ -42,3 +42,5 @@ class GallerySearchDto(BaseSearchDto):
     query: str | None = None
     tags: list[str] | None = None
     favorites_only: bool = False
+    folder_id: int | None = None
+    is_root: bool | None = None

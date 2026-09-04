@@ -20,19 +20,31 @@ import zipfile
 
 from fastapi import Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy import func, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.iam_signer_credentials_service import IamSignerCredentials
 from src.common.dto.pagination_response_dto import PaginationResponseDto
 from src.common.schema.media_item_model import (
     JobStatusEnum,
+    MediaItem,
     MediaItemModel,
     SourceAssetLink,
     SourceMediaItemLink,
 )
 from src.common.storage_service import GcsService
+from src.database import get_db
 from src.galleries.dto.bulk_copy_dto import BulkCopyDto
 from src.galleries.dto.bulk_delete_dto import BulkDeleteDto
 from src.galleries.dto.bulk_download_dto import BulkDownloadDto
+from src.galleries.dto.bulk_move_dto import (
+    BulkMoveDto,
+    BulkMoveFailureDto,
+    BulkMoveItemDto,
+    BulkMoveResponseDto,
+    BulkMoveResultDto,
+)
 from src.galleries.dto.gallery_response_dto import (
     MediaItemResponse,
     SourceAssetLinkResponse,
@@ -50,14 +62,54 @@ from src.images.repository.media_item_repository import MediaRepository
 from src.source_assets.repository.source_asset_repository import (
     SourceAssetRepository,
 )
+from src.source_assets.schema.source_asset_model import SourceAsset
 from src.favorites.repository.favorites_repository import FavoritesRepository
 from src.users.repository.user_repository import UserRepository
 from src.users.user_model import UserModel, UserRoleEnum
 from src.workspaces.repository.workspace_repository import WorkspaceRepository
 from src.workspaces.workspace_auth_guard import WorkspaceAuth
 from src.tags.repository.tags_repository import TagsRepository
+from src.common.db_errors import constraint_name_of
+from src.folders.folder_service import FOLDER_NAME_CONSTRAINTS
+from src.folders.repository.folder_repository import (
+    FolderRepository,
+    FolderSubtreeChangedError,
+)
 
 logger = logging.getLogger(__name__)
+
+# Fixed, client-safe reasons for the failure classes a bulk move can report.
+# Raw exception text is never forwarded to the caller.
+MOVE_REASON_NOT_FOUND = "Not found"
+MOVE_REASON_NOT_AUTHORIZED = "Not authorized"
+MOVE_REASON_NAME_CONFLICT = "Name conflict at destination"
+MOVE_REASON_ITEM_CHANGED = "item changed or not found"
+MOVE_REASON_ALREADY_THERE = "Already in the target workspace"
+MOVE_REASON_UNSUPPORTED_TYPE = "Unsupported item type"
+MOVE_REASON_UNEXPECTED = "Move failed"
+
+# Reasons for HTTPExceptions raised by collaborators (WorkspaceAuth and the
+# folder repository), which carry raw detail strings of their own.
+_FOREIGN_MOVE_REASONS: dict[int, str] = {
+    status.HTTP_403_FORBIDDEN: MOVE_REASON_NOT_AUTHORIZED,
+    status.HTTP_404_NOT_FOUND: MOVE_REASON_NOT_FOUND,
+    status.HTTP_409_CONFLICT: MOVE_REASON_NAME_CONFLICT,
+}
+
+
+class MoveRejectedError(HTTPException):
+    """A per-item move rejection whose detail is already client-safe."""
+
+    def __init__(self, status_code: int, reason: str):
+        super().__init__(status_code=status_code, detail=reason)
+        self.reason = reason
+
+
+def _sanitized_move_reason(exc: HTTPException) -> str:
+    """Maps an expected move failure onto its fixed, client-safe reason."""
+    if isinstance(exc, MoveRejectedError):
+        return exc.reason
+    return _FOREIGN_MOVE_REASONS.get(exc.status_code, MOVE_REASON_UNEXPECTED)
 
 
 class GalleryService:
@@ -76,6 +128,8 @@ class GalleryService:
         gcs_service: GcsService = Depends(),
         tags_repo: TagsRepository = Depends(),
         favorites_repo: FavoritesRepository = Depends(),
+        folder_repo: FolderRepository = Depends(),
+        db: AsyncSession = Depends(get_db),
     ):
         """Initializes the service with its dependencies."""
         self.media_repo = media_repo
@@ -89,6 +143,10 @@ class GalleryService:
         self.gcs_service = gcs_service
         self.tags_repo = tags_repo
         self.favorites_repo = favorites_repo
+        self.folder_repo = folder_repo
+        # Same request-scoped session the repositories hold, so bulk_move can
+        # own the transaction boundary around their commit-free writes.
+        self.db = db
 
     async def _enrich_source_asset_link(
         self,
@@ -321,6 +379,20 @@ class GalleryService:
         # If the user is not an admin, force the search to only show completed items
         if not is_admin:
             search_dto.status = JobStatusEnum.COMPLETED
+
+        # If searching within a specific folder, validate the folder exists and belongs to this workspace
+        if search_dto.folder_id is not None:
+            folder = await self.folder_repo.get_folder_by_id(
+                search_dto.folder_id
+            )
+            if not folder or (
+                search_dto.workspace_id is not None
+                and folder.workspace_id != search_dto.workspace_id
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Folder with ID {search_dto.folder_id} not found in this workspace.",
+                )
 
         # Run the database query directly (it is async)
         # We assume UnifiedGalleryRepository.query handles filtering.
@@ -708,7 +780,7 @@ class GalleryService:
                     )
 
                     # Create a new MediaItem instance with updated workspace_id
-                    # exclude 'id', 'created_at', 'updated_at', 'deleted_at', 'deleted_by'
+                    # exclude 'id', 'created_at', 'updated_at', 'deleted_at', 'deleted_by', 'folder_id'
                     new_item_data = media_item.model_dump(
                         exclude={
                             "id",
@@ -717,6 +789,7 @@ class GalleryService:
                             "deleted_at",
                             "deleted_by",
                             "workspace_id",
+                            "folder_id",
                         },
                     )
                     new_item_data["workspace_id"] = (
@@ -750,6 +823,7 @@ class GalleryService:
                             "deleted_at",
                             "deleted_by",
                             "workspace_id",
+                            "folder_id",
                         },
                     )
                     new_asset_data["workspace_id"] = (
@@ -762,7 +836,292 @@ class GalleryService:
                     await self.source_asset_repo.create(new_asset_data)
                     copied_count += 1
 
+                elif item.type == "folder":
+                    folder = await self.folder_repo.get_folder_by_id(item.id)
+                    if not folder:
+                        continue
+
+                    # Authorize source workspace access
+                    await self.workspace_auth.authorize(
+                        workspace_id=folder.workspace_id,
+                        user=current_user,
+                    )
+
+                    await self.folder_repo.copy_folder_to_workspace(
+                        folder_id=folder.id,
+                        target_workspace_id=bulk_copy_dto.target_workspace_id,
+                        user_id=current_user.id,
+                        user_email=current_user.email,
+                    )
+                    copied_count += 1
+
             except Exception as e:
                 logger.error(f"Error copying {item.type} {item.id}: {e}")
 
         return {"copied_count": copied_count}
+
+    async def bulk_move(
+        self,
+        bulk_move_dto: BulkMoveDto,
+        current_user: UserModel,
+    ) -> BulkMoveResponseDto:
+        """Moves multiple gallery items to a target workspace.
+
+        Partial success is explicit: every requested item lands in either
+        `moved` or `failed`. Whole-request atomicity is not available here,
+        because the repositories each own their unit of work and commit as
+        they go, so an item is already durable before the next one starts.
+        Instead each item gets its own service-owned transaction, matching the
+        per-item shape of bulk_copy/bulk_delete and the frontend's per-item
+        optimistic model.
+        """
+        # 1. Authorize target workspace access. This condition is common to
+        # the whole request rather than item-level, so it stays a top-level
+        # 403 instead of being reported per item.
+        await self.workspace_auth.authorize(
+            workspace_id=bulk_move_dto.target_workspace_id,
+            user=current_user,
+        )
+
+        moved: list[BulkMoveResultDto] = []
+        failed: list[BulkMoveFailureDto] = []
+        for item in bulk_move_dto.items:
+            reason: str | None = None
+            try:
+                await self._move_item_without_commit(
+                    item,
+                    bulk_move_dto.target_workspace_id,
+                    current_user,
+                )
+                await self.db.commit()
+            except FolderSubtreeChangedError:
+                # The subtree changed under us, so none of its writes are
+                # trustworthy: drop all of them for this one folder.
+                await self.db.rollback()
+                logger.warning(
+                    "Folder %s changed while being moved; reporting it failed.",
+                    item.id,
+                )
+                reason = MOVE_REASON_ITEM_CHANGED
+            except HTTPException as exc:
+                await self.db.rollback()
+                reason = _sanitized_move_reason(exc)
+            except IntegrityError as exc:
+                # A folder name racing another mover for the same destination
+                # name is a known class; any other constraint break is not.
+                await self.db.rollback()
+                if constraint_name_of(exc) in FOLDER_NAME_CONSTRAINTS:
+                    reason = MOVE_REASON_NAME_CONFLICT
+                else:
+                    logger.exception(
+                        "Failed to move %s %s",
+                        item.type,
+                        item.id,
+                    )
+                    reason = MOVE_REASON_UNEXPECTED
+            except Exception:
+                # Unexpected: log it server-side and tell the caller nothing
+                # beyond the fixed reason, so no raw error text leaks.
+                await self.db.rollback()
+                logger.exception("Failed to move %s %s", item.type, item.id)
+                reason = MOVE_REASON_UNEXPECTED
+
+            if reason is None:
+                moved.append(BulkMoveResultDto(id=item.id, type=item.type))
+            else:
+                failed.append(
+                    BulkMoveFailureDto(
+                        id=item.id,
+                        type=item.type,
+                        reason=reason,
+                    ),
+                )
+
+        return BulkMoveResponseDto(moved=moved, failed=failed)
+
+    async def _move_item_without_commit(
+        self,
+        item: BulkMoveItemDto,
+        target_workspace_id: int,
+        current_user: UserModel,
+    ) -> None:
+        """Applies one item's move, leaving the transaction to the caller."""
+        if item.type == "media_item":
+            row = await self.media_repo.get_by_id(item.id)
+            source_workspace_id = await self._authorize_item_move(
+                row,
+                item,
+                target_workspace_id,
+                current_user,
+            )
+            await self._move_row_without_commit(
+                MediaItem,
+                item.id,
+                source_workspace_id,
+                target_workspace_id,
+            )
+        elif item.type == "source_asset":
+            row = await self.source_asset_repo.get_by_id(item.id)
+            source_workspace_id = await self._authorize_item_move(
+                row,
+                item,
+                target_workspace_id,
+                current_user,
+            )
+            await self._move_row_without_commit(
+                SourceAsset,
+                item.id,
+                source_workspace_id,
+                target_workspace_id,
+            )
+        elif item.type == "folder":
+            await self._move_folder_without_commit(
+                item.id,
+                target_workspace_id,
+                current_user,
+            )
+        else:
+            raise MoveRejectedError(
+                status.HTTP_400_BAD_REQUEST,
+                MOVE_REASON_UNSUPPORTED_TYPE,
+            )
+
+    async def _authorize_item_move(
+        self,
+        row,
+        item: BulkMoveItemDto,
+        target_workspace_id: int,
+        current_user: UserModel,
+    ) -> int:
+        """Authorizes moving one media item or source asset.
+
+        Returns the source workspace the caller was authorized for, which the
+        write is then predicated on. The per-item guards mirror bulk_delete:
+        the row must exist and the caller must be an admin or its owner.
+        """
+        if not row:
+            raise MoveRejectedError(
+                status.HTTP_404_NOT_FOUND,
+                MOVE_REASON_NOT_FOUND,
+            )
+
+        # Authorize source workspace access (where the item is currently).
+        await self.workspace_auth.authorize(
+            workspace_id=row.workspace_id,
+            user=current_user,
+        )
+
+        if row.workspace_id == target_workspace_id:
+            raise MoveRejectedError(
+                status.HTTP_400_BAD_REQUEST,
+                MOVE_REASON_ALREADY_THERE,
+            )
+
+        is_admin = UserRoleEnum.ADMIN in current_user.roles
+        is_owner = getattr(row, "user_id", None) == current_user.id
+        if not is_admin and not is_owner:
+            logger.warning(
+                "User %s unauthorized to move %s %s",
+                current_user.id,
+                item.type,
+                item.id,
+            )
+            raise MoveRejectedError(
+                status.HTTP_403_FORBIDDEN,
+                MOVE_REASON_NOT_AUTHORIZED,
+            )
+
+        return row.workspace_id
+
+    async def _move_row_without_commit(
+        self,
+        model: type[MediaItem] | type[SourceAsset],
+        item_id: int,
+        authorized_source_workspace_id: int,
+        target_workspace_id: int,
+    ) -> None:
+        """Relocates one row, pinned to the workspace it was authorized in.
+
+        The workspace predicate is what makes the authorization and the write
+        one atomic step: authorizing the source workspace and then updating by
+        id alone is a TOCTOU, since a concurrent move can relocate the row in
+        between and the caller would mutate a row in a workspace it was never
+        authorized for. `deleted_at IS NULL` is required too, because the
+        active-row lookup and the write are no longer one stable operation, so
+        without it a concurrently soft-deleted row would be moved and reported
+        as a success. Like base_repository.update, this bumps `updated_at` and
+        detects not-found from the row count, but unlike it the write never
+        commits, so the caller can roll the item back.
+        """
+        result = await self.db.execute(
+            update(model)
+            .where(
+                model.id == item_id,
+                model.workspace_id == authorized_source_workspace_id,
+                model.deleted_at.is_(None),
+            )
+            .values(
+                workspace_id=target_workspace_id,
+                folder_id=None,
+                updated_at=func.now(),
+            ),
+        )
+        if result.rowcount != 1:
+            # The row moved, was deleted, or is otherwise unavailable.
+            raise MoveRejectedError(
+                status.HTTP_409_CONFLICT,
+                MOVE_REASON_ITEM_CHANGED,
+            )
+
+    async def _move_folder_without_commit(
+        self,
+        folder_id: int,
+        target_workspace_id: int,
+        current_user: UserModel,
+    ) -> None:
+        """Moves one folder subtree, leaving the transaction to the caller."""
+        # Lock the root first so the workspace we authorize against is the
+        # same one every subtree write is predicated on. The lock is held for
+        # the rest of this item's transaction.
+        root = await self.folder_repo.get_folder_for_update(folder_id)
+        if root is None:
+            raise MoveRejectedError(
+                status.HTTP_404_NOT_FOUND,
+                MOVE_REASON_NOT_FOUND,
+            )
+
+        await self.workspace_auth.authorize(
+            workspace_id=root.workspace_id,
+            user=current_user,
+        )
+
+        if root.workspace_id == target_workspace_id:
+            raise MoveRejectedError(
+                status.HTTP_400_BAD_REQUEST,
+                MOVE_REASON_ALREADY_THERE,
+            )
+
+        # Same admin-or-owner gate the single-item branch applies in
+        # _authorize_item_move. Without it, workspace membership alone would
+        # let any co-member relocate someone else's folder and, with it, every
+        # item in the subtree -- so the per-item guard would be bypassable
+        # just by moving the parent instead of the children.
+        is_admin = UserRoleEnum.ADMIN in current_user.roles
+        is_owner = root.user_id == current_user.id
+        if not is_admin and not is_owner:
+            logger.warning(
+                "User %s unauthorized to move folder %s",
+                current_user.id,
+                folder_id,
+            )
+            raise MoveRejectedError(
+                status.HTTP_403_FORBIDDEN,
+                MOVE_REASON_NOT_AUTHORIZED,
+            )
+
+        await self.folder_repo.move_folder_to_workspace(
+            folder_id=folder_id,
+            target_workspace_id=target_workspace_id,
+            authorized_source_workspace_id=root.workspace_id,
+            commit=False,
+        )

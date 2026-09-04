@@ -17,11 +17,16 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from src.auth.auth_guard import get_current_user
 from src.common.dto.pagination_response_dto import PaginationResponseDto
+from src.galleries.dto.bulk_move_dto import (
+    BulkMoveFailureDto,
+    BulkMoveResponseDto,
+    BulkMoveResultDto,
+)
 from src.galleries.gallery_controller import router
 from src.galleries.gallery_service import GalleryService
 from src.users.user_model import UserModel, UserRoleEnum
@@ -56,6 +61,8 @@ def fixture_mock_service():
     service.bulk_delete = AsyncMock()
     service.restore_item = AsyncMock()
     service.bulk_download = AsyncMock()
+    service.bulk_copy = AsyncMock()
+    service.bulk_move = AsyncMock()
     return service
 
 
@@ -140,3 +147,101 @@ def test_bulk_download_items_success(client, mock_service):
     payload = {"items": [{"id": 1, "type": "media_item"}], "workspace_id": 1}
     response = client.post("/api/gallery/bulk-download", json=payload)
     assert response.status_code == 200
+
+
+def test_bulk_copy_items_success(client, mock_service):
+    mock_service.bulk_copy.return_value = {"copied_count": 1}
+    payload = {
+        "items": [{"id": 1, "type": "media_item"}],
+        "target_workspace_id": 2,
+    }
+    response = client.post("/api/gallery/bulk-copy", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {"copied_count": 1}
+    mock_service.bulk_copy.assert_called_once()
+
+
+def test_bulk_copy_folders_success(client, mock_service):
+    mock_service.bulk_copy.return_value = {"copied_count": 1}
+    payload = {
+        "items": [{"id": 10, "type": "folder"}],
+        "target_workspace_id": 2,
+    }
+    response = client.post("/api/gallery/bulk-copy", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {"copied_count": 1}
+    mock_service.bulk_copy.assert_called_once()
+
+
+def test_bulk_move_items_success(client, mock_service):
+    mock_service.bulk_move.return_value = BulkMoveResponseDto(
+        moved=[BulkMoveResultDto(id=1, type="media_item")],
+    )
+    payload = {
+        "items": [{"id": 1, "type": "media_item"}],
+        "target_workspace_id": 2,
+    }
+    response = client.post("/api/gallery/bulk-move", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {
+        "moved": [{"id": 1, "type": "media_item"}],
+        "failed": [],
+    }
+    mock_service.bulk_move.assert_called_once()
+
+
+def test_bulk_move_folders_success(client, mock_service):
+    mock_service.bulk_move.return_value = BulkMoveResponseDto(
+        moved=[BulkMoveResultDto(id=10, type="folder")],
+    )
+    payload = {
+        "items": [{"id": 10, "type": "folder"}],
+        "target_workspace_id": 2,
+    }
+    response = client.post("/api/gallery/bulk-move", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {
+        "moved": [{"id": 10, "type": "folder"}],
+        "failed": [],
+    }
+    mock_service.bulk_move.assert_called_once()
+
+
+def test_bulk_move_partial_success_response_shape(client, mock_service):
+    """Every requested row comes back keyed by both its id and its type."""
+    mock_service.bulk_move.return_value = BulkMoveResponseDto(
+        moved=[BulkMoveResultDto(id=5, type="media_item")],
+        failed=[
+            BulkMoveFailureDto(id=5, type="folder", reason="Not authorized"),
+        ],
+    )
+    payload = {
+        "items": [
+            {"id": 5, "type": "media_item"},
+            {"id": 5, "type": "folder"},
+        ],
+        "target_workspace_id": 2,
+    }
+    response = client.post("/api/gallery/bulk-move", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {
+        "moved": [{"id": 5, "type": "media_item"}],
+        "failed": [{"id": 5, "type": "folder", "reason": "Not authorized"}],
+    }
+
+
+def test_bulk_move_target_workspace_denied_is_top_level_403(
+    client,
+    mock_service,
+):
+    """A denied target workspace fails the request instead of each item."""
+    mock_service.bulk_move.side_effect = HTTPException(
+        status_code=403,
+        detail="You do not have permission to access this workspace.",
+    )
+    payload = {
+        "items": [{"id": 1, "type": "media_item"}],
+        "target_workspace_id": 2,
+    }
+    response = client.post("/api/gallery/bulk-move", json=payload)
+    assert response.status_code == 403

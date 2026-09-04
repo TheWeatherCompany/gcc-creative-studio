@@ -57,6 +57,10 @@ class SourceAsset(Base):
         ForeignKey("workspaces.id"),
         nullable=False,
     )
+    folder_id: Mapped[int | None] = mapped_column(
+        ForeignKey("folders.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     gcs_uri: Mapped[str] = mapped_column(String, nullable=False)
     original_filename: Mapped[str] = mapped_column(String, nullable=False)
@@ -108,6 +112,10 @@ class SourceAssetModel(BaseDocument):
 
     workspace_id: int = Field(
         description="Foreign key (ID) to the 'workspaces' collection.",
+    )
+    folder_id: int | None = Field(
+        default=None,
+        description="Foreign key (ID) to the 'folders' collection.",
     )
     user_id: int = Field(
         description="User ID of the person who uploaded this specific file.",
