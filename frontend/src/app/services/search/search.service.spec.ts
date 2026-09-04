@@ -46,6 +46,7 @@ describe('SearchService', () => {
   afterEach(() => {
     // Stop any per-job polling timers before the next test.
     service.clearActiveVideoJobs();
+    service.clearActiveImageJobs();
   });
 
   it('should be created', () => {
@@ -184,4 +185,79 @@ describe('SearchService', () => {
 
     service.clearActiveVideoJobs();
   }));
+
+  describe('image generations', () => {
+    const imageGenerateUrl = `${environment.backendURL}/images/generate-images`;
+
+    it('tracks multiple concurrent image generations independently', () => {
+      let jobs: MediaItem[] = [];
+      service.activeImageJobs$.subscribe(next => (jobs = next));
+
+      service.startImagenGeneration({} as never).subscribe();
+      httpMock.expectOne(imageGenerateUrl).flush(processingItem(1));
+      service.startImagenGeneration({} as never).subscribe();
+      httpMock.expectOne(imageGenerateUrl).flush(processingItem(2));
+
+      // The bug this fixes: the second submit used to replace the first job,
+      // so the first card never left the processing state.
+      expect(jobs.map(job => job.id)).toEqual([1, 2]);
+
+      service.removeImageJob(1);
+      expect(jobs.map(job => job.id)).toEqual([2]);
+    });
+
+    it('polls each image job on its own subscription', fakeAsync(() => {
+      let jobs: MediaItem[] = [];
+      service.activeImageJobs$.subscribe(next => (jobs = next));
+
+      service.startImagenGeneration({} as never).subscribe();
+      httpMock.expectOne(imageGenerateUrl).flush(processingItem(1));
+      service.startImagenGeneration({} as never).subscribe();
+      httpMock.expectOne(imageGenerateUrl).flush(processingItem(2));
+
+      tick(2000);
+      httpMock
+        .expectOne(`${environment.backendURL}/gallery/item/1`)
+        .flush({id: 1, gcsUris: [], status: JobStatus.COMPLETED});
+      httpMock
+        .expectOne(`${environment.backendURL}/gallery/item/2`)
+        .flush({id: 2, gcsUris: [], status: JobStatus.PROCESSING});
+
+      expect(jobs.map(job => job.status)).toEqual([
+        JobStatus.COMPLETED,
+        JobStatus.PROCESSING,
+      ]);
+
+      service.clearActiveImageJobs();
+    }));
+
+    it('restores the in-flight image jobs the backend still has', () => {
+      let jobs: MediaItem[] = [];
+      service.activeImageJobs$.subscribe(next => (jobs = next));
+
+      service.restoreActiveImageJobs();
+
+      // Must be /images/active, not a gallery search: the gallery forces
+      // status=COMPLETED for non-admins, which would return nothing.
+      const request = httpMock.expectOne(
+        `${environment.backendURL}/images/active`,
+      );
+      expect(request.request.method).toBe('GET');
+      request.flush([processingItem(3), processingItem(4)]);
+
+      expect(jobs.map(job => job.id)).toEqual([3, 4]);
+    });
+
+    it('stops polling when image jobs are cleared', fakeAsync(() => {
+      service.startImagenGeneration({} as never).subscribe();
+      httpMock.expectOne(imageGenerateUrl).flush(processingItem(1));
+
+      service.clearActiveImageJobs();
+
+      // No further poll requests, so a signed-out user's timers cannot leak
+      // into the next session.
+      tick(30000);
+      httpMock.verify();
+    }));
+  });
 });

@@ -25,6 +25,7 @@ from src.common.schema.media_item_model import (
     MediaItemModel,
     MimeTypeEnum,
 )
+from src.config.config_service import config_service
 from src.images.dto.create_imagen_dto import CreateImagenDto
 from src.images.dto.upscale_imagen_dto import UpscaleImagenDto
 from src.images.dto.vto_dto import VtoDto, VtoInputLink, VtoSourceMediaItemLink
@@ -44,6 +45,10 @@ def fixture_mock_media_repo():
     repo.create = AsyncMock()
     repo.get_by_id = AsyncMock()
     repo.update = AsyncMock()
+    # Default: user has no in-flight generations, so the per-user cap allows the
+    # request. Individual tests override the return value to exercise the cap.
+    repo.count_active_generations = AsyncMock(return_value=0)
+    repo.list_active_generations = AsyncMock(return_value=[])
     return repo
 
 
@@ -266,6 +271,132 @@ class TestImagenServiceMethods:
         assert response.id == 789
         mock_media_repo.create.assert_called_once()
         mock_executor.submit.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_start_image_generation_job_rejected_at_cap(
+        self,
+        imagen_service,
+        mock_media_repo,
+        sample_create_imagen_dto,
+        sample_user,
+    ):
+        # User is already at the per-user in-flight cap.
+        mock_media_repo.count_active_generations.return_value = (
+            config_service.GENERATION_EFFECTIVE_MAX_PER_USER
+        )
+        mock_executor = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await imagen_service.start_image_generation_job(
+                request_dto=sample_create_imagen_dto,
+                user=sample_user,
+                executor=mock_executor,
+            )
+
+        assert exc_info.value.status_code == 429
+        # Nothing is created or submitted when the cap is hit.
+        mock_media_repo.create.assert_not_called()
+        mock_executor.submit.assert_not_called()
+        # The cap is counted against the user's in-flight images only, so a
+        # video generation cannot consume an image slot.
+        mock_media_repo.count_active_generations.assert_awaited_once_with(
+            user_id=sample_user.id,
+            mime_type_prefix="image/",
+        )
+
+    @pytest.mark.anyio
+    async def test_start_vto_generation_job_rejected_at_cap(
+        self,
+        imagen_service,
+        mock_media_repo,
+        sample_user,
+    ):
+        request_dto = VtoDto(
+            workspace_id=1,
+            person_image={"source_asset_id": 101},
+            top_image={"source_asset_id": 102},
+        )
+        mock_media_repo.count_active_generations.return_value = (
+            config_service.GENERATION_EFFECTIVE_MAX_PER_USER
+        )
+        mock_executor = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await imagen_service.start_vto_generation_job(
+                request_dto=request_dto,
+                user=sample_user,
+                executor=mock_executor,
+            )
+
+        assert exc_info.value.status_code == 429
+        mock_media_repo.create.assert_not_called()
+        mock_executor.submit.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_start_upload_upscale_job_rejected_at_cap(
+        self,
+        imagen_service,
+        mock_media_repo,
+        sample_user,
+    ):
+        # An upscale creates an in-flight image row like any other generation,
+        # so it must respect the same cap rather than being a way around it.
+        mock_media_repo.count_active_generations.return_value = (
+            config_service.GENERATION_EFFECTIVE_MAX_PER_USER
+        )
+        mock_executor = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await imagen_service.start_upload_upscale_job(
+                user=sample_user,
+                executor=mock_executor,
+                workspace_id=1,
+                gcs_uri="gs://bucket/input.png",
+                mime_type="image/png",
+                upscale_factor="x2",
+            )
+
+        assert exc_info.value.status_code == 429
+        mock_media_repo.create.assert_not_called()
+        mock_executor.submit.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_list_active_image_generations(
+        self,
+        imagen_service,
+        mock_media_repo,
+        sample_user,
+    ):
+        mock_media_repo.list_active_generations.return_value = [
+            MediaItemModel(
+                id=901,
+                workspace_id=1,
+                user_id=sample_user.id,
+                user_email=sample_user.email,
+                mime_type=MimeTypeEnum.IMAGE_PNG,
+                model=GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE_PREVIEW,
+                aspect_ratio="1:1",
+                status=JobStatusEnum.PROCESSING,
+                gcs_uris=[],
+                original_gcs_uris=[],
+            ),
+        ]
+
+        items = await imagen_service.list_active_image_generations(
+            user=sample_user,
+        )
+
+        assert [item.id for item in items] == [901]
+        # In-flight jobs have no output yet.
+        assert items[0].presigned_urls == []
+        kwargs = mock_media_repo.list_active_generations.await_args.kwargs
+        assert kwargs["user_id"] == sample_user.id
+        assert kwargs["mime_type_prefix"] == "image/"
+        # The page size must cover the cap, or a user at the cap would be left
+        # with in-flight jobs that have no card.
+        assert (
+            kwargs["limit"] >= config_service.GENERATION_EFFECTIVE_MAX_PER_USER
+        )
 
     @pytest.mark.anyio
     async def test_start_upload_upscale_job_large_image(

@@ -22,7 +22,11 @@ from fastapi.testclient import TestClient
 
 from src.auth.auth_guard import get_current_user
 from src.common.base_dto import GenerationModelEnum
-from src.common.schema.media_item_model import JobStatusEnum, MimeTypeEnum
+from src.common.schema.media_item_model import (
+    JobStatusEnum,
+    MediaItemModel,
+    MimeTypeEnum,
+)
 from src.galleries.dto.gallery_response_dto import MediaItemResponse
 from src.images.imagen_controller import router
 from src.images.imagen_service import ImagenService
@@ -30,7 +34,7 @@ from src.images.schema.imagen_result_model import (
     CustomImagenResult,
     ImageGenerationResult,
 )
-from src.users.user_model import UserModel
+from src.users.user_model import UserModel, UserRoleEnum
 from src.workspaces.workspace_auth_guard import WorkspaceAuth
 
 
@@ -48,6 +52,7 @@ def fixture_mock_service():
     service.start_vto_generation_job = AsyncMock()
     service.start_upload_upscale_job = AsyncMock()
     service.upscale_image = AsyncMock()
+    service.list_active_image_generations = AsyncMock()
     return service
 
 
@@ -173,6 +178,80 @@ def test_upscale_image_api_success(client, mock_service):
 
     assert response.status_code == 200
     assert response.json()["image"]["gcsUri"] == "gs://b/u.png"
+
+
+def test_generate_images_at_cap_returns_429(client, mock_service):
+    """The service's 429 must survive the controller's exception handling.
+
+    The generic `except Exception` below it would otherwise turn a cap
+    rejection into a 500, and the frontend could not tell the two apart.
+    """
+    from fastapi import HTTPException
+
+    mock_service.start_image_generation_job.side_effect = HTTPException(
+        status_code=429,
+        detail="You already have 5 image generations in progress.",
+    )
+
+    response = client.post(
+        "/api/images/generate-images",
+        json={
+            "prompt": "A sunset",
+            "workspace_id": 1,
+            "generation_model": "gemini-3.1-flash-image",
+        },
+    )
+
+    assert response.status_code == 429
+
+
+def test_list_active_image_generations_for_non_admin_user(mock_user):
+    """Exercises the real ImagenService, not a mock of it.
+
+    The gallery search endpoint silently rewrites status to COMPLETED for
+    non-admins, so restoring in-flight cards through it returns nothing for
+    ordinary users. This drives the real service against a mocked repository
+    with a plain "user" role, so that class of regression fails here.
+    """
+    assert UserRoleEnum.ADMIN not in mock_user.roles
+
+    in_flight = MediaItemModel(
+        id=321,
+        workspace_id=1,
+        user_id=1,
+        user_email="test@example.com",
+        mime_type=MimeTypeEnum.IMAGE_PNG,
+        model=GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE_PREVIEW,
+        aspect_ratio="1:1",
+        status=JobStatusEnum.PROCESSING,
+        gcs_uris=[],
+    )
+    media_repo = AsyncMock()
+    media_repo.list_active_generations = AsyncMock(return_value=[in_flight])
+    real_service = ImagenService(
+        media_repo=media_repo,
+        source_asset_repo=AsyncMock(),
+        gemini_service=AsyncMock(),
+        gcs_service=MagicMock(),
+        iam_signer_credentials=MagicMock(),
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.executor = MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[ImagenService] = lambda: real_service
+    client = TestClient(app)
+
+    response = client.get("/api/images/active")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["id"] for item in body] == [321]
+    assert body[0]["status"] == JobStatusEnum.PROCESSING.value
+    kwargs = media_repo.list_active_generations.await_args.kwargs
+    assert kwargs["user_id"] == 1
+    assert kwargs["mime_type_prefix"] == "image/"
 
 
 def test_generate_images_http_exception(client, mock_service):

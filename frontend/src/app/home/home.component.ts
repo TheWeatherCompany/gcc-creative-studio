@@ -33,7 +33,7 @@ import {MatSnackBar} from '@angular/material/snack-bar';
 import {DomSanitizer, SafeResourceUrl} from '@angular/platform-browser';
 import {NavigationExtras, Router} from '@angular/router';
 import {isPlatformBrowser} from '@angular/common';
-import {finalize, Observable} from 'rxjs';
+import {finalize, map, Observable} from 'rxjs';
 import {AssetTypeEnum} from '../admin/source-assets-management/source-asset.model';
 import {ImageCropperDialogComponent} from '../common/components/image-cropper-dialog/image-cropper-dialog.component';
 import {
@@ -44,7 +44,7 @@ import {
   GenerationModelConfig,
   MODEL_CONFIGS,
 } from '../common/config/model-config';
-import {MediaItem} from '../common/models/media-item.model';
+import {JobStatus, MediaItem} from '../common/models/media-item.model';
 import {
   ImagenRequest,
   ReferenceImage,
@@ -75,19 +75,23 @@ import {
 })
 export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   // --- Component State ---
+  /** The generation currently open in the lightbox, if any. */
   imagenDocuments: MediaItem | null = null;
   isLoading = false;
-  isImageGenerating = false;
+  /** True only while the generation request itself is in flight. */
+  isSubmittingImage = false;
   templateParams: GenerationParameters | undefined;
-  showDefaultDocuments = false;
   referenceImages: ReferenceImage[] = [];
   sourceMediaItems: (SourceMediaItemLink | null)[] = [];
   activeWorkspaceId$: Observable<number | null>;
+  activeImageJobs$: Observable<MediaItem[]>;
+  isBrowser = false;
+  public readonly JobStatus = JobStatus; // Expose enum to the template
 
   @HostListener('window:keydown.control.enter', ['$event'])
   handleCtrlEnter(event: Event) {
     const keyboardEvent = event as KeyboardEvent;
-    if (!this.isLoading) {
+    if (!this.isLoading && !this.isSubmittingImage) {
       keyboardEvent.preventDefault();
       this.searchTerm();
     }
@@ -353,17 +357,15 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
     this.activeWorkspaceId$ = this.workspaceStateService.activeWorkspaceId$;
 
-    // Subscribe to the active image job to update the UI
-    this.service.activeImageJob$.subscribe(job => {
-      if (job) {
-        this.processSearchResults(job);
-        if (job.status === 'completed' || job.status === 'failed') {
-          this.isImageGenerating = false;
-        } else {
-          this.isImageGenerating = true;
-        }
-      }
-    });
+    this.isBrowser = isPlatformBrowser(this.platformId);
+    this.activeImageJobs$ = this.service.activeImageJobs$.pipe(
+      map(jobs =>
+        jobs.map(
+          job =>
+            this.galleryService.mapUnifiedItem(job) as unknown as MediaItem,
+        ),
+      ),
+    );
   }
 
   private path = '../../assets/images';
@@ -398,6 +400,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     // As this should be browser code we check first if window exists
     if (typeof window !== 'undefined')
       window.addEventListener('mousemove', this.onMouseMove);
+
+    this.restoreInFlightGenerations();
 
     // Restore state from service
     this.imageStateService.state$.subscribe(state => {
@@ -602,17 +606,39 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     window.open(url, '_blank');
   }
 
-  private processSearchResults(searchResponse: MediaItem) {
-    this.imagenDocuments = searchResponse;
+  /**
+   * Rebuilds cards for generations that are still running server-side. Job
+   * state lives in memory in the service, so a reload (or a second tab) would
+   * otherwise show nothing while those jobs still count against the per-user
+   * cap.
+   */
+  private restoreInFlightGenerations(): void {
+    if (!this.isBrowser) return;
+    this.service.restoreActiveImageJobs();
+  }
 
-    const hasImagenResults =
-      (this.imagenDocuments?.presignedUrls?.length || 0) > 0;
-
-    if (hasImagenResults) {
-      this.showDefaultDocuments = false;
-    } else {
-      this.showDefaultDocuments = true;
+  /** Opens a completed generation in the inline lightbox. */
+  openJob(job: MediaItem) {
+    if (job.status === JobStatus.COMPLETED) {
+      this.imagenDocuments = job;
     }
+  }
+
+  /** Returns from the inline lightbox to the grid of job cards. */
+  backToResults() {
+    this.imagenDocuments = null;
+  }
+
+  /** Removes a single job card (e.g. dismissing a failed generation). */
+  dismissJob(job: MediaItem) {
+    this.service.removeImageJob(job.id);
+    if (this.imagenDocuments?.id === job.id) {
+      this.imagenDocuments = null;
+    }
+  }
+
+  trackJobById(_index: number, job: MediaItem): number {
+    return job.id;
   }
 
   selectModel(model: GenerationModelConfig): void {
@@ -797,19 +823,24 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       workspaceId: activeWorkspaceId ?? undefined,
     };
 
-    this.isImageGenerating = true;
+    // Only the submit is awaited here: the generation itself runs server-side
+    // and is tracked as its own card, so the user can queue another one
+    // immediately.
+    this.isSubmittingImage = true;
     this.imagenDocuments = null;
 
     this.service
       .startImagenGeneration(payload)
-      .pipe(finalize(() => (this.isLoading = false)))
+      .pipe(finalize(() => (this.isSubmittingImage = false)))
       .subscribe({
-        next: (initialResponse: MediaItem) => {
-          console.log('Image generation job started:', initialResponse);
-        },
         error: error => {
-          this.isImageGenerating = false;
           handleErrorSnackbar(this._snackBar, error, 'Search');
+          if (error?.status === 429) {
+            // The cap counts jobs the user may have hidden, so bring their
+            // cards back rather than pairing "you already have N running"
+            // with an empty screen.
+            this.service.restoreActiveImageJobs();
+          }
         },
       });
   }
@@ -1245,7 +1276,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   deleteGeneratedMedia() {
-    if (!this.imagenDocuments?.id) return;
+    const mediaItemId = this.imagenDocuments?.id;
+    if (!mediaItemId) return;
 
     const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
     if (workspaceId === null) return;
@@ -1256,19 +1288,15 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!confirmDelete) return;
 
     this.galleryService
-      .bulkDelete(
-        [{id: this.imagenDocuments.id, type: 'media_item'}],
-        workspaceId,
-      )
+      .bulkDelete([{id: mediaItemId, type: 'media_item'}], workspaceId)
       .subscribe({
         next: () => {
           handleSuccessSnackbar(
             this._snackBar,
             'Generation results deleted successfully',
           );
+          this.service.removeImageJob(mediaItemId);
           this.imagenDocuments = null;
-          this.showDefaultDocuments = true;
-          this.service.clearActiveImageJob();
         },
         error: err => {
           handleErrorSnackbar(this._snackBar, err, 'Delete results');
