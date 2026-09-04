@@ -50,6 +50,21 @@ class UnifiedGalleryItemResponse(BaseModel):
         default_factory=dict, validation_alias="metadata_"
     )
 
+    @field_validator("gcs_uris", "thumbnail_uris", mode="before")
+    @classmethod
+    def filter_none_uris(cls, v: Any) -> list[str]:
+        """Ensures None or non-string elements are removed from URI lists.
+
+        These map to Postgres text[] columns, which permit NULL elements
+        regardless of column nullability. Without this, one NULL element
+        fails validation for the whole response, so a single bad row would
+        take down the entire gallery listing rather than just itself.
+        Upstream has this validator; the port dropped it.
+        """
+        if isinstance(v, list):
+            return [x for x in v if isinstance(x, str) and x]
+        return []
+
     @field_validator("metadata", mode="after")
     @classmethod
     def convert_metadata_keys(cls, v: dict[str, Any]) -> dict[str, Any]:

@@ -877,6 +877,30 @@ async def test_bulk_move_folder_success(service):
     assert service.mock_db.commit.await_count == 1
 
 
+def test_unified_gallery_item_response_none_gcs_uris_filter():
+    """Upstream's test for the URI filter the port dropped.
+
+    text[] columns permit NULL elements, and without the validator one NULL
+    fails validation for the whole response, so a single bad row would take
+    down the entire gallery listing instead of just itself.
+    """
+    from src.galleries.dto.unified_gallery_response import (
+        UnifiedGalleryItemResponse,
+    )
+
+    raw_data = {
+        "id": 1,
+        "workspace_id": 1,
+        "created_at": datetime.now(),
+        "item_type": "source_asset",
+        "gcs_uris": [None],
+        "thumbnail_uris": [None],
+    }
+    item = UnifiedGalleryItemResponse.model_validate(raw_data)
+    assert item.gcs_uris == []
+    assert item.thumbnail_uris == []
+
+
 @pytest.mark.anyio
 async def test_enrich_source_asset_link_refuses_a_foreign_workspace(service):
     """A link pointing outside the item's workspace yields no signed URL.
@@ -1013,6 +1037,30 @@ async def test_bulk_move_folder_allows_an_admin_who_is_not_the_owner(service):
     # restrict_to_user_id=None is what disables the subtree ownership gate.
     _, kwargs = service.mock_folder_repo.move_folder_to_workspace.await_args
     assert kwargs["restrict_to_user_id"] is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("item_type", ["media_item", "source_asset"])
+async def test_bulk_move_item_already_in_target_workspace(service, item_type):
+    """Upstream covered this per type; only the folder path was covered here.
+
+    Items reach the same-workspace check through _authorize_item_move, a
+    different path from the folder branch, and this fork reports it as a
+    per-item failure rather than a silent skip.
+    """
+    row = make_row(1, workspace_id=88)
+    if item_type == "media_item":
+        service.mock_media_repo.get_by_id.return_value = row
+    else:
+        service.mock_source_asset_repo.get_by_id.return_value = row
+
+    result = await service.bulk_move(move_dto((1, item_type)), MOVER)
+
+    assert result.moved == []
+    assert as_pairs(result.failed) == [(item_type, 1)]
+    assert result.failed[0].reason == "Already in the target workspace"
+    service.mock_tags_repo.clear_tags_for_items.assert_not_called()
+    service.mock_db.commit.assert_not_called()
 
 
 @pytest.mark.anyio

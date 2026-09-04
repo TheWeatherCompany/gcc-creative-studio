@@ -1018,9 +1018,17 @@ class TestMoveItems:
     async def test_move_items_into_itself_error(
         self, folder_service, mock_folder_repo, sample_user
     ):
-        mock_folder_repo.get_folder_for_update.return_value = Folder(
-            id=5, workspace_id=1, user_email="a@b.com", name="Target"
+        folder = Folder(
+            id=5,
+            workspace_id=1,
+            user_id=sample_user.id,
+            user_email="a@b.com",
+            name="Target",
         )
+        mock_folder_repo.get_folder_for_update.return_value = folder
+        # Only folders that resolve in the workspace are walked, so the
+        # self-move check is reached via this list rather than the DTO.
+        mock_folder_repo.get_folders_by_ids.return_value = [folder]
 
         dto = MoveItemsDto(
             workspace_id=1,
@@ -1031,6 +1039,190 @@ class TestMoveItems:
         with pytest.raises(HTTPException) as exc_info:
             await folder_service.move_items(dto, sample_user)
         assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
+
+    @pytest.mark.anyio
+    async def test_move_items_cycle_subfolder_error(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """Upstream's test for the cycle branch, which had no coverage here.
+
+        This is the check the row locks added to move_items exist to
+        serialise, and nothing was asserting that it rejects at all.
+        """
+        mock_folder_repo.get_folder_for_update.return_value = Folder(
+            id=5,
+            workspace_id=1,
+            user_id=sample_user.id,
+            user_email="a@b.com",
+            name="Target",
+        )
+        mock_folder_repo.get_folders_by_ids.return_value = [
+            Folder(
+                id=2,
+                workspace_id=1,
+                user_id=sample_user.id,
+                user_email="a@b.com",
+                name="Folder 2",
+            )
+        ]
+        # Folder 5 is a descendant of folder 2, so this would form a cycle.
+        mock_folder_repo.get_descendant_ids.return_value = [2, 5]
+
+        dto = MoveItemsDto(
+            workspace_id=1,
+            folder_ids=[2],
+            destination_folder_id=5,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.move_items(dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
+        assert (
+            "Cannot move folder 2 into its own subfolder."
+            in exc_info.value.detail
+        )
+
+    @pytest.mark.anyio
+    async def test_move_items_to_root_success(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """Moving to root needs no cycle or depth check, and takes neither.
+
+        A move to root cannot create a cycle and cannot deepen the tree, so
+        the recursive queries are skipped entirely.
+        """
+        mock_folder_repo.get_folders_by_ids.return_value = [
+            Folder(
+                id=2,
+                workspace_id=1,
+                user_id=sample_user.id,
+                user_email="a@b.com",
+                name="Folder 2",
+            )
+        ]
+        mock_folder_repo.move_media_items.return_value = 0
+        mock_folder_repo.move_source_assets.return_value = 0
+        mock_folder_repo.move_folders.return_value = 1
+
+        dto = MoveItemsDto(
+            workspace_id=1,
+            folder_ids=[2],
+            destination_folder_id=None,
+        )
+
+        result = await folder_service.move_items(dto, sample_user)
+
+        mock_folder_repo.get_folders_by_ids.assert_awaited_once_with(
+            folder_ids=[2], workspace_id=1
+        )
+        mock_folder_repo.get_descendant_ids.assert_not_called()
+        mock_folder_repo.get_subtree_depth.assert_not_called()
+        mock_folder_repo.move_folders.assert_awaited_once_with(
+            folder_ids=[2],
+            workspace_id=1,
+            destination_folder_id=None,
+            commit=False,
+        )
+        assert result["total_moved"] == 1
+
+    # Upstream's two skip-foreign-folder tests. Fork adaptations: the
+    # destination is read under a row lock, and the folders need an owner
+    # because move_items is gated on ownership here. move_folders also takes
+    # commit=False, since this fork commits once at the service boundary.
+
+    @pytest.mark.anyio
+    async def test_move_items_foreign_folder_skipped_no_recursive_queries(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """A folder in another workspace is skipped before it is walked.
+
+        Walking it would mean one recursive CTE per requested id, so a caller
+        listing a thousand foreign ids could amplify one request into a
+        thousand recursive queries.
+        """
+        mock_folder_repo.get_folder_for_update.return_value = Folder(
+            id=5,
+            workspace_id=1,
+            user_id=sample_user.id,
+            user_email="a@b.com",
+            name="Target",
+        )
+        # Folder 999 belongs to another workspace, so it does not resolve.
+        mock_folder_repo.get_folders_by_ids.return_value = []
+        mock_folder_repo.move_media_items.return_value = 0
+        mock_folder_repo.move_source_assets.return_value = 0
+        mock_folder_repo.move_folders.return_value = 0
+
+        dto = MoveItemsDto(
+            workspace_id=1,
+            folder_ids=[999],
+            destination_folder_id=5,
+        )
+
+        result = await folder_service.move_items(dto, sample_user)
+
+        mock_folder_repo.get_folders_by_ids.assert_awaited_once_with(
+            folder_ids=[999], workspace_id=1
+        )
+        mock_folder_repo.get_descendant_ids.assert_not_called()
+        mock_folder_repo.get_subtree_depth.assert_not_called()
+        mock_folder_repo.move_folders.assert_awaited_once_with(
+            folder_ids=[],
+            workspace_id=1,
+            destination_folder_id=5,
+            commit=False,
+        )
+        assert result["folders_moved"] == 0
+        assert result["total_moved"] == 0
+
+    @pytest.mark.anyio
+    async def test_move_items_mixed_valid_and_foreign_folders(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """The valid folder still moves; the foreign one is never walked."""
+        mock_folder_repo.get_folder_for_update.return_value = Folder(
+            id=5,
+            workspace_id=1,
+            user_id=sample_user.id,
+            user_email="a@b.com",
+            name="Target",
+        )
+        mock_folder_repo.get_folders_by_ids.return_value = [
+            Folder(
+                id=2,
+                workspace_id=1,
+                user_id=sample_user.id,
+                user_email="a@b.com",
+                name="Folder 2",
+            )
+        ]
+        mock_folder_repo.get_descendant_ids.return_value = [2]
+        mock_folder_repo.move_media_items.return_value = 0
+        mock_folder_repo.move_source_assets.return_value = 0
+        mock_folder_repo.move_folders.return_value = 1
+
+        dto = MoveItemsDto(
+            workspace_id=1,
+            folder_ids=[2, 999],
+            destination_folder_id=5,
+        )
+
+        result = await folder_service.move_items(dto, sample_user)
+
+        mock_folder_repo.get_folders_by_ids.assert_awaited_once_with(
+            folder_ids=[2, 999], workspace_id=1
+        )
+        # Recursive queries run for folder 2 only, never for folder 999.
+        mock_folder_repo.get_descendant_ids.assert_called_once_with(2)
+        mock_folder_repo.get_subtree_depth.assert_called_once_with(2)
+        mock_folder_repo.move_folders.assert_awaited_once_with(
+            folder_ids=[2],
+            workspace_id=1,
+            destination_folder_id=5,
+            commit=False,
+        )
+        assert result["folders_moved"] == 1
+        assert result["total_moved"] == 1
 
     @pytest.mark.anyio
     async def test_move_items_rejects_another_users_media_item(
@@ -1125,8 +1317,12 @@ class TestMoveItems:
         result = await folder_service.move_items(dto, admin)
 
         assert result["total_moved"] == 1
+        # The ownership reads for items are skipped for an admin. The folder
+        # read is not: its result is what the caller iterates, so skipping it
+        # would silently move nothing.
         mock_folder_repo.get_media_items_by_ids.assert_not_called()
-        mock_folder_repo.get_folders_by_ids.assert_not_called()
+        mock_folder_repo.get_source_assets_by_ids.assert_not_called()
+        mock_folder_repo.get_folders_by_ids.assert_awaited_once()
 
     @pytest.mark.anyio
     async def test_move_items_folder_max_depth_exceeded(

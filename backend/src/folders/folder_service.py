@@ -430,7 +430,7 @@ class FolderService:
 
     async def _authorize_move_items(
         self, dto: MoveItemsDto, user: UserModel
-    ) -> None:
+    ) -> list[Folder]:
         """Rejects the whole batch unless the caller owns every item.
 
         Mirrors the admin-or-owner gate gallery_service._authorize_item_move
@@ -440,20 +440,23 @@ class FolderService:
         authorization one. A NULL owner is treated as not-yours, matching the
         subtree gate, so system-owned rows need an admin.
         """
+        # Folders are resolved for every caller, admin included: the return
+        # value is what the caller iterates, and an id that does not resolve
+        # here is one this workspace does not own and must not be walked.
+        folders = await self.folder_repo.get_folders_by_ids(
+            folder_ids=dto.folder_ids,
+            workspace_id=dto.workspace_id,
+        )
         if UserRoleEnum.ADMIN in user.roles:
-            return
+            return folders
 
-        rows = []
+        rows: list = list(folders)
         rows += await self.folder_repo.get_media_items_by_ids(
             media_item_ids=dto.media_item_ids,
             workspace_id=dto.workspace_id,
         )
         rows += await self.folder_repo.get_source_assets_by_ids(
             source_asset_ids=dto.source_asset_ids,
-            workspace_id=dto.workspace_id,
-        )
-        rows += await self.folder_repo.get_folders_by_ids(
-            folder_ids=dto.folder_ids,
             workspace_id=dto.workspace_id,
         )
 
@@ -465,6 +468,7 @@ class FolderService:
                     " requested items."
                 ),
             )
+        return folders
 
     async def move_items(
         self, dto: MoveItemsDto, user: UserModel
@@ -479,7 +483,7 @@ class FolderService:
         # rejected never locks a row. This endpoint is already all-or-nothing
         # (the cycle check 400s the whole batch), so a 403 fits the contract
         # and both frontend callers already treat any error as total failure.
-        await self._authorize_move_items(dto, user)
+        folders_in_workspace = await self._authorize_move_items(dto, user)
 
         # Serialize the cycle check the same way the PATCH path does. Reading
         # the descendants and then writing the new parent is a check-then-act:
@@ -516,10 +520,14 @@ class FolderService:
                     detail="Destination folder not found in this workspace.",
                 )
 
-        # Validate folder moves against cycle creation
+        # Validate folder moves against cycle creation. Only folders that
+        # resolved in this workspace are walked: an id belonging to another
+        # workspace is skipped rather than erroring, matching upstream, and
+        # skipping it keeps a caller from making us run one recursive CTE per
+        # bogus id just by listing a thousand of them.
         valid_folder_ids: list[int] = []
         if dto.folder_ids:
-            for f_id in dto.folder_ids:
+            for f_id in [folder.id for folder in folders_in_workspace]:
                 if dest_folder_id == f_id:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
