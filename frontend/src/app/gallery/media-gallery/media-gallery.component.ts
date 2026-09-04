@@ -1007,7 +1007,8 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
 
     // Folder filtering. Inside a folder we always scope to that folder. At the
     // root we only scope to `isRoot` while browsing unfiltered: any
-    // cross-cutting filter (search, tags, favorites, dates, model, media type)
+    // cross-cutting filter (search, tags, favorites, dates, model, media type,
+    // owner, asset type)
     // has to search the whole library, otherwise the backend's
     // `folder_id IS NULL` predicate silently drops every matching item that
     // lives inside a folder.
@@ -1018,7 +1019,9 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
       !!this.startDateFilter ||
       !!this.endDateFilter ||
       !!this.generationModelFilter ||
-      !!this.mediaTypeFilter;
+      !!this.mediaTypeFilter ||
+      !!this.userEmailFilter ||
+      !!this.assetTypeFilter;
     if (this.currentFolderId !== null) {
       filters['folderId'] = this.currentFolderId;
     } else if (!hasCrossCuttingFilter) {

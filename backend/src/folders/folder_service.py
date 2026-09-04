@@ -273,6 +273,11 @@ class FolderService:
         if dto.color is not None:
             folder.color = dto.color
 
+        # Read the name for the error message BEFORE committing: a rollback
+        # expires every attribute on the instance, so touching folder.name in
+        # the handler would trigger a lazy refresh on a rolled-back async
+        # session and raise MissingGreenlet, turning this 409 into a 500.
+        attempted_name = folder.name
         try:
             await self.folder_repo.db.commit()
             await self.folder_repo.db.refresh(folder)
@@ -280,7 +285,7 @@ class FolderService:
             await self.folder_repo.db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"A folder named '{folder.name}' already exists in this location.",
+                detail=f"A folder named '{attempted_name}' already exists in this location.",
             ) from e
 
         return await self.get_folder_by_id(folder.id)
@@ -340,6 +345,18 @@ class FolderService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Destination folder not found in this workspace.",
                 )
+
+        # Serialize the cycle check the same way the PATCH path does. Reading
+        # the descendants and then writing the new parent is a check-then-act:
+        # without a lock, two concurrent moves can each see a subtree that the
+        # other is about to reparent, both pass, and leave a parent cycle that
+        # every recursive query then walks until MAX_FOLDER_DEPTH. Every folder
+        # this batch touches is locked up front in ascending ID order, matching
+        # _lock_folders_for_move, so batches contend in one direction only and
+        # queue instead of deadlocking. The locks are held to the commit below.
+        if dest_folder_id is not None and dto.folder_ids:
+            for lock_id in sorted({dest_folder_id, *dto.folder_ids}):
+                await self.folder_repo.get_folder_for_update(lock_id)
 
         # Validate folder moves against cycle creation
         valid_folder_ids: list[int] = []

@@ -762,6 +762,8 @@ class TestMoveItems:
 
         mock_db.execute.side_effect = [
             db_result_for_folder(destination),  # destination lookup
+            db_result_for_folder(moving),  # lock folder 2 (ascending order)
+            db_result_for_folder(destination),  # lock folder 5
             db_result_for_ids([2]),  # cycle check on folder 2
             MagicMock(rowcount=2),  # media item UPDATE
             MagicMock(rowcount=1),  # source asset UPDATE

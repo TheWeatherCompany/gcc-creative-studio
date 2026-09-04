@@ -706,11 +706,16 @@ def make_row(item_id: int, workspace_id: int = 99, user_id: int | None = 1):
     )
 
 
-def make_folder(folder_id: int, workspace_id: int = 99):
-    """Minimal folder shape that bulk_move reads off the locked row."""
+def make_folder(folder_id: int, workspace_id: int = 99, user_id: int = 1):
+    """Minimal folder shape that bulk_move reads off the locked row.
+
+    user_id defaults to MOVER's id, since the folder branch now applies the
+    same admin-or-owner gate as the item branches.
+    """
     return SimpleNamespace(
         id=folder_id,
         workspace_id=workspace_id,
+        user_id=user_id,
         name="Campaigns",
     )
 
@@ -852,6 +857,48 @@ async def test_bulk_move_folder_success(service):
         commit=False,
     )
     assert service.mock_db.commit.await_count == 1
+
+
+@pytest.mark.anyio
+async def test_bulk_move_folder_rejects_a_non_owner(service):
+    """A co-member who does not own the folder cannot move it.
+
+    Workspace membership alone is not enough: the item branches gate on
+    admin-or-owner, so without the same gate here the per-item guard would be
+    bypassable by moving the parent folder instead of the children.
+    """
+    service.mock_folder_repo.get_folder_for_update.return_value = make_folder(
+        10,
+        user_id=MOVER.id + 1,
+    )
+
+    result = await service.bulk_move(move_dto((10, "folder")), MOVER)
+
+    assert result.moved == []
+    assert as_pairs(result.failed) == [("folder", 10)]
+    assert result.failed[0].reason == "Not authorized"
+    service.mock_folder_repo.move_folder_to_workspace.assert_not_called()
+    service.mock_db.commit.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_bulk_move_folder_allows_an_admin_who_is_not_the_owner(service):
+    """An admin keeps the override the item branches give them."""
+    service.mock_folder_repo.get_folder_for_update.return_value = make_folder(
+        10,
+        user_id=MOVER.id + 1,
+    )
+    admin = UserModel(
+        id=MOVER.id,
+        email="admin@test.com",
+        name="Admin",
+        roles=[UserRoleEnum.ADMIN],
+    )
+
+    result = await service.bulk_move(move_dto((10, "folder")), admin)
+
+    assert as_pairs(result.moved) == [("folder", 10)]
+    assert result.failed == []
 
 
 @pytest.mark.anyio

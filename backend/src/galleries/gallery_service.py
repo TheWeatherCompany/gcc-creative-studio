@@ -1101,6 +1101,24 @@ class GalleryService:
                 MOVE_REASON_ALREADY_THERE,
             )
 
+        # Same admin-or-owner gate the single-item branch applies in
+        # _authorize_item_move. Without it, workspace membership alone would
+        # let any co-member relocate someone else's folder and, with it, every
+        # item in the subtree -- so the per-item guard would be bypassable
+        # just by moving the parent instead of the children.
+        is_admin = UserRoleEnum.ADMIN in current_user.roles
+        is_owner = root.user_id == current_user.id
+        if not is_admin and not is_owner:
+            logger.warning(
+                "User %s unauthorized to move folder %s",
+                current_user.id,
+                folder_id,
+            )
+            raise MoveRejectedError(
+                status.HTTP_403_FORBIDDEN,
+                MOVE_REASON_NOT_AUTHORIZED,
+            )
+
         await self.folder_repo.move_folder_to_workspace(
             folder_id=folder_id,
             target_workspace_id=target_workspace_id,
