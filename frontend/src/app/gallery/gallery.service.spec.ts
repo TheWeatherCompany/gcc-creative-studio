@@ -80,6 +80,8 @@ describe('GalleryService favorite state', () => {
   });
 
   it('falls back to the requested state when the body carries no field', () => {
+    const warn = spyOn(console, 'warn');
+
     let favorited: boolean | undefined;
     service.favorite(7).subscribe(value => (favorited = value));
     httpMock.expectOne(url(7)).flush({});
@@ -89,6 +91,10 @@ describe('GalleryService favorite state', () => {
     service.unfavorite(7).subscribe(value => (unfavorited = value));
     httpMock.expectOne(url(7)).flush({});
     expect(unfavorited).toBeFalse();
+
+    // The fallback keeps the UI honest, but it must not be silent: an
+    // unreadable 2xx means the response contract drifted again.
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 
   it('honours an explicit false over the requested state', () => {

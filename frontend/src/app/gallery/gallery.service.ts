@@ -363,7 +363,17 @@ export class GalleryService implements OnDestroy {
     requested: boolean,
   ): boolean {
     const value = response?.['isFavorite'] ?? response?.['is_favorite'];
-    return typeof value === 'boolean' ? value : requested;
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    // Warn rather than fall back silently: a 2xx with no state in it means
+    // the contract drifted again, and the whole point of the last drift was
+    // that it was invisible until someone clicked a heart.
+    console.warn(
+      'Favorite response carried no favorite state; assuming the requested one',
+      response,
+    );
+    return requested;
   }
 
   createTemplateFromMediaItem(mediaItemId: number): Observable<{id: string}> {

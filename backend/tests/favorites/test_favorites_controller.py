@@ -75,3 +75,36 @@ def test_unfavorite_item(client, mock_service):
     mock_service.unfavorite_item.assert_called_once()
     _, kwargs = mock_service.unfavorite_item.call_args
     assert kwargs["item_id"] == 10
+
+
+def test_favorite_item_coerces_a_snake_case_service_result(
+    client, mock_service
+):
+    """The route's response_model owns the casing, not the service's return.
+
+    The shipped bug was a service handing back a bare snake_case dict, which
+    has no aliases to apply. Pinning that shape here means dropping
+    response_model from the route fails this test; asserting against a
+    DTO-returning mock does not, because FastAPI alias-encodes any BaseModel
+    it is given whether a response model is declared or not.
+    """
+    mock_service.favorite_item = AsyncMock(return_value={"is_favorite": True})
+
+    response = client.post("/api/gallery/item/10/favorite")
+
+    assert response.status_code == 200
+    assert response.json() == {"isFavorite": True}
+
+
+def test_unfavorite_item_coerces_a_snake_case_service_result(
+    client, mock_service
+):
+    """Mirror of the above for the DELETE route."""
+    mock_service.unfavorite_item = AsyncMock(
+        return_value={"is_favorite": False}
+    )
+
+    response = client.delete("/api/gallery/item/10/favorite")
+
+    assert response.status_code == 200
+    assert response.json() == {"isFavorite": False}
