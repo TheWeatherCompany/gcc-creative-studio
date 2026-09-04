@@ -40,6 +40,11 @@ def fixture_mock_folder_repo():
     mock = AsyncMock()
     mock.db = AsyncMock()
     mock.is_folder_name_taken.return_value = False
+    # The move_items ownership gate iterates these, so they must default to
+    # empty lists rather than a bare AsyncMock's non-iterable return value.
+    mock.get_media_items_by_ids.return_value = []
+    mock.get_source_assets_by_ids.return_value = []
+    mock.get_folders_by_ids.return_value = []
     return mock
 
 
@@ -60,6 +65,13 @@ def fixture_db_folder_service(mock_db):
     """FolderService over a real repository, so the SQL result shapes and the
     commit boundary are exercised instead of mocked away."""
     return FolderService(folder_repo=FolderRepository(db=mock_db))
+
+
+def scalars_result(rows: list) -> MagicMock:
+    """Result shaped the way the by-ids ownership reads consume it."""
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = rows
+    return result
 
 
 def db_result_for_folder(folder: Folder | None) -> MagicMock:
@@ -119,6 +131,7 @@ async def expect_delete_conflict(
 ) -> None:
     """Asserts delete_folder refuses with a 409 and writes nothing."""
     mock_db.execute.side_effect = [
+        db_result_for_folder(folder),  # FOR UPDATE lock on the folder
         db_result_for_folder(folder),
         db_result_for_counts(folder, media_count, asset_count, subfolder_count),
     ]
@@ -130,8 +143,9 @@ async def expect_delete_conflict(
     assert exc_info.value.detail == (
         "Folder is not empty. Move or delete its contents first."
     )
-    # Nothing was soft deleted: no UPDATE ran and no transaction committed.
-    assert mock_db.execute.await_count == 2
+    # Nothing was soft deleted and nothing was detached: the lock read and the
+    # two count reads are all that ran, and no transaction committed.
+    assert mock_db.execute.await_count == 3
     mock_db.commit.assert_not_called()
 
 
@@ -205,6 +219,37 @@ class TestCreateFolder:
             parent_id=None,
         )
         mock_folder_repo.is_folder_name_taken.return_value = True
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.create_folder(dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_409_CONFLICT
+        assert "already exists" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_create_folder_reraises_a_foreign_key_violation(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """Only the folder-name indexes mean "duplicate name"."""
+        dto = FolderCreateDto(name="New", workspace_id=999, parent_id=None)
+        mock_folder_repo.db.commit.side_effect = integrity_error(
+            "folders_workspace_id_fkey"
+        )
+
+        # Reported as-is, not disguised as a retryable 409: renaming would
+        # never fix a bad workspace_id.
+        with pytest.raises(IntegrityError):
+            await folder_service.create_folder(dto, sample_user)
+        mock_folder_repo.db.rollback.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_create_folder_still_409s_on_a_name_index(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """The race that the pre-check missed is still a 409."""
+        dto = FolderCreateDto(name="Existing", workspace_id=1, parent_id=None)
+        mock_folder_repo.db.commit.side_effect = integrity_error(
+            "uq_folders_workspace_root_name_active"
+        )
 
         with pytest.raises(HTTPException) as exc_info:
             await folder_service.create_folder(dto, sample_user)
@@ -577,7 +622,13 @@ class TestDeleteFolder:
         result = await folder_service.delete_folder(1, sample_user)
         assert result["success"] is True
         mock_folder_repo.soft_delete.assert_called_once_with(
-            folder_id=1, user_id=sample_user.id
+            folder_id=1, user_id=sample_user.id, commit=True
+        )
+        # The row is locked before anything is read, and trashed contents are
+        # detached inside the same transaction as the soft delete.
+        mock_folder_repo.get_folder_for_update.assert_awaited_once_with(1)
+        mock_folder_repo.release_trashed_contents.assert_awaited_once_with(
+            folder_id=1, commit=False
         )
 
     @pytest.mark.anyio
@@ -605,8 +656,11 @@ class TestDeleteFolder:
             parent_id=None,
         )
         mock_db.execute.side_effect = [
+            db_result_for_folder(folder),  # FOR UPDATE lock on the folder
             db_result_for_folder(folder),  # folder lookup
             db_result_for_counts(folder),  # item and subfolder counts
+            MagicMock(),  # release trashed media items
+            MagicMock(),  # release trashed source assets
             db_result_for_ids([1]),  # descendant ids for the soft delete
             MagicMock(),  # the soft delete UPDATE itself
         ]
@@ -737,6 +791,102 @@ class TestMoveItems:
         assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
 
     @pytest.mark.anyio
+    async def test_move_items_rejects_another_users_media_item(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """Workspace membership alone must not let you move someone's item."""
+        mock_folder_repo.get_media_items_by_ids.return_value = [
+            SimpleNamespace(id=10, user_id=sample_user.id + 1)
+        ]
+        dto = MoveItemsDto(
+            workspace_id=1,
+            media_item_ids=[10],
+            source_asset_ids=[],
+            folder_ids=[],
+            destination_folder_id=None,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.move_items(dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+        mock_folder_repo.db.commit.assert_not_called()
+        # Rejected before any lock is taken.
+        mock_folder_repo.get_folder_for_update.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_move_items_rejects_another_users_folder_at_root(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """The gate cannot depend on the cycle-check lock.
+
+        A move to root takes no lock at all, so an authorization check placed
+        inside that branch would never run for this request.
+        """
+        mock_folder_repo.get_folders_by_ids.return_value = [
+            SimpleNamespace(id=7, user_id=sample_user.id + 1)
+        ]
+        dto = MoveItemsDto(
+            workspace_id=1,
+            media_item_ids=[],
+            source_asset_ids=[],
+            folder_ids=[7],
+            destination_folder_id=None,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.move_items(dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+        mock_folder_repo.move_folders.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_move_items_treats_an_unowned_row_as_not_yours(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """A NULL owner needs an admin, matching the subtree gate."""
+        mock_folder_repo.get_media_items_by_ids.return_value = [
+            SimpleNamespace(id=10, user_id=None)
+        ]
+        dto = MoveItemsDto(
+            workspace_id=1,
+            media_item_ids=[10],
+            source_asset_ids=[],
+            folder_ids=[],
+            destination_folder_id=None,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.move_items(dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+
+    @pytest.mark.anyio
+    async def test_move_items_admin_skips_the_ownership_reads(
+        self, folder_service, mock_folder_repo
+    ):
+        """Admins keep their override and pay nothing for the check."""
+        admin = UserModel(
+            id=1,
+            email="admin@example.com",
+            roles=[UserRoleEnum.ADMIN],
+            name="Admin",
+        )
+        mock_folder_repo.move_media_items.return_value = 1
+        mock_folder_repo.move_source_assets.return_value = 0
+        mock_folder_repo.move_folders.return_value = 0
+        dto = MoveItemsDto(
+            workspace_id=1,
+            media_item_ids=[10],
+            source_asset_ids=[],
+            folder_ids=[],
+            destination_folder_id=None,
+        )
+
+        result = await folder_service.move_items(dto, admin)
+
+        assert result["total_moved"] == 1
+        mock_folder_repo.get_media_items_by_ids.assert_not_called()
+        mock_folder_repo.get_folders_by_ids.assert_not_called()
+
+    @pytest.mark.anyio
     async def test_move_items_commits_exactly_once(
         self, db_folder_service, mock_db, sample_user
     ):
@@ -760,8 +910,15 @@ class TestMoveItems:
         sibling_names = MagicMock()
         sibling_names.fetchall.return_value = []
 
+        # The ownership gate reads all three id lists before any lock is
+        # taken; every row belongs to sample_user, so the batch is allowed.
+        owned = scalars_result([SimpleNamespace(user_id=sample_user.id)])
+
         mock_db.execute.side_effect = [
             db_result_for_folder(destination),  # destination lookup
+            owned,  # ownership: media items
+            owned,  # ownership: source assets
+            owned,  # ownership: folders
             db_result_for_folder(moving),  # lock folder 2 (ascending order)
             db_result_for_folder(destination),  # lock folder 5
             db_result_for_ids([2]),  # cycle check on folder 2

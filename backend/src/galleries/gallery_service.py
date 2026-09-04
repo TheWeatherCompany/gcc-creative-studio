@@ -74,6 +74,7 @@ from src.folders.folder_service import FOLDER_NAME_CONSTRAINTS
 from src.folders.repository.folder_repository import (
     FolderRepository,
     FolderSubtreeChangedError,
+    FolderSubtreeUnauthorizedError,
 )
 
 logger = logging.getLogger(__name__)
@@ -151,11 +152,17 @@ class GalleryService:
     async def _enrich_source_asset_link(
         self,
         link: SourceAssetLink,
+        owner_workspace_id: int,
     ) -> SourceAssetLinkResponse | None:
         """Fetches the source asset document and generates a presigned URL for it."""
         asset_doc = await self.source_asset_repo.get_by_id(link.asset_id)
 
-        if not asset_doc:
+        # A copy or a cross-workspace move leaves this link pointing at a row
+        # in the original workspace. The caller was authorized against the
+        # item's workspace only, so resolving a foreign reference here would
+        # mint a presigned URL for content nobody checked them against. Treat
+        # it as unavailable, which is what a missing row already does.
+        if not asset_doc or asset_doc.workspace_id != owner_workspace_id:
             return None
 
         tasks = [
@@ -190,13 +197,16 @@ class GalleryService:
     async def _enrich_source_media_item_link(
         self,
         link: SourceMediaItemLink,
+        owner_workspace_id: int,
     ) -> SourceMediaItemLinkResponse | None:
         """Fetches the parent MediaItem document and generates a presigned URL
         for the specific image that was used as input.
         """
         parent_item = await self.media_repo.get_by_id(link.media_item_id)
+        # Same cross-workspace guard as _enrich_source_asset_link.
         if (
             not parent_item
+            or parent_item.workspace_id != owner_workspace_id
             or not parent_item.gcs_uris
             or not (0 <= link.media_index < len(parent_item.gcs_uris))
         ):
@@ -279,7 +289,7 @@ class GalleryService:
         source_asset_tasks = []
         if item.source_assets:
             source_asset_tasks = [
-                self._enrich_source_asset_link(link)
+                self._enrich_source_asset_link(link, item.workspace_id)
                 for link in item.source_assets
             ]
 
@@ -287,7 +297,7 @@ class GalleryService:
         source_media_item_tasks = []
         if item.source_media_items:
             source_media_item_tasks = [
-                self._enrich_source_media_item_link(link)
+                self._enrich_source_media_item_link(link, item.workspace_id)
                 for link in item.source_media_items
             ]
 
@@ -894,6 +904,19 @@ class GalleryService:
                     current_user,
                 )
                 await self.db.commit()
+            except FolderSubtreeUnauthorizedError:
+                # A non-admin mover does not own every row in the subtree, so
+                # none of its writes are trustworthy: drop all of them for
+                # this one folder, exactly like a subtree that changed
+                # underneath the move, but report the real reason.
+                await self.db.rollback()
+                logger.warning(
+                    "User %s unauthorized to move folder %s: subtree "
+                    "contains rows they do not own.",
+                    current_user.id,
+                    item.id,
+                )
+                reason = MOVE_REASON_NOT_AUTHORIZED
             except FolderSubtreeChangedError:
                 # The subtree changed under us, so none of its writes are
                 # trustworthy: drop all of them for this one folder.
@@ -957,6 +980,7 @@ class GalleryService:
             await self._move_row_without_commit(
                 MediaItem,
                 item.id,
+                item.type,
                 source_workspace_id,
                 target_workspace_id,
             )
@@ -971,6 +995,7 @@ class GalleryService:
             await self._move_row_without_commit(
                 SourceAsset,
                 item.id,
+                item.type,
                 source_workspace_id,
                 target_workspace_id,
             )
@@ -1037,6 +1062,7 @@ class GalleryService:
         self,
         model: type[MediaItem] | type[SourceAsset],
         item_id: int,
+        item_type: str,
         authorized_source_workspace_id: int,
         target_workspace_id: int,
     ) -> None:
@@ -1073,6 +1099,15 @@ class GalleryService:
                 MOVE_REASON_ITEM_CHANGED,
             )
 
+        # Tags are workspace-scoped, and _authorize_item_move already rejected
+        # a same-workspace move, so every row reaching here is leaving the
+        # workspace that owns its tags. Upstream clears them here and the port
+        # dropped it, which left moved rows pointing at tags the target
+        # workspace never created.
+        await self.tags_repo.clear_tags_for_items(
+            [item_id], item_type, commit=False
+        )
+
     async def _move_folder_without_commit(
         self,
         folder_id: int,
@@ -1080,10 +1115,16 @@ class GalleryService:
         current_user: UserModel,
     ) -> None:
         """Moves one folder subtree, leaving the transaction to the caller."""
-        # Lock the root first so the workspace we authorize against is the
-        # same one every subtree write is predicated on. The lock is held for
-        # the rest of this item's transaction.
-        root = await self.folder_repo.get_folder_for_update(folder_id)
+        # Lock the whole subtree, root and descendants, in ascending ID
+        # order before anything reads or writes it, matching the global lock
+        # order _lock_folders_for_move and move_items use. Locking only the
+        # root and letting _apply_workspace_move's descendant UPDATE pick up
+        # the rest in planner order can invert that against a concurrent
+        # sibling move and deadlock. The workspace we authorize against is
+        # the locked root's, which is also what every subtree write is
+        # predicated on, and the locks are held for this item's transaction.
+        locked = await self.folder_repo.lock_subtree_for_move(folder_id)
+        root = locked.get(folder_id)
         if root is None:
             raise MoveRejectedError(
                 status.HTTP_404_NOT_FOUND,
@@ -1123,5 +1164,10 @@ class GalleryService:
             folder_id=folder_id,
             target_workspace_id=target_workspace_id,
             authorized_source_workspace_id=root.workspace_id,
+            # Admins keep their override; everyone else must own every row in
+            # the subtree, not just the root. Gating the root alone leaves the
+            # per-item ownership guard bypassable by moving the parent folder
+            # instead of touching the children.
+            restrict_to_user_id=None if is_admin else current_user.id,
             commit=False,
         )

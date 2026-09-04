@@ -29,7 +29,7 @@ from src.folders.dto.folder_dto import (
 from src.folders.repository.folder_repository import FolderRepository
 from src.common.db_errors import constraint_name_of
 from src.folders.schema.folder_model import Folder
-from src.users.user_model import UserModel
+from src.users.user_model import UserModel, UserRoleEnum
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,12 @@ class FolderService:
             await self.folder_repo.db.refresh(folder)
         except IntegrityError as e:
             await self.folder_repo.db.rollback()
+            # Only the two folder-name indexes mean "duplicate name". Anything
+            # else (a bad parent_id or workspace_id foreign key, a NOT NULL
+            # violation) is a real fault, and reporting it as a name conflict
+            # would tell the client to rename and retry forever.
+            if not _is_folder_name_conflict(e):
+                raise
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"A folder named '{name}' already exists in this location.",
@@ -283,6 +289,10 @@ class FolderService:
             await self.folder_repo.db.refresh(folder)
         except IntegrityError as e:
             await self.folder_repo.db.rollback()
+            # See create_folder: misclassifying any other integrity failure as
+            # a name conflict hides the real fault behind a retryable 409.
+            if not _is_folder_name_conflict(e):
+                raise
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"A folder named '{attempted_name}' already exists in this location.",
@@ -308,6 +318,15 @@ class FolderService:
         self, folder_id: int, user: UserModel
     ) -> dict[str, bool]:
         """Soft deletes an empty folder, refusing a non-empty one."""
+        # Lock the row before reading anything. A plain SELECT, which is all
+        # the count queries run, is never blocked by another transaction's
+        # row lock under PostgreSQL's default READ COMMITTED, so without this
+        # the emptiness check and the soft delete could straddle a concurrent
+        # move's commit and delete a folder that just gained content. This is
+        # the same lock _lock_folders_for_move and move_items take on a
+        # destination folder, so the two now queue on one row.
+        await self.folder_repo.get_folder_for_update(folder_id)
+
         # Raises 404 when the folder is missing or already soft-deleted. This
         # read, the emptiness check and the soft delete all run inside one
         # transaction with no commit between them; soft_delete keeps its
@@ -326,10 +345,57 @@ class FolderService:
                 ),
             )
 
+        # The counts above only see live rows, so a folder holding nothing
+        # but already-trashed items still passes. soft_delete stamps only the
+        # folder rows, so detach those contents first; otherwise restoring
+        # one later leaves folder_id pointing at a folder that no longer
+        # resolves in either the folder view or the root view.
+        await self.folder_repo.release_trashed_contents(
+            folder_id=folder_id, commit=False
+        )
+
         success = await self.folder_repo.soft_delete(
-            folder_id=folder_id, user_id=user.id
+            folder_id=folder_id, user_id=user.id, commit=True
         )
         return {"success": success}
+
+    async def _authorize_move_items(
+        self, dto: MoveItemsDto, user: UserModel
+    ) -> None:
+        """Rejects the whole batch unless the caller owns every item.
+
+        Mirrors the admin-or-owner gate gallery_service._authorize_item_move
+        applies to cross-workspace moves. Ids that resolve to no row in this
+        workspace are ignored: the move_* calls already skip ids outside the
+        workspace, and a missing row is a not-found concern rather than an
+        authorization one. A NULL owner is treated as not-yours, matching the
+        subtree gate, so system-owned rows need an admin.
+        """
+        if UserRoleEnum.ADMIN in user.roles:
+            return
+
+        rows = []
+        rows += await self.folder_repo.get_media_items_by_ids(
+            media_item_ids=dto.media_item_ids,
+            workspace_id=dto.workspace_id,
+        )
+        rows += await self.folder_repo.get_source_assets_by_ids(
+            source_asset_ids=dto.source_asset_ids,
+            workspace_id=dto.workspace_id,
+        )
+        rows += await self.folder_repo.get_folders_by_ids(
+            folder_ids=dto.folder_ids,
+            workspace_id=dto.workspace_id,
+        )
+
+        if any(row.user_id != user.id for row in rows):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "You are not authorized to move one or more of the"
+                    " requested items."
+                ),
+            )
 
     async def move_items(
         self, dto: MoveItemsDto, user: UserModel
@@ -345,6 +411,15 @@ class FolderService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Destination folder not found in this workspace.",
                 )
+
+        # Reject the whole batch unless the caller owns every requested row.
+        # Ownership is immutable once a row exists, so unlike workspace_id it
+        # has no TOCTOU with the writes below and needs no lock. Running it
+        # before the cycle-check locks means a request that is going to be
+        # rejected never locks a row. This endpoint is already all-or-nothing
+        # (the cycle check 400s the whole batch), so a 403 fits the contract
+        # and both frontend callers already treat any error as total failure.
+        await self._authorize_move_items(dto, user)
 
         # Serialize the cycle check the same way the PATCH path does. Reading
         # the descendants and then writing the new parent is a check-then-act:

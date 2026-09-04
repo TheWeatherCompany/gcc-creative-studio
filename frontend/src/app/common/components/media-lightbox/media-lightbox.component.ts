@@ -42,7 +42,10 @@ import {AssignTagsDialogComponent} from '../assign-tags-dialog/assign-tags-dialo
 import {TagsService} from '../../services/tags.service';
 import {WorkspaceStateService} from '../../../services/workspace/workspace-state.service';
 import {GalleryService} from '../../../gallery/gallery.service';
-import {MoveToFolderDialogComponent} from '../move-to-folder-dialog/move-to-folder-dialog.component';
+import {
+  MoveToFolderDialogComponent,
+  MoveToFolderDialogResult,
+} from '../move-to-folder-dialog/move-to-folder-dialog.component';
 import {FolderService} from '../../services/folder.service';
 
 @Component({
@@ -294,15 +297,78 @@ export class MediaLightboxComponent
       },
     });
 
-    dialogRef.afterClosed().subscribe(result => {
-      if (result && result.destinationFolderId !== undefined) {
-        const destName =
-          result.destinationFolderId === null
-            ? 'All Media'
-            : result.folderName || 'Folder';
-        this.executeMove(workspaceId, result.destinationFolderId, destName);
-      }
-    });
+    dialogRef
+      .afterClosed()
+      .subscribe((result: MoveToFolderDialogResult | undefined) => {
+        if (!result) {
+          return;
+        }
+        // The dialog offers a Folder tab and a Workspace tab. Handling only
+        // destinationFolderId made a Workspace selection a silent no-op. The
+        // display name is destinationName; folderName was never on the
+        // result contract, so it always fell through to 'Folder'.
+        if (result.destinationFolderId !== undefined) {
+          const destName =
+            result.destinationFolderId === null
+              ? 'All Media'
+              : result.destinationName || 'Folder';
+          this.executeMove(workspaceId, result.destinationFolderId, destName);
+        } else if (result.destinationWorkspaceId !== undefined) {
+          this.executeMoveToWorkspace(
+            result.destinationWorkspaceId,
+            result.destinationName || 'Workspace',
+          );
+        }
+      });
+  }
+
+  private executeMoveToWorkspace(
+    destinationWorkspaceId: number,
+    destinationName: string,
+  ): void {
+    if (!this.mediaItem) return;
+
+    const assetType =
+      (this.mediaItem as {itemType?: string}).itemType || 'media_item';
+
+    this.galleryService
+      .bulkMove(
+        [{id: this.mediaItem.id, type: assetType}],
+        destinationWorkspaceId,
+      )
+      .subscribe({
+        next: res => {
+          // bulk-move reports each row's outcome separately, so a non-empty
+          // `failed` is a rejection even though the request itself succeeded.
+          const failed = res.failed ?? [];
+          if (failed.length > 0) {
+            const reasons = Array.from(
+              new Set(failed.map(item => item.reason).filter(Boolean)),
+            );
+            const detail = reasons.length > 0 ? `: ${reasons.join('; ')}` : '';
+            this.snackBar.open(
+              `Could not move item to "${destinationName}"${detail}`,
+              'Close',
+              {duration: 5000},
+            );
+            return;
+          }
+          // The item now lives in another workspace, so it is no longer part
+          // of this gallery. Say so rather than implying it is still here.
+          this.snackBar.open(
+            `Item moved to "${destinationName}". It is no longer in this` +
+              ` workspace.`,
+            'Close',
+            {duration: 4000},
+          );
+        },
+        error: err => {
+          console.error('Error moving item to workspace:', err);
+          this.snackBar.open('Failed to move item', 'Close', {
+            duration: 3000,
+          });
+        },
+      });
   }
 
   private executeMove(

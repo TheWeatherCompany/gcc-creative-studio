@@ -405,11 +405,85 @@ class TestFolderRepository:
                 [SimpleNamespace(id=1), SimpleNamespace(id=2)]
             ),
             rows_result([("existingroot",)]),  # target root names
+            MagicMock(),  # media_item_tags DELETE
+            MagicMock(),  # source_asset_tags DELETE
             MagicMock(rowcount=3),  # media item UPDATE
             MagicMock(rowcount=2),  # source asset UPDATE
             MagicMock(rowcount=child_rowcount),  # child folder UPDATE
             MagicMock(rowcount=root_rowcount),  # root folder UPDATE
         ]
+
+    @pytest.mark.anyio
+    async def test_release_trashed_contents_detaches_only_trashed_rows(
+        self, folder_repo, mock_db
+    ):
+        """Trashed contents are cut loose before their folder disappears.
+
+        soft_delete stamps only the folder rows, so a trashed item left
+        pointing at a deleted folder resolves in neither the folder view nor
+        the root view once it is restored.
+        """
+        mock_db.execute.return_value = MagicMock()
+
+        await folder_repo.release_trashed_contents(folder_id=1)
+
+        assert mock_db.execute.await_count == 2
+        mock_db.commit.assert_called_once()
+        for stmt in executed_statements(mock_db):
+            sql = str(stmt)
+            assert "deleted_at IS NOT NULL" in sql
+            assert stmt.compile().params["folder_id"] is None
+        assert "UPDATE media_items" in str(executed_statements(mock_db)[0])
+        assert "UPDATE source_assets" in str(executed_statements(mock_db)[1])
+
+    @pytest.mark.anyio
+    async def test_release_trashed_contents_can_defer_commit(
+        self, folder_repo, mock_db
+    ):
+        """delete_folder batches this into the soft delete's transaction."""
+        mock_db.execute.return_value = MagicMock()
+
+        await folder_repo.release_trashed_contents(folder_id=1, commit=False)
+
+        mock_db.commit.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_lock_subtree_for_move_locks_in_ascending_id_order(
+        self, folder_repo, mock_db
+    ):
+        """Every mover takes the same rows in the same order or they deadlock.
+
+        A descendant's id is not necessarily above its ancestor's, since a
+        folder can be reparented under one created later.
+        """
+        root = Folder(
+            id=5,
+            workspace_id=1,
+            user_email="a@b.com",
+            name="Root",
+            parent_id=None,
+        )
+        child = Folder(
+            id=2,
+            workspace_id=1,
+            user_email="a@b.com",
+            name="Child",
+            parent_id=5,
+        )
+        mock_db.execute.side_effect = [
+            rows_result([SimpleNamespace(id=5), SimpleNamespace(id=2)]),
+            first_result(child),
+            first_result(root),
+        ]
+
+        locked = await folder_repo.lock_subtree_for_move(5)
+
+        assert sorted(locked) == [2, 5]
+        # Ascending, so 2 is locked before 5 even though 5 is the root.
+        lock_stmts = executed_statements(mock_db)[1:]
+        assert lock_stmts[0].compile().params["id_1"] == 2
+        assert lock_stmts[1].compile().params["id_1"] == 5
+        assert all("FOR UPDATE" in str(stmt) for stmt in lock_stmts)
 
     @pytest.mark.anyio
     async def test_move_folder_to_workspace(self, folder_repo, mock_db):
@@ -433,7 +507,7 @@ class TestFolderRepository:
         # Every write is fenced by the workspace the caller was authorized
         # for, so a descendant that left that workspace cannot be dragged
         # along by id alone.
-        for stmt in executed_statements(mock_db)[3:]:
+        for stmt in executed_statements(mock_db)[5:]:
             assert "workspace_id = :workspace_id_1" in str(stmt)
             params = stmt.compile().params
             assert params["workspace_id_1"] == 1

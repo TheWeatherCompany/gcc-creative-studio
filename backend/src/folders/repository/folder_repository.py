@@ -15,7 +15,7 @@
 import re
 from datetime import datetime, timezone
 from fastapi import Depends
-from sqlalchemy import func, select, update, text
+from sqlalchemy import delete, func, select, update, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.common.base_repository import BaseRepository
@@ -28,6 +28,7 @@ from src.folders.dto.folder_dto import (
 )
 from src.folders.schema.folder_model import Folder, FolderModel
 from src.source_assets.schema.source_asset_model import SourceAsset
+from src.tags.schema.tags_model import media_item_tags, source_asset_tags
 
 # Hard ceiling for every recursive folder walk below. A parent cycle is still
 # reachable (the check-then-act window in FolderService is narrowed by a row
@@ -40,6 +41,15 @@ MAX_FOLDER_DEPTH = 100
 
 class FolderSubtreeChangedError(RuntimeError):
     """Raised when a folder subtree changed underneath a workspace move."""
+
+
+class FolderSubtreeUnauthorizedError(FolderSubtreeChangedError):
+    """Raised when a non-admin mover does not own every row in the subtree.
+
+    Subclasses FolderSubtreeChangedError so any existing handler for that
+    class still catches this and rolls the move back; callers that want to
+    report the more accurate reason catch this subclass first.
+    """
 
 
 def generate_disambiguated_name(
@@ -179,6 +189,70 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         )
         result = await self.db.execute(query)
         return result.scalars().first()
+
+    async def lock_subtree_for_move(self, folder_id: int) -> dict[int, Folder]:
+        """Row-locks folder_id and every descendant, in ascending ID order.
+
+        FolderService._lock_folders_for_move and move_items lock every folder
+        a batch touches in ascending ID order, so two movers sharing rows
+        queue instead of deadlocking. A descendant's ID is not necessarily
+        greater than its ancestor's, since a folder can be reparented under
+        one created later, so locking only the root and letting
+        _apply_workspace_move's `UPDATE ... WHERE id IN (...)` pick up the
+        rest in whatever order the planner chooses can take the same two rows
+        in the opposite order from a concurrent sibling move. Locking the
+        whole subtree here, sorted, before any write keeps every mover on one
+        global order. Missing entries mean the row is gone or soft-deleted.
+        """
+        descendant_ids = await self.get_descendant_ids(folder_id)
+        locked: dict[int, Folder] = {}
+        for lock_id in sorted({folder_id, *descendant_ids}):
+            row = await self.get_folder_for_update(lock_id)
+            if row is not None:
+                locked[lock_id] = row
+        return locked
+
+    async def get_folders_by_ids(
+        self, folder_ids: list[int], workspace_id: int
+    ) -> list[Folder]:
+        """Fetch multiple active folders by ID, scoped to a workspace."""
+        if not folder_ids:
+            return []
+        query = select(self.model).where(
+            self.model.id.in_(folder_ids),
+            self.model.workspace_id == workspace_id,
+            self.model.deleted_at.is_(None),
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def get_media_items_by_ids(
+        self, media_item_ids: list[int], workspace_id: int
+    ) -> list[MediaItem]:
+        """Fetch multiple active media items by ID, scoped to a workspace."""
+        if not media_item_ids:
+            return []
+        query = select(MediaItem).where(
+            MediaItem.id.in_(media_item_ids),
+            MediaItem.workspace_id == workspace_id,
+            MediaItem.deleted_at.is_(None),
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def get_source_assets_by_ids(
+        self, source_asset_ids: list[int], workspace_id: int
+    ) -> list[SourceAsset]:
+        """Fetch multiple active source assets by ID, scoped to a workspace."""
+        if not source_asset_ids:
+            return []
+        query = select(SourceAsset).where(
+            SourceAsset.id.in_(source_asset_ids),
+            SourceAsset.workspace_id == workspace_id,
+            SourceAsset.deleted_at.is_(None),
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
 
     async def list_by_parent(
         self, workspace_id: int, parent_id: int | None = None
@@ -376,8 +450,36 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
 
         return root_nodes
 
+    async def release_trashed_contents(
+        self, folder_id: int, commit: bool = True
+    ) -> None:
+        """Detaches already-trashed contents from a folder being deleted.
+
+        delete_folder's emptiness gate only counts live rows, so a folder
+        holding nothing but trashed items still passes it. Left alone those
+        rows would keep folder_id pointing at a folder that stops resolving
+        once it is soft-deleted, so restoring one would surface it nowhere.
+        NULLing folder_id sends a restored row to the workspace root, which
+        is where a trashed item with no folder already lands.
+        """
+        for model in (MediaItem, SourceAsset):
+            await self.db.execute(
+                update(model)
+                .where(
+                    model.folder_id == folder_id,
+                    model.deleted_at.is_not(None),
+                )
+                .values(folder_id=None)
+            )
+
+        if commit:
+            await self.db.commit()
+
     async def soft_delete(
-        self, folder_id: int, user_id: int | None = None
+        self,
+        folder_id: int,
+        user_id: int | None = None,
+        commit: bool = True,
     ) -> bool:
         """Soft deletes a folder and all its descendant subfolders."""
         descendant_ids = await self.get_descendant_ids(folder_id)
@@ -391,7 +493,8 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
             .values(deleted_at=now, deleted_by=user_id)
         )
         await self.db.execute(stmt)
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
         return True
 
     async def move_media_items(
@@ -497,6 +600,7 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         folder_id: int,
         target_workspace_id: int,
         authorized_source_workspace_id: int,
+        restrict_to_user_id: int | None = None,
         commit: bool = True,
     ) -> None:
         """Move a folder subtree (and its contents) into another workspace.
@@ -541,6 +645,7 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 authorized_source_workspace_id=authorized_source_workspace_id,
                 descendant_ids=descendant_ids,
                 root_name=disambiguated_name,
+                restrict_to_user_id=restrict_to_user_id,
             )
             if commit:
                 await self.db.commit()
@@ -556,8 +661,44 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         authorized_source_workspace_id: int,
         descendant_ids: list[int],
         root_name: str,
+        restrict_to_user_id: int | None = None,
     ) -> None:
         """Reassigns one folder subtree and its contents to a workspace."""
+        if restrict_to_user_id is not None:
+            await self._reject_if_subtree_has_other_owners(
+                folder_id=folder_id,
+                descendant_ids=descendant_ids,
+                authorized_source_workspace_id=authorized_source_workspace_id,
+                restrict_to_user_id=restrict_to_user_id,
+            )
+
+        # 0. Sever workspace-scoped tag associations before the rows change
+        # workspace. A tag belongs to the source workspace, so a row that kept
+        # its tag associations after landing in target_workspace_id would stay
+        # associated with tags that workspace never created. Upstream deletes
+        # these here and the port dropped it. Scoped the same way the writes
+        # below are, so a row that raced out of the authorized source
+        # workspace keeps its tags untouched along with its workspace.
+        media_tags_delete = delete(media_item_tags).where(
+            media_item_tags.c.media_item_id.in_(
+                select(MediaItem.id).where(
+                    MediaItem.folder_id.in_(descendant_ids),
+                    MediaItem.workspace_id == authorized_source_workspace_id,
+                )
+            )
+        )
+        await self.db.execute(media_tags_delete)
+
+        asset_tags_delete = delete(source_asset_tags).where(
+            source_asset_tags.c.source_asset_id.in_(
+                select(SourceAsset.id).where(
+                    SourceAsset.folder_id.in_(descendant_ids),
+                    SourceAsset.workspace_id == authorized_source_workspace_id,
+                )
+            )
+        )
+        await self.db.execute(asset_tags_delete)
+
         # 1. Update media items belonging to any folder in the subtree. Their
         # ids were never materialized, so there is no expected count to check;
         # the workspace predicate is what keeps the write in bounds.
@@ -620,6 +761,57 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
             raise FolderSubtreeChangedError(
                 f"Expected to move folder {folder_id}, moved "
                 f"{root_res.rowcount} rows."
+            )
+
+    async def _reject_if_subtree_has_other_owners(
+        self,
+        folder_id: int,
+        descendant_ids: list[int],
+        authorized_source_workspace_id: int,
+        restrict_to_user_id: int,
+    ) -> None:
+        """Refuses the move if anyone but restrict_to_user_id owns a row.
+
+        Runs before any write. All-or-nothing rather than filtering each
+        UPDATE down to owned rows: filtering would move some contained rows
+        and leave the rest pointing at a folder_id that followed the others
+        into the other workspace, orphaning them. A NULL owner counts as
+        "someone else", matching the owner check the single-row and
+        root-folder branches already apply, so an unowned row needs an admin.
+        """
+        for model, label in (
+            (MediaItem, "media items"),
+            (SourceAsset, "source assets"),
+        ):
+            found = await self.db.execute(
+                select(model.id)
+                .where(
+                    model.folder_id.in_(descendant_ids),
+                    model.workspace_id == authorized_source_workspace_id,
+                    model.user_id.is_distinct_from(restrict_to_user_id),
+                )
+                .limit(1)
+            )
+            if found.first() is not None:
+                raise FolderSubtreeUnauthorizedError(
+                    f"Folder {folder_id} subtree contains {label} not owned "
+                    f"by user {restrict_to_user_id}."
+                )
+
+        other_folders = await self.db.execute(
+            select(Folder.id)
+            .where(
+                Folder.id.in_(descendant_ids),
+                Folder.workspace_id == authorized_source_workspace_id,
+                Folder.deleted_at.is_(None),
+                Folder.user_id.is_distinct_from(restrict_to_user_id),
+            )
+            .limit(1)
+        )
+        if other_folders.first() is not None:
+            raise FolderSubtreeUnauthorizedError(
+                f"Folder {folder_id} subtree contains subfolders not owned "
+                f"by user {restrict_to_user_id}."
             )
 
     async def copy_folder_to_workspace(

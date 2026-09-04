@@ -40,6 +40,9 @@ from src.galleries.dto.unified_gallery_response import (
     UnifiedGalleryItemResponse,
 )
 from src.galleries.gallery_service import GalleryService
+from src.folders.repository.folder_repository import (
+    FolderSubtreeUnauthorizedError,
+)
 from src.users.user_model import UserModel, UserRoleEnum
 
 
@@ -57,6 +60,17 @@ def fixture_service():
     mock_tags_repo = AsyncMock()
     mock_favorites_repo = AsyncMock()
     mock_folder_repo = AsyncMock()
+
+    # The folder branch locks the whole subtree, not just the root. Model that
+    # on top of get_folder_for_update so a test only has to say what the root
+    # row is: the real method returns {id: row} for the root plus every
+    # descendant, and a missing root yields an empty dict.
+    async def lock_subtree(folder_id):
+        row = await mock_folder_repo.get_folder_for_update(folder_id)
+        return {} if row is None else {folder_id: row}
+
+    mock_folder_repo.lock_subtree_for_move.side_effect = lock_subtree
+
     mock_db = AsyncMock()
     # Conditional moves succeed by default; tests that exercise a lost race
     # override this with rowcount 0.
@@ -105,6 +119,7 @@ async def test_enrich_source_asset_link(service):
     mock_asset.gcs_uri = "gs://bucket/asset.jpg"
     mock_asset.thumbnail_gcs_uri = "gs://bucket/thumb.jpg"
     mock_asset.mime_type = "image/jpeg"
+    mock_asset.workspace_id = 99
     service.mock_source_asset_repo.get_by_id.return_value = mock_asset
 
     # Mock iam_signer_credentials
@@ -113,7 +128,7 @@ async def test_enrich_source_asset_link(service):
         "https://signed.url/thumb.jpg",
     ]
 
-    result = await service._enrich_source_asset_link(link)
+    result = await service._enrich_source_asset_link(link, 99)
 
     assert result is not None
     assert result.presigned_url == "https://signed.url/asset.jpg"
@@ -666,6 +681,8 @@ async def test_get_media_by_id_with_both_source_references(service):
     source_asset.gcs_uri = "gs://bucket/asset.jpg"
     source_asset.thumbnail_gcs_uri = "gs://bucket/thumb.jpg"
     source_asset.mime_type = "image/jpeg"
+    # Same workspace as the item, or the cross-workspace guard drops the link.
+    source_asset.workspace_id = 99
 
     def get_by_id_side_effect(id, **kwargs):
         if id == 123:
@@ -854,9 +871,103 @@ async def test_bulk_move_folder_success(service):
         folder_id=10,
         target_workspace_id=88,
         authorized_source_workspace_id=99,
+        restrict_to_user_id=MOVER.id,
         commit=False,
     )
     assert service.mock_db.commit.await_count == 1
+
+
+@pytest.mark.anyio
+async def test_enrich_source_asset_link_refuses_a_foreign_workspace(service):
+    """A link pointing outside the item's workspace yields no signed URL.
+
+    A copy or a cross-workspace move leaves the reference pointing at the
+    original row. The caller was only authorized against the item's own
+    workspace, so resolving it would hand them a working URL for content
+    nobody checked them against.
+    """
+    link = SourceAssetLink(asset_id=123, role=AssetRoleEnum.INPUT)
+    foreign_asset = MagicMock()
+    foreign_asset.gcs_uri = "gs://bucket/other-workspace.jpg"
+    foreign_asset.workspace_id = 77
+    service.mock_source_asset_repo.get_by_id.return_value = foreign_asset
+
+    result = await service._enrich_source_asset_link(link, 99)
+
+    assert result is None
+    service.mock_iam_signer.generate_presigned_url.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_enrich_source_media_link_refuses_a_foreign_workspace(service):
+    """Same cross-workspace guard on the generated-input branch."""
+    from src.common.schema.media_item_model import SourceMediaItemLink
+
+    link = SourceMediaItemLink(
+        media_item_id=456, media_index=0, role=AssetRoleEnum.INPUT
+    )
+    foreign_parent = MagicMock()
+    foreign_parent.workspace_id = 77
+    foreign_parent.gcs_uris = ["gs://bucket/other-workspace.jpg"]
+    service.mock_media_repo.get_by_id.return_value = foreign_parent
+
+    result = await service._enrich_source_media_item_link(link, 99)
+
+    assert result is None
+    service.mock_iam_signer.generate_presigned_url.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_bulk_move_media_item_clears_workspace_scoped_tags(service):
+    """Tags belong to the workspace the row is leaving.
+
+    Upstream clears them on a cross-workspace move and the port dropped it,
+    which left moved rows associated with tags the target workspace never
+    created.
+    """
+    service.mock_media_repo.get_by_id.return_value = make_row(1)
+
+    result = await service.bulk_move(move_dto((1, "media_item")), MOVER)
+
+    assert as_pairs(result.moved) == [("media_item", 1)]
+    service.mock_tags_repo.clear_tags_for_items.assert_awaited_once_with(
+        [1], "media_item", commit=False
+    )
+
+
+@pytest.mark.anyio
+async def test_bulk_move_does_not_clear_tags_when_the_row_changed(service):
+    """A lost race must not strip tags off a row it failed to move."""
+    service.mock_media_repo.get_by_id.return_value = make_row(1)
+    service.mock_db.execute.return_value = MagicMock(rowcount=0)
+
+    result = await service.bulk_move(move_dto((1, "media_item")), MOVER)
+
+    assert result.moved == []
+    service.mock_tags_repo.clear_tags_for_items.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_bulk_move_folder_rejects_a_subtree_it_does_not_own(service):
+    """Owning the root is not enough; the subtree gate is the real guard.
+
+    Without it the per-item ownership check stays bypassable: put someone
+    else's media in a folder you own, then move the folder.
+    """
+    service.mock_folder_repo.get_folder_for_update.return_value = make_folder(
+        10,
+    )
+    service.mock_folder_repo.move_folder_to_workspace.side_effect = (
+        FolderSubtreeUnauthorizedError("subtree has other owners")
+    )
+
+    result = await service.bulk_move(move_dto((10, "folder")), MOVER)
+
+    assert result.moved == []
+    assert as_pairs(result.failed) == [("folder", 10)]
+    assert result.failed[0].reason == "Not authorized"
+    assert service.mock_db.rollback.await_count == 1
+    service.mock_db.commit.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -899,6 +1010,9 @@ async def test_bulk_move_folder_allows_an_admin_who_is_not_the_owner(service):
 
     assert as_pairs(result.moved) == [("folder", 10)]
     assert result.failed == []
+    # restrict_to_user_id=None is what disables the subtree ownership gate.
+    _, kwargs = service.mock_folder_repo.move_folder_to_workspace.await_args
+    assert kwargs["restrict_to_user_id"] is None
 
 
 @pytest.mark.anyio
