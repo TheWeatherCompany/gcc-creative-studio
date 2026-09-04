@@ -967,34 +967,48 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 restrict_to_user_id=restrict_to_user_id,
             )
 
-        id_map: dict[int, int] = {}
+        # Insert a whole level at a time and flush once per level, the way
+        # upstream does: N roundtrips (one per folder) becomes D (one per
+        # depth, normally under five). A level can only be built once its
+        # parents have ids, which is why the flush is per level and not one
+        # flush at the end. The CTE already returns depth and orders by it.
+        depth_map: dict[int, list] = {}
         for row in folder_rows:
-            if row.id in id_map:
-                # A depth-bounded walk over a cyclic subtree can yield the
-                # same folder twice; copy each source folder only once.
-                continue
-            if row.id == folder_id:
-                new_folder = Folder(
-                    workspace_id=target_workspace_id,
-                    user_id=user_id,
-                    user_email=user_email or root_folder.user_email,
-                    name=disambiguated_root_name,
-                    parent_id=None,
-                    color=row.color,
-                )
-            else:
-                new_parent_id = id_map.get(row.parent_id)
-                new_folder = Folder(
-                    workspace_id=target_workspace_id,
-                    user_id=user_id,
-                    user_email=user_email or root_folder.user_email,
-                    name=row.name,
-                    parent_id=new_parent_id,
-                    color=row.color,
-                )
-            self.db.add(new_folder)
+            depth_map.setdefault(row.depth, []).append(row)
+
+        id_map: dict[int, int] = {}
+        for depth in sorted(depth_map):
+            at_this_depth: list[tuple[int, Folder]] = []
+            for row in depth_map[depth]:
+                if row.id in id_map:
+                    # A depth-bounded walk over a cyclic subtree can yield
+                    # the same folder twice; copy each source folder once.
+                    continue
+                if row.id == folder_id:
+                    new_folder = Folder(
+                        workspace_id=target_workspace_id,
+                        user_id=user_id,
+                        user_email=user_email or root_folder.user_email,
+                        name=disambiguated_root_name,
+                        parent_id=None,
+                        color=row.color,
+                    )
+                else:
+                    new_parent_id = id_map.get(row.parent_id)
+                    new_folder = Folder(
+                        workspace_id=target_workspace_id,
+                        user_id=user_id,
+                        user_email=user_email or root_folder.user_email,
+                        name=row.name,
+                        parent_id=new_parent_id,
+                        color=row.color,
+                    )
+                self.db.add(new_folder)
+                at_this_depth.append((row.id, new_folder))
+
             await self.db.flush()
-            id_map[row.id] = new_folder.id
+            for old_id, new_folder in at_this_depth:
+                id_map[old_id] = new_folder.id
 
         old_folder_ids = list(id_map.keys())
 
