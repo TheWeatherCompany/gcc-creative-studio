@@ -51,6 +51,7 @@ from src.source_assets.repository.source_asset_repository import (
     SourceAssetRepository,
 )
 from src.favorites.repository.favorites_repository import FavoritesRepository
+from src.favorites.dto.favorite_response_dto import FavoriteResponseDto
 from src.users.repository.user_repository import UserRepository
 from src.users.user_model import UserModel, UserRoleEnum
 from src.workspaces.repository.workspace_repository import WorkspaceRepository
@@ -395,7 +396,7 @@ class GalleryService:
         self,
         item_id: int,
         current_user: UserModel,
-    ) -> dict[str, bool]:
+    ) -> FavoriteResponseDto:
         """Favorites a media item for the current user (idempotent).
 
         Authorizes the user against the item's workspace before recording the
@@ -417,13 +418,13 @@ class GalleryService:
             user_id=current_user.id,
             media_item_id=item_id,
         )
-        return {"is_favorite": True}
+        return FavoriteResponseDto(is_favorite=True)
 
     async def unfavorite_item(
         self,
         item_id: int,
         current_user: UserModel,
-    ) -> dict[str, bool]:
+    ) -> FavoriteResponseDto:
         """Removes the current user's favorite on a media item (idempotent).
 
         Unfavoriting only ever affects the current user's own row, so it does
@@ -433,7 +434,7 @@ class GalleryService:
             user_id=current_user.id,
             media_item_id=item_id,
         )
-        return {"is_favorite": False}
+        return FavoriteResponseDto(is_favorite=False)
 
     async def bulk_delete(
         self,

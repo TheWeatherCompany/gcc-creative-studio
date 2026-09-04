@@ -24,6 +24,7 @@ from src.galleries.dto.gallery_search_dto import GallerySearchDto
 from src.galleries.dto.unified_gallery_response import (
     UnifiedGalleryItemResponse,
 )
+from src.favorites.dto.favorite_response_dto import FavoriteResponseDto
 from src.galleries.gallery_service import GalleryService
 from src.users.user_model import UserModel, UserRoleEnum
 from src.workspaces.workspace_auth_guard import WorkspaceAuth
@@ -104,7 +105,7 @@ async def get_single_gallery_item(
     return item
 
 
-@router.post("/item/{item_id}/favorite")
+@router.post("/item/{item_id}/favorite", response_model=FavoriteResponseDto)
 async def favorite_gallery_item(
     item_id: int,
     current_user: UserModel = Depends(get_current_user),
@@ -120,7 +121,7 @@ async def favorite_gallery_item(
     )
 
 
-@router.delete("/item/{item_id}/favorite")
+@router.delete("/item/{item_id}/favorite", response_model=FavoriteResponseDto)
 async def unfavorite_gallery_item(
     item_id: int,
     current_user: UserModel = Depends(get_current_user),

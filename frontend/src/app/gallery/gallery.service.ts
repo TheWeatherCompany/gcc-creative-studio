@@ -335,14 +335,45 @@ export class GalleryService implements OnDestroy {
     return galleryItem;
   }
 
-  favorite(itemId: number): Observable<{isFavorite: boolean}> {
+  favorite(itemId: number): Observable<boolean> {
     const url = `${environment.backendURL}/gallery/item/${itemId}/favorite`;
-    return this.http.post<{isFavorite: boolean}>(url, {});
+    return this.http
+      .post<Record<string, unknown>>(url, {})
+      .pipe(map(response => this.readFavoriteState(response, true)));
   }
 
-  unfavorite(itemId: number): Observable<{isFavorite: boolean}> {
+  unfavorite(itemId: number): Observable<boolean> {
     const url = `${environment.backendURL}/gallery/item/${itemId}/favorite`;
-    return this.http.delete<{isFavorite: boolean}>(url);
+    return this.http
+      .delete<Record<string, unknown>>(url)
+      .pipe(map(response => this.readFavoriteState(response, false)));
+  }
+
+  /**
+   * Reads the favorite state out of a favorite/unfavorite response.
+   *
+   * The endpoint answers in camelCase (`isFavorite`), but it used to answer in
+   * snake_case, which silently produced `undefined` here and left the heart
+   * unlit even though the write had succeeded. `requested` is the state the
+   * caller asked for, and it is the right answer for any 2xx whose body does
+   * not carry the field.
+   */
+  private readFavoriteState(
+    response: Record<string, unknown> | null,
+    requested: boolean,
+  ): boolean {
+    const value = response?.['isFavorite'] ?? response?.['is_favorite'];
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    // Warn rather than fall back silently: a 2xx with no state in it means
+    // the contract drifted again, and the whole point of the last drift was
+    // that it was invisible until someone clicked a heart.
+    console.warn(
+      'Favorite response carried no favorite state; assuming the requested one',
+      response,
+    );
+    return requested;
   }
 
   createTemplateFromMediaItem(mediaItemId: number): Observable<{id: string}> {
