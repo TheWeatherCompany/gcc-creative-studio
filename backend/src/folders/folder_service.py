@@ -29,6 +29,12 @@ from src.folders.dto.folder_dto import (
 from src.folders.repository.folder_repository import FolderRepository
 from src.common.db_errors import constraint_name_of
 from src.folders.schema.folder_model import Folder
+
+# Upstream's product-level cap on how deep a folder tree may go. Distinct
+# from folder_repository.MAX_FOLDER_DEPTH, which is the recursion ceiling
+# those queries refuse to walk past. The port dropped this constant and all
+# three of its checks; they are restored below.
+MAX_FOLDER_TREE_DEPTH = 20
 from src.users.user_model import UserModel, UserRoleEnum
 
 logger = logging.getLogger(__name__)
@@ -71,6 +77,18 @@ class FolderService:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Parent folder not found in this workspace.",
+                )
+
+            parent_depth = await self.folder_repo.get_folder_depth(
+                dto.parent_id
+            )
+            if parent_depth >= MAX_FOLDER_TREE_DEPTH:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Cannot create folder: maximum folder tree depth of "
+                        f"{MAX_FOLDER_TREE_DEPTH} levels reached."
+                    ),
                 )
 
         if await self.folder_repo.is_folder_name_taken(
@@ -251,6 +269,10 @@ class FolderService:
                         detail="Cannot move a folder into one of its own subfolders.",
                     )
 
+                await self._reject_move_that_would_exceed_depth(
+                    dest_folder_id=new_parent_id, moving_folder_id=folder.id
+                )
+
             if new_parent_id != folder.parent_id:
                 is_moving = True
                 folder.parent_id = new_parent_id
@@ -309,6 +331,28 @@ class FolderService:
             ) from e
 
         return await self.get_folder_by_id(folder.id)
+
+    async def _reject_move_that_would_exceed_depth(
+        self, dest_folder_id: int, moving_folder_id: int
+    ) -> None:
+        """Refuses a reparent that would push the tree past the depth cap.
+
+        Grafting a subtree adds its own height to the destination's depth, so
+        both halves have to be measured; checking only the destination lets a
+        tall subtree blow through the limit in one move.
+        """
+        dest_depth = await self.folder_repo.get_folder_depth(dest_folder_id)
+        subtree_depth = await self.folder_repo.get_subtree_depth(
+            moving_folder_id
+        )
+        if dest_depth + subtree_depth > MAX_FOLDER_TREE_DEPTH:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Cannot move folder: would exceed maximum folder tree "
+                    f"depth of {MAX_FOLDER_TREE_DEPTH} levels."
+                ),
+            )
 
     async def _lock_folders_for_move(
         self, folder_id: int, parent_id: int
@@ -490,6 +534,9 @@ class FolderService:
                             status_code=status.HTTP_400_BAD_REQUEST,
                             detail=f"Cannot move folder {f_id} into its own subfolder.",
                         )
+                    await self._reject_move_that_would_exceed_depth(
+                        dest_folder_id=dest_folder_id, moving_folder_id=f_id
+                    )
                 valid_folder_ids.append(f_id)
 
         # One logical move is one transaction: the repository writes are told

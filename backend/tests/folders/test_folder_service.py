@@ -28,7 +28,10 @@ from src.folders.dto.folder_dto import (
     FolderUpdateDto,
     MoveItemsDto,
 )
-from src.folders.folder_service import FolderService
+from src.folders.folder_service import (
+    MAX_FOLDER_TREE_DEPTH,
+    FolderService,
+)
 from src.folders.repository.folder_repository import FolderRepository
 from src.folders.schema.folder_model import Folder
 from src.users.user_model import UserModel, UserRoleEnum
@@ -42,6 +45,10 @@ def fixture_mock_folder_repo():
     mock.is_folder_name_taken.return_value = False
     # The move_items ownership gate iterates these, so they must default to
     # empty lists rather than a bare AsyncMock's non-iterable return value.
+    # Shallow tree by default, so the restored depth cap never trips unless a
+    # test is specifically about it.
+    mock.get_folder_depth.return_value = 1
+    mock.get_subtree_depth.return_value = 1
     mock.get_media_items_by_ids.return_value = []
     mock.get_source_assets_by_ids.return_value = []
     mock.get_folders_by_ids.return_value = []
@@ -65,6 +72,19 @@ def fixture_db_folder_service(mock_db):
     """FolderService over a real repository, so the SQL result shapes and the
     commit boundary are exercised instead of mocked away."""
     return FolderService(folder_repo=FolderRepository(db=mock_db))
+
+
+def breadcrumbs_result(depth: int) -> MagicMock:
+    """Ancestor rows shaped the way get_breadcrumbs reads them.
+
+    get_folder_depth is len(breadcrumbs), so the row count is the depth.
+    """
+    result = MagicMock()
+    result.fetchall.return_value = [
+        SimpleNamespace(id=i, name=f"Ancestor {i}", parent_id=None)
+        for i in range(1, depth + 1)
+    ]
+    return result
 
 
 def scalars_result(rows: list) -> MagicMock:
@@ -226,6 +246,50 @@ class TestCreateFolder:
             await folder_service.create_folder(dto, sample_user)
         assert exc_info.value.status_code == status.HTTP_409_CONFLICT
         assert "already exists" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_create_folder_refuses_past_the_depth_cap(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """Upstream caps the tree at 20 levels; the port dropped the check.
+
+        Without it an API client can nest arbitrarily deep, and every
+        recursive query in the repository stops at its own ceiling, so a
+        subtree past that point is only ever partly visible.
+        """
+        mock_folder_repo.get_folder_by_id.return_value = Folder(
+            id=5, workspace_id=1, user_id=10, user_email="a@b.com", name="Deep"
+        )
+        mock_folder_repo.get_folder_depth.return_value = MAX_FOLDER_TREE_DEPTH
+
+        dto = FolderCreateDto(name="One more", workspace_id=1, parent_id=5)
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.create_folder(dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
+        assert "maximum folder tree depth" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_create_folder_allows_the_last_level(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """A parent one below the cap still accepts a child."""
+        mock_folder_repo.get_folder_by_id.return_value = Folder(
+            id=5, workspace_id=1, user_id=10, user_email="a@b.com", name="Deep"
+        )
+        mock_folder_repo.get_folder_depth.return_value = (
+            MAX_FOLDER_TREE_DEPTH - 1
+        )
+        mock_folder_repo.is_folder_name_taken.return_value = False
+
+        dto = FolderCreateDto(name="Last", workspace_id=1, parent_id=5)
+
+        async def fake_refresh(obj):
+            obj.id = 101
+
+        mock_folder_repo.db.refresh.side_effect = fake_refresh
+
+        result = await folder_service.create_folder(dto, sample_user)
+        assert result.parent_id == 5
 
     @pytest.mark.anyio
     async def test_create_folder_reraises_a_foreign_key_violation(
@@ -1057,6 +1121,37 @@ class TestMoveItems:
         mock_folder_repo.get_folders_by_ids.assert_not_called()
 
     @pytest.mark.anyio
+    async def test_move_items_refuses_a_move_that_would_exceed_the_depth_cap(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """Both halves are measured: a tall subtree can blow the cap in one
+        move even when the destination itself is shallow."""
+        mock_folder_repo.get_folder_for_update.return_value = Folder(
+            id=5,
+            workspace_id=1,
+            user_id=sample_user.id,
+            name="Target",
+            user_email="a@b.com",
+        )
+        mock_folder_repo.get_descendant_ids.return_value = [2]
+        mock_folder_repo.get_folder_depth.return_value = 15
+        mock_folder_repo.get_subtree_depth.return_value = 10
+
+        dto = MoveItemsDto(
+            workspace_id=1,
+            media_item_ids=[],
+            source_asset_ids=[],
+            folder_ids=[2],
+            destination_folder_id=5,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.move_items(dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
+        assert "maximum folder tree depth" in exc_info.value.detail
+        mock_folder_repo.move_folders.assert_not_called()
+
+    @pytest.mark.anyio
     async def test_move_items_locks_the_destination_for_a_media_only_move(
         self, folder_service, mock_folder_repo, sample_user
     ):
@@ -1150,6 +1245,8 @@ class TestMoveItems:
             db_result_for_folder(moving),  # lock folder 2 (ascending order)
             db_result_for_folder(destination),  # lock folder 5
             db_result_for_ids([2]),  # cycle check on folder 2
+            breadcrumbs_result(1),  # depth cap: destination is 1 deep
+            MagicMock(scalar=lambda: 1),  # depth cap: moving subtree height
             MagicMock(rowcount=2),  # media item UPDATE
             MagicMock(rowcount=1),  # source asset UPDATE
             folders_to_move,  # folders selected for the move

@@ -244,6 +244,40 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
             f"Folder {folder_id} subtree kept changing while being locked."
         )
 
+    async def get_folder_depth(self, folder_id: int) -> int:
+        """Depth of a folder measured from the workspace root (root = 1)."""
+        breadcrumbs = await self.get_breadcrumbs(folder_id)
+        return len(breadcrumbs)
+
+    async def get_subtree_depth(self, folder_id: int) -> int:
+        """Height of the subtree rooted at folder_id (leaf folder = 1).
+
+        Bounded like every other recursive walk in this module. Upstream left
+        this CTE unbounded, which on a parent cycle spins until the statement
+        timeout, and production sets none.
+        """
+        cte_query = text(
+            """
+            WITH RECURSIVE subtree AS (
+                SELECT id, 1 AS depth
+                FROM folders
+                WHERE id = :folder_id AND deleted_at IS NULL
+                UNION ALL
+                SELECT f.id, s.depth + 1
+                FROM folders f
+                JOIN subtree s ON f.parent_id = s.id
+                WHERE f.deleted_at IS NULL AND s.depth < :max_depth
+            )
+            SELECT COALESCE(MAX(depth), 0) FROM subtree;
+            """
+        )
+        result = await self.db.execute(
+            cte_query,
+            {"folder_id": folder_id, "max_depth": MAX_FOLDER_DEPTH},
+        )
+        val = result.scalar()
+        return int(val) if val is not None else 0
+
     async def get_folders_by_ids(
         self, folder_ids: list[int], workspace_id: int
     ) -> list[Folder]:
