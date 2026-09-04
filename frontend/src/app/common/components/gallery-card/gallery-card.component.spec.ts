@@ -15,18 +15,24 @@
  */
 
 import {ComponentFixture, TestBed} from '@angular/core/testing';
+
 import {RouterTestingModule} from '@angular/router/testing';
 import {MatDialogModule} from '@angular/material/dialog';
 import {MatIconModule} from '@angular/material/icon';
 import {MatChipsModule} from '@angular/material/chips';
-import {NO_ERRORS_SCHEMA} from '@angular/core';
-
-import {of} from 'rxjs';
 import {GalleryCardComponent} from './gallery-card.component';
 import {UserService} from '../../services/user.service';
 import {GalleryItem} from '../../models/gallery-item.model';
 import {GalleryService} from '../../../gallery/gallery.service';
+import {CUSTOM_ELEMENTS_SCHEMA, NO_ERRORS_SCHEMA} from '@angular/core';
+import {provideRouter, RouterModule} from '@angular/router';
+import {CommonModule} from '@angular/common';
+import {MatSnackBarModule} from '@angular/material/snack-bar';
+import {NoopAnimationsModule} from '@angular/platform-browser/animations';
+import {of, throwError} from 'rxjs';
 
+// Two suites, each with its own TestBed: the drag-and-drop specs need
+// the real GalleryService shape, the favorite specs need spies.
 describe('GalleryCardComponent', () => {
   let component: GalleryCardComponent;
   let fixture: ComponentFixture<GalleryCardComponent>;
@@ -141,5 +147,100 @@ describe('GalleryCardComponent', () => {
     component.isDragging = true;
     component.onDragEnd({} as DragEvent);
     expect(component.isDragging).toBeFalse();
+  });
+});
+
+describe('GalleryCardComponent favorite toggle', () => {
+  let component: GalleryCardComponent;
+  let fixture: ComponentFixture<GalleryCardComponent>;
+  let galleryService: jasmine.SpyObj<
+    Pick<GalleryService, 'favorite' | 'unfavorite'>
+  >;
+
+  const stopped = () => new MouseEvent('click');
+
+  beforeEach(async () => {
+    galleryService = jasmine.createSpyObj('GalleryService', [
+      'favorite',
+      'unfavorite',
+    ]);
+
+    await TestBed.configureTestingModule({
+      declarations: [GalleryCardComponent],
+      imports: [
+        CommonModule,
+        RouterModule,
+        MatDialogModule,
+        MatSnackBarModule,
+        NoopAnimationsModule,
+      ],
+      providers: [
+        provideRouter([]),
+        {provide: GalleryService, useValue: galleryService},
+        {provide: UserService, useValue: {getUserDetails: () => null}},
+      ],
+      schemas: [CUSTOM_ELEMENTS_SCHEMA],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(GalleryCardComponent);
+    component = fixture.componentInstance;
+    component.item = {
+      id: 42,
+      itemType: 'media_item',
+      isFavorite: false,
+    } as GalleryItem;
+  });
+
+  // The shipped bug: the optimistic flip lit the heart, then the response
+  // overwrote isFavorite with undefined and it went dark until a reload.
+  it('leaves the heart lit after a successful favorite', () => {
+    galleryService.favorite.and.returnValue(of(true));
+
+    component.toggleFavorite(stopped());
+
+    expect(galleryService.favorite).toHaveBeenCalledWith(42);
+    expect(component.item.isFavorite).toBeTrue();
+    expect(component.isFavoriteUpdating).toBeFalse();
+  });
+
+  it('leaves the heart unlit after a successful unfavorite', () => {
+    component.item.isFavorite = true;
+    galleryService.unfavorite.and.returnValue(of(false));
+
+    component.toggleFavorite(stopped());
+
+    expect(galleryService.unfavorite).toHaveBeenCalledWith(42);
+    expect(component.item.isFavorite).toBeFalse();
+  });
+
+  it('reverts the optimistic flip when the request fails', () => {
+    galleryService.favorite.and.returnValue(
+      throwError(() => new Error('boom')),
+    );
+
+    component.toggleFavorite(stopped());
+
+    expect(component.item.isFavorite).toBeFalse();
+    expect(component.isFavoriteUpdating).toBeFalse();
+  });
+
+  it('ignores a second toggle while one is in flight', () => {
+    component.isFavoriteUpdating = true;
+
+    component.toggleFavorite(stopped());
+
+    expect(galleryService.favorite).not.toHaveBeenCalled();
+  });
+
+  it('renders the filled heart icon once favorited', () => {
+    galleryService.favorite.and.returnValue(of(true));
+
+    component.toggleFavorite(stopped());
+    fixture.detectChanges();
+
+    const button: HTMLElement =
+      fixture.nativeElement.querySelector('.favorite-btn');
+    expect(button.classList).toContain('is-favorite');
+    expect(button.textContent?.trim()).toBe('favorite');
   });
 });

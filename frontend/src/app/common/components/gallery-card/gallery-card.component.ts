@@ -183,8 +183,8 @@ export class GalleryCardComponent implements OnDestroy {
       : this.galleryService.unfavorite(this.item.id);
 
     request$.subscribe({
-      next: response => {
-        this.item.isFavorite = response.isFavorite;
+      next: isFavorite => {
+        this.item.isFavorite = isFavorite;
         this.isFavoriteUpdating = false;
       },
       error: err => {

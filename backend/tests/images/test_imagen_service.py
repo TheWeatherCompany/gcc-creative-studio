@@ -13,7 +13,6 @@
 # limitations under the License.
 """Tests for Imagen Service."""
 
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1277,3 +1276,73 @@ def test_vto_dto_validation_failures():
     with pytest.raises(ValidationError) as exc_info:
         VtoDto(workspace_id=1, person_image=valid_input)
     assert "At least one garment" in str(exc_info.value)
+
+
+def test_gemini_generate_image_forwards_temperature():
+    """Temperature reaches the model when set.
+
+    Editing benefits from a low value: it keeps the result close to the
+    reference images so the untouched parts of the frame are preserved.
+    """
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = MagicMock(candidates=[])
+
+    gemini_generate_image(
+        gcs_service=MagicMock(),
+        vertexai_client=mock_client,
+        prompt="Make the sky orange",
+        model=GenerationModelEnum.GEMINI_2_5_FLASH_IMAGE,
+        bucket_name="bucket",
+        temperature=0.2,
+    )
+
+    config = mock_client.models.generate_content.call_args.kwargs["config"]
+    assert config.temperature == 0.2
+
+
+def test_gemini_generate_image_omits_temperature_when_unset():
+    """Unset means the model's own default applies, not one we chose."""
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = MagicMock(candidates=[])
+
+    gemini_generate_image(
+        gcs_service=MagicMock(),
+        vertexai_client=mock_client,
+        prompt="A cat",
+        model=GenerationModelEnum.GEMINI_2_5_FLASH_IMAGE,
+        bucket_name="bucket",
+    )
+
+    config = mock_client.models.generate_content.call_args.kwargs["config"]
+    assert config.temperature is None
+
+
+def test_gemini_generate_image_forwards_temperature_image_to_image():
+    """Temperature also reaches the model on the image-to-image path.
+
+    Text-to-image and image-to-image share one config-building block, but
+    they are separate worker call sites; this pins the reference-image shape
+    so a future refactor dropping temperature= on that branch is caught.
+    """
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = MagicMock(candidates=[])
+    reference_image = MagicMock(
+        gcs_uri="gs://bucket/ref.png", mime_type="image/png"
+    )
+
+    gemini_generate_image(
+        gcs_service=MagicMock(),
+        vertexai_client=mock_client,
+        prompt="Make the sky orange",
+        model=GenerationModelEnum.GEMINI_2_5_FLASH_IMAGE,
+        bucket_name="bucket",
+        reference_images=[reference_image],
+        temperature=0.15,
+    )
+
+    call = mock_client.models.generate_content.call_args
+    assert call.kwargs["config"].temperature == 0.15
+    # The reference image is threaded in alongside the prompt, so we are
+    # genuinely on the image-to-image branch and not just text-to-image.
+    parts = call.kwargs["contents"][0].parts
+    assert any(getattr(p, "file_data", None) is not None for p in parts)

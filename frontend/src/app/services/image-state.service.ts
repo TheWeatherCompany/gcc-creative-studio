@@ -35,6 +35,8 @@ export interface ImageState {
   composition: string | null;
   useBrandGuidelines: boolean;
   enhancePrompt: boolean;
+  /** null means "use the model's default" rather than a chosen value. */
+  temperature: number | null;
   mode: string;
 }
 
@@ -62,6 +64,7 @@ export class ImageStateService {
       composition: null,
       useBrandGuidelines: false,
       enhancePrompt: false,
+      temperature: null,
       mode: 'Text to Image',
     };
 

@@ -23,7 +23,7 @@ import {MatSnackBarModule} from '@angular/material/snack-bar';
 import {NoopAnimationsModule} from '@angular/platform-browser/animations';
 import {CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
 
-import {of} from 'rxjs';
+import {of, throwError} from 'rxjs';
 import {MatDialog} from '@angular/material/dialog';
 
 import {MediaLightboxComponent} from './media-lightbox.component';
@@ -31,22 +31,30 @@ import {TagsService} from '../../services/tags.service';
 import {WorkspaceStateService} from '../../../services/workspace/workspace-state.service';
 import {GalleryService} from '../../../gallery/gallery.service';
 import {FolderService} from '../../services/folder.service';
+import {MediaItem} from '../../models/media-item.model';
 
 describe('MediaLightboxComponent', () => {
   let component: MediaLightboxComponent;
   let fixture: ComponentFixture<MediaLightboxComponent>;
   let dialogResult: unknown;
-  let bulkMove: jasmine.Spy;
   let moveItems: jasmine.Spy;
+  let galleryService: jasmine.SpyObj<
+    Pick<GalleryService, 'favorite' | 'unfavorite' | 'bulkMove'>
+  >;
 
   beforeEach(async () => {
     dialogResult = undefined;
-    bulkMove = jasmine
-      .createSpy('bulkMove')
-      .and.returnValue(of({moved: [{id: 7, type: 'media_item'}], failed: []}));
     moveItems = jasmine
       .createSpy('moveItems')
       .and.returnValue(of({total_moved: 1}));
+    galleryService = jasmine.createSpyObj('GalleryService', [
+      'favorite',
+      'unfavorite',
+      'bulkMove',
+    ]);
+    galleryService.bulkMove.and.returnValue(
+      of({moved: [{id: 7, type: 'media_item'}], failed: []}),
+    );
 
     await TestBed.configureTestingModule({
       declarations: [MediaLightboxComponent],
@@ -71,10 +79,7 @@ describe('MediaLightboxComponent', () => {
             open: () => ({afterClosed: () => of(dialogResult)}),
           },
         },
-        {
-          provide: GalleryService,
-          useValue: {bulkMove},
-        },
+        {provide: GalleryService, useValue: galleryService},
         {
           provide: FolderService,
           useValue: {moveItems},
@@ -104,7 +109,7 @@ describe('MediaLightboxComponent', () => {
 
       component.openBatchMoveDialog();
 
-      expect(bulkMove).toHaveBeenCalledWith(
+      expect(galleryService.bulkMove).toHaveBeenCalledWith(
         [{id: 7, type: 'media_item'}],
         42,
       );
@@ -112,7 +117,7 @@ describe('MediaLightboxComponent', () => {
 
     it('reports a rejected workspace move instead of claiming success', () => {
       dialogResult = {destinationWorkspaceId: 42, destinationName: 'Team B'};
-      bulkMove.and.returnValue(
+      galleryService.bulkMove.and.returnValue(
         of({
           moved: [],
           failed: [{id: 7, type: 'media_item', reason: 'Not authorized'}],
@@ -142,8 +147,47 @@ describe('MediaLightboxComponent', () => {
 
       component.openBatchMoveDialog();
 
-      expect(bulkMove).not.toHaveBeenCalled();
+      expect(galleryService.bulkMove).not.toHaveBeenCalled();
       expect(moveItems).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('favorite toggle', () => {
+    beforeEach(() => {
+      component.mediaItem = {id: 42, isFavorite: false} as MediaItem;
+    });
+
+    // Same shipped bug as the gallery card: the response used to overwrite
+    // the optimistic flip with undefined and the heart went dark.
+    it('leaves the heart lit after a successful favorite', () => {
+      galleryService.favorite.and.returnValue(of(true));
+
+      component.toggleFavorite();
+
+      expect(galleryService.favorite).toHaveBeenCalledWith(42);
+      expect(component.isFavorite).toBeTrue();
+      expect(component.isFavoriteUpdating).toBeFalse();
+    });
+
+    it('leaves the heart unlit after a successful unfavorite', () => {
+      component.mediaItem!.isFavorite = true;
+      galleryService.unfavorite.and.returnValue(of(false));
+
+      component.toggleFavorite();
+
+      expect(galleryService.unfavorite).toHaveBeenCalledWith(42);
+      expect(component.isFavorite).toBeFalse();
+    });
+
+    it('reverts the optimistic flip when the request fails', () => {
+      galleryService.favorite.and.returnValue(
+        throwError(() => new Error('boom')),
+      );
+
+      component.toggleFavorite();
+
+      expect(component.isFavorite).toBeFalse();
+      expect(component.isFavoriteUpdating).toBeFalse();
     });
   });
 });
