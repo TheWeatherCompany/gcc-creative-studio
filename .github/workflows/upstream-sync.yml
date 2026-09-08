@@ -39,6 +39,12 @@ jobs:
   sync:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      # Repository labels are an Issues-scope resource: creating them needs
+      # issues:write even though we only ever attach them to PRs.
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -86,8 +92,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh label create "$SYNC_LABEL" --color "0366d6" --description "Automated upstream sync PR" 2>/dev/null || true
-          gh label create "needs-auth-review" --color "d73a4a" --description "Touches fork-owned Okta auth or custom-domain hosting code" 2>/dev/null || true
+          # Must fail the job if a label can't be created. gh pr create resolves
+          # --label client-side and errors out *after* we've already pushed the
+          # sync branch, which would leave an orphan branch and no PR.
+          existing=$(gh label list --limit 200 --json name --jq '.[].name')
+
+          ensure_label() {
+            if printf '%s\n' "$existing" | grep -qxF "$1"; then
+              echo "label '$1' already exists"
+            else
+              gh label create "$1" --color "$2" --description "$3"
+            fi
+          }
+
+          ensure_label "$SYNC_LABEL" "0366d6" "Automated upstream sync PR"
+          ensure_label "needs-auth-review" "d73a4a" "Touches fork-owned Okta auth or custom-domain hosting code"
 
       - name: Find previous open sync PR
         if: steps.diff.outputs.count != '0'
