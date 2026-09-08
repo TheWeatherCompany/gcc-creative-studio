@@ -894,17 +894,25 @@ class GalleryService:
                     )
 
                     is_admin = UserRoleEnum.ADMIN in current_user.roles
-                    await self.folder_repo.copy_folder_to_workspace(
+                    copy_results = await self.folder_repo.copy_folder_to_workspace(
                         folder_id=folder.id,
-                        target_workspace_id=bulk_copy_dto.target_workspace_id,
+                        target_workspace_id=(bulk_copy_dto.target_workspace_id),
                         user_id=current_user.id,
                         user_email=current_user.email,
-                        # Owning the root is not enough, same as for a move.
+                        # Owning the root is not enough, as for a move.
                         restrict_to_user_id=(
                             None if is_admin else current_user.id
                         ),
                     )
-                    copied_count += 1
+                    # Count everything the subtree copy created, the way
+                    # upstream does. Counting the request as 1 reported a
+                    # folder of fifty items the same as an empty one, and
+                    # copied_count is what the UI tells the user.
+                    copied_count += (
+                        copy_results.get("folders_copied", 0)
+                        + copy_results.get("media_copied", 0)
+                        + copy_results.get("assets_copied", 0)
+                    )
 
             except FolderSubtreeUnauthorizedError as exc:
                 # This is a RuntimeError, not an HTTPException, so without its

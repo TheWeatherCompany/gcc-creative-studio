@@ -269,12 +269,17 @@ class FolderService:
                         detail="Cannot move a folder into one of its own subfolders.",
                     )
 
-                await self._reject_move_that_would_exceed_depth(
-                    dest_folder_id=new_parent_id, moving_folder_id=folder.id
-                )
-
             if new_parent_id != folder.parent_id:
                 is_moving = True
+                # Only an actual reparent can deepen the tree. Checking this
+                # whenever the client merely sends parent_id would reject a
+                # no-op PATCH (a rename that resends the current parent) on
+                # any folder already sitting at the cap.
+                if new_parent_id is not None:
+                    await self._reject_move_that_would_exceed_depth(
+                        dest_folder_id=new_parent_id,
+                        moving_folder_id=folder.id,
+                    )
                 folder.parent_id = new_parent_id
 
         target_name = dto.name.strip() if dto.name is not None else folder.name
@@ -308,7 +313,10 @@ class FolderService:
                     )
                 folder.name = target_name
 
-        if dto.color is not None:
+        # `color: null` is a request to clear the colour, so presence in the
+        # payload is what matters, not truthiness. Upstream fixed this
+        # explicitly and the port dropped the model_fields_set half.
+        if dto.color is not None or "color" in dto.model_fields_set:
             folder.color = dto.color
 
         # Read the name for the error message BEFORE committing: a rollback
@@ -333,15 +341,24 @@ class FolderService:
         return await self.get_folder_by_id(folder.id)
 
     async def _reject_move_that_would_exceed_depth(
-        self, dest_folder_id: int, moving_folder_id: int
+        self,
+        dest_folder_id: int,
+        moving_folder_id: int,
+        dest_depth: int | None = None,
     ) -> None:
         """Refuses a reparent that would push the tree past the depth cap.
 
         Grafting a subtree adds its own height to the destination's depth, so
         both halves have to be measured; checking only the destination lets a
         tall subtree blow through the limit in one move.
+
+        dest_depth can be passed in when the caller is looping over several
+        folders into one destination: that depth is invariant across the
+        batch, and reading it per folder means one breadcrumb walk per moved
+        folder instead of one for the whole request.
         """
-        dest_depth = await self.folder_repo.get_folder_depth(dest_folder_id)
+        if dest_depth is None:
+            dest_depth = await self.folder_repo.get_folder_depth(dest_folder_id)
         subtree_depth = await self.folder_repo.get_subtree_depth(
             moving_folder_id
         )
@@ -527,6 +544,12 @@ class FolderService:
         # bogus id just by listing a thousand of them.
         valid_folder_ids: list[int] = []
         if dto.folder_ids:
+            # Read once for the whole batch, not once per folder.
+            batch_dest_depth = (
+                await self.folder_repo.get_folder_depth(dest_folder_id)
+                if dest_folder_id is not None
+                else None
+            )
             for f_id in [folder.id for folder in folders_in_workspace]:
                 if dest_folder_id == f_id:
                     raise HTTPException(
@@ -543,7 +566,9 @@ class FolderService:
                             detail=f"Cannot move folder {f_id} into its own subfolder.",
                         )
                     await self._reject_move_that_would_exceed_depth(
-                        dest_folder_id=dest_folder_id, moving_folder_id=f_id
+                        dest_folder_id=dest_folder_id,
+                        moving_folder_id=f_id,
+                        dest_depth=batch_dest_depth,
                     )
                 valid_folder_ids.append(f_id)
 

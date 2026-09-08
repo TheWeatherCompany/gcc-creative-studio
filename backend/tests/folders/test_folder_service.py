@@ -708,6 +708,86 @@ class TestUpdateFolder:
         assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
 
     @pytest.mark.anyio
+    async def test_update_folder_clears_the_colour_when_sent_null(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """`color: null` is a request to clear it, not an absent field."""
+        folder = Folder(
+            id=1,
+            workspace_id=1,
+            user_id=sample_user.id,
+            user_email="a@b.com",
+            name="F",
+            color="#ff0000",
+        )
+        mock_folder_repo.get_folder_by_id.return_value = folder
+        mock_folder_repo.list_by_parent.return_value = [
+            FolderResponseDto(
+                id=1,
+                workspace_id=1,
+                user_email="a@b.com",
+                name="F",
+                parent_id=None,
+                item_count=0,
+                subfolder_count=0,
+            )
+        ]
+
+        await folder_service.update_folder(
+            1, FolderUpdateDto(color=None), sample_user
+        )
+        assert folder.color is None
+
+    @pytest.mark.anyio
+    async def test_update_folder_allows_a_no_op_reparent_at_max_depth(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """Resending the current parent is not a move, so it is not capped.
+
+        The depth check belongs to an actual reparent. Running it whenever
+        parent_id merely appears in the payload rejects a plain rename on any
+        folder already sitting at the cap.
+        """
+        folder = Folder(
+            id=1,
+            workspace_id=1,
+            user_id=sample_user.id,
+            user_email="a@b.com",
+            name="Deep",
+            parent_id=4,
+        )
+        parent = Folder(
+            id=4,
+            workspace_id=1,
+            user_id=sample_user.id,
+            user_email="a@b.com",
+            name="Parent",
+        )
+        mock_folder_repo.get_folder_by_id.return_value = folder
+        mock_folder_repo.get_folder_for_update.side_effect = [folder, parent]
+        mock_folder_repo.get_descendant_ids.return_value = [1]
+        # Already at the cap: an actual move would be refused.
+        mock_folder_repo.get_folder_depth.return_value = MAX_FOLDER_TREE_DEPTH
+        mock_folder_repo.get_subtree_depth.return_value = 1
+        mock_folder_repo.list_by_parent.return_value = [
+            FolderResponseDto(
+                id=1,
+                workspace_id=1,
+                user_email="a@b.com",
+                name="Renamed",
+                parent_id=4,
+                item_count=0,
+                subfolder_count=0,
+            )
+        ]
+
+        # parent_id resent unchanged alongside a rename.
+        result = await folder_service.update_folder(
+            1, FolderUpdateDto(name="Renamed", parent_id=4), sample_user
+        )
+        assert result.name == "Renamed"
+
+    @pytest.mark.anyio
     async def test_update_parent_max_depth_exceeded(
         self, folder_service, mock_folder_repo, sample_user
     ):
@@ -1081,6 +1161,53 @@ class TestMoveItems:
             "Cannot move folder 2 into its own subfolder."
             in exc_info.value.detail
         )
+
+    @pytest.mark.anyio
+    async def test_move_items_reads_the_destination_depth_once_per_batch(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """The destination's depth is invariant, so it is read once.
+
+        Reading it per folder means one breadcrumb walk per moved folder
+        instead of one for the whole request.
+        """
+        mock_folder_repo.get_folder_for_update.return_value = Folder(
+            id=5,
+            workspace_id=1,
+            user_id=sample_user.id,
+            user_email="a@b.com",
+            name="Target",
+        )
+        mock_folder_repo.get_folders_by_ids.return_value = [
+            Folder(
+                id=i,
+                workspace_id=1,
+                user_id=sample_user.id,
+                user_email="a@b.com",
+                name=f"F{i}",
+            )
+            for i in (2, 3, 4)
+        ]
+        mock_folder_repo.get_descendant_ids.return_value = []
+        mock_folder_repo.get_folder_depth.return_value = 1
+        mock_folder_repo.get_subtree_depth.return_value = 1
+        mock_folder_repo.move_media_items.return_value = 0
+        mock_folder_repo.move_source_assets.return_value = 0
+        mock_folder_repo.move_folders.return_value = 3
+
+        dto = MoveItemsDto(
+            workspace_id=1,
+            folder_ids=[2, 3, 4],
+            destination_folder_id=5,
+        )
+
+        await folder_service.move_items(dto, sample_user)
+
+        # Once for the destination, regardless of how many folders move.
+        mock_folder_repo.get_folder_depth.assert_awaited_once_with(5)
+        # The subtree height genuinely differs per folder, so that one is
+        # still read per folder.
+        assert mock_folder_repo.get_subtree_depth.await_count == 3
 
     @pytest.mark.anyio
     async def test_move_items_to_root_success(

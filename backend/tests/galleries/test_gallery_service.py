@@ -1362,7 +1362,9 @@ async def test_bulk_copy_folder_success(service):
     }
 
     result = await service.bulk_copy(bulk_dto, current_user)
-    assert result["copied_count"] == 1
+    # 2 folders + 3 media + 1 asset: the count reflects everything the
+    # subtree copy created, not one per requested item.
+    assert result["copied_count"] == 6
     service.mock_workspace_auth.authorize.assert_any_call(
         workspace_id=88, user=current_user
     )
