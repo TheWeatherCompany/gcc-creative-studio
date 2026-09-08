@@ -148,11 +148,7 @@ describe('FlowPromptBoxComponent', () => {
       expect(component.hasDurationOptions()).toBeTrue();
     });
 
-<<<<<<< HEAD
     it('should return the full [4, 6, 8, 10] durations for Gemini Omni 1.1 Flash in Ingredients to Video mode at 1K', () => {
-=======
-    it('should support [4, 6, 8, 10] durations for Gemini Omni 1.1 Flash in Ingredients to Video mode', () => {
->>>>>>> upstream/main
       component.selectedGenerationModel = geminiOmni.viewValue;
       component.mode = 'Ingredients to Video';
       component.selectedResolution.set('1K');
@@ -176,18 +172,7 @@ describe('FlowPromptBoxComponent', () => {
       component.selectedResolution.set('2K');
 
       const durations = component.getSelectedModelDurations();
-      expect(durations).toEqual([4, 6, 8, 10]);
-    });
-
-    it('should identify omni models correctly with isOmniModel', () => {
-      component.selectedGenerationModel = 'Gemini Omni Flash';
-      expect(component.isOmniModel()).toBeTrue();
-
-      component.selectedGenerationModel = 'Gemini Omni 1.1 Flash';
-      expect(component.isOmniModel()).toBeTrue();
-
-      component.selectedGenerationModel = 'Veo 3.1';
-      expect(component.isOmniModel()).toBeFalse();
+      expect(durations).toEqual([10]);
     });
 
     it('should not wipe a valid 4s selection when switching modes at 1K', () => {

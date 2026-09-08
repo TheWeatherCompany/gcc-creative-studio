@@ -243,7 +243,6 @@ def test_concatenate_videos_general_exception(client, mock_veo_service):
     assert "Database is down" in response.json()["detail"]
 
 
-<<<<<<< HEAD
 def test_list_active_video_generations_for_non_admin_user(mock_user):
     """Exercises the real VeoService, not a mock of it.
 
@@ -293,8 +292,6 @@ def test_list_active_video_generations_for_non_admin_user(mock_user):
     assert kwargs["mime_type_prefix"] == "video/"
 
 
-=======
->>>>>>> upstream/main
 def test_generate_videos_veo_3_1_lite_preview_success(
     client, mock_veo_service, mock_workspace_auth
 ):
