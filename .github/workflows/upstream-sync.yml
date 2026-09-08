@@ -12,6 +12,11 @@ permissions:
   pull-requests: write
 
 env:
+  # Pin every gh command to the fork. The sync job adds an `upstream` remote,
+  # and gh scores remote names when it infers the target repo - `upstream`
+  # outranks `origin` - so without this, gh label/pr commands are aimed at
+  # GoogleCloudPlatform/gcc-creative-studio, where we have no write access.
+  GH_REPO: ${{ github.repository }}
   UPSTREAM_URL: https://github.com/GoogleCloudPlatform/gcc-creative-studio.git
   UPSTREAM_BRANCH: main
   LOCAL_BRANCH: main
