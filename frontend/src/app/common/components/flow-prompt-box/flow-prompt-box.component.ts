@@ -154,6 +154,10 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   @Output() openVideoUrlInputForReference = new EventEmitter<void>();
   @Output() clearExternalUrl = new EventEmitter<void>();
 
+  @Input() externalUrl: string | null = null;
+  @Output() openVideoUrlInputForReference = new EventEmitter<void>();
+  @Output() clearExternalUrl = new EventEmitter<void>();
+
   @Input() image1Preview: string | null = null;
   @Input() image2Preview: string | null = null;
   @Input() referenceImages: ReferenceImage[] = [];
@@ -314,12 +318,18 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
       oldMode !== '' && oldMode !== mode,
     );
 
+<<<<<<< HEAD
     // Only snap the duration if the current selection is no longer offered
     // (e.g. a resolution above 1K collapses to the longest duration). A valid
     // selection such as 4s must survive a mode change.
     const durations = this.getSelectedModelDurations();
     if (durations.length && !durations.includes(this.selectedDuration())) {
       const longest = durations.at(-1);
+=======
+    const supportedDurations = this.getSelectedModelDurations();
+    if (!supportedDurations.includes(this.selectedDuration())) {
+      const longest = supportedDurations.at(-1);
+>>>>>>> upstream/main
       if (longest) this.selectDuration(longest);
     }
   }
@@ -383,9 +393,20 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     );
   }
 
+<<<<<<< HEAD
   isOmniModel(model?: {value?: string}): boolean {
     const activeModel = model || this.getSelectedModelObject();
     return isOmniModelValue(activeModel?.value);
+=======
+  isOmniModel(model?: any): boolean {
+    const activeModel = model || this.getSelectedModelObject();
+    const val = activeModel?.value;
+    return (
+      val === 'gemini-omni-flash-preview' ||
+      val === 'gemini-omni-1.1-flash-preview' ||
+      val === 'gemini-omni'
+    );
+>>>>>>> upstream/main
   }
 
   getSelectedModelResolutions(model?: any): ('1K' | '2K' | '4K')[] {
@@ -399,8 +420,18 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
 
   getSelectedModelDurations(model?: any): number[] {
     const activeModel = model || this.getSelectedModelObject();
+<<<<<<< HEAD
     // resolutions above 1K support only longest duration
     if (this.selectedResolution() !== '1K') {
+=======
+    // Non-Omni models only support shorter durations in 'Text to Video' mode.
+    // Resolutions above 1K support only the longest duration.
+    const isOmni = this.isOmniModel(activeModel);
+    if (
+      (!isOmni && !this.isTextToVideo()) ||
+      this.selectedResolution() !== '1K'
+    ) {
+>>>>>>> upstream/main
       const longest = activeModel?.capabilities?.supportedDurations?.at(-1);
       return longest ? [longest] : [];
     }

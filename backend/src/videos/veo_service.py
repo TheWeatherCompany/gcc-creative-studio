@@ -438,7 +438,15 @@ def _process_video_in_background(
 
                         start_time = time.monotonic()
 
+<<<<<<< HEAD
                         if request_dto.generation_model.is_omni:
+=======
+                        if request_dto.generation_model in [
+                            GenerationModelEnum.GEMINI_OMNI,
+                            GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW,
+                            GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW,
+                        ]:
+>>>>>>> upstream/main
                             worker_logger.info(
                                 "Running Gemini Omni video generation via Interactions API..."
                             )
@@ -686,6 +694,7 @@ def _process_video_in_background(
                                 if request_dto.duration_seconds
                                 else "8s"
                             )
+<<<<<<< HEAD
                             # Use the SDK's typed VideoResponseFormatParam (added in
                             # google-genai 2.10.0) rather than an untyped dict. This gives
                             # us the Literal["16:9","9:16"] validation on aspect_ratio.
@@ -723,6 +732,19 @@ def _process_video_in_background(
                                     "720p",
                                 )
                             )
+=======
+                            omni_response_format: dict[str, str] = {
+                                "type": "video",
+                                "duration": duration_str,
+                            }
+                            if request_dto.aspect_ratio in (
+                                AspectRatioEnum.RATIO_9_16,
+                                AspectRatioEnum.RATIO_16_9,
+                            ):
+                                omni_response_format["aspect_ratio"] = (
+                                    request_dto.aspect_ratio.value
+                                )
+>>>>>>> upstream/main
 
                             num_outputs = 1
                             worker_logger.info(
@@ -1016,7 +1038,15 @@ def _process_video_in_background(
                                 operation.response.generated_videos or [],
                             )
 
+<<<<<<< HEAD
                         if not request_dto.generation_model.is_omni:
+=======
+                        if request_dto.generation_model not in [
+                            GenerationModelEnum.GEMINI_OMNI,
+                            GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW,
+                            GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW,
+                        ]:
+>>>>>>> upstream/main
                             valid_generated_videos = [
                                 img
                                 for img in all_generated_videos

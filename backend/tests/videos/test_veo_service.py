@@ -1479,7 +1479,10 @@ class TestBackgroundWorkers:
                 "type": "video",
                 "duration": "5s",
                 "aspect_ratio": "16:9",
+<<<<<<< HEAD
                 "resolution": "720p",
+=======
+>>>>>>> upstream/main
             }
 
     @patch("src.database.WorkerDatabase")
@@ -1586,7 +1589,10 @@ class TestBackgroundWorkers:
                 "type": "video",
                 "duration": "8s",
                 "aspect_ratio": "16:9",
+<<<<<<< HEAD
                 "resolution": "720p",
+=======
+>>>>>>> upstream/main
             }
 
     @patch("src.database.WorkerDatabase")
@@ -1759,7 +1765,10 @@ class TestBackgroundWorkers:
                 "type": "video",
                 "duration": "4s",
                 "aspect_ratio": "9:16",
+<<<<<<< HEAD
                 "resolution": "720p",
+=======
+>>>>>>> upstream/main
             }
             update_dict = mock_media_repo.update.call_args[0][1]
             assert update_dict["status"] == JobStatusEnum.COMPLETED
