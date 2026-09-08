@@ -77,6 +77,14 @@ export class GalleryCardComponent implements OnDestroy {
   hoveredVideoId: number | null = null;
   hoveredAudioId: number | null = null;
 
+  /**
+   * Delay before a hovered video starts loading/playing. Sweeping the pointer
+   * across the grid should not spin up a full video load per card, so we only
+   * commit once the pointer has lingered past this threshold.
+   */
+  private static readonly HOVER_INTENT_MS = 150;
+  private hoverIntentTimer: ReturnType<typeof setTimeout> | null = null;
+
   get displayUrls(): string[] {
     if (
       this.item.presignedThumbnailUrls &&
@@ -85,6 +93,30 @@ export class GalleryCardComponent implements OnDestroy {
       return this.item.presignedThumbnailUrls;
     }
     return this.item.presignedUrls || [];
+  }
+
+  /** True when the item carries at least one usable thumbnail image. */
+  get hasThumbnail(): boolean {
+    return !!this.item.presignedThumbnailUrls?.length;
+  }
+
+  /**
+   * URL of the single video clip to play while hovering, bounded to the
+   * current carousel index so only the active clip ever loads or plays.
+   */
+  get activeVideoUrl(): string | null {
+    const urls = this.item.presignedUrls;
+    if (!urls || urls.length === 0) {
+      return null;
+    }
+    // The carousel index is bounded by displayUrls (thumbnails), which may
+    // differ in length from the clips, so clamp to the nearest valid clip
+    // rather than snapping back to the first one.
+    const index = Math.min(
+      Math.max(this.currentImageIndex, 0),
+      urls.length - 1,
+    );
+    return urls[index];
   }
 
   get displayPaddingBottom(): string {
@@ -183,20 +215,55 @@ export class GalleryCardComponent implements OnDestroy {
     });
   }
 
-  ngOnDestroy() {}
+  ngOnDestroy() {
+    this.clearHoverIntent();
+  }
+
+  private clearHoverIntent(): void {
+    if (this.hoverIntentTimer !== null) {
+      clearTimeout(this.hoverIntentTimer);
+      this.hoverIntentTimer = null;
+    }
+  }
 
   onMouseEnter() {
-    if (this.item.mimeType?.startsWith('video/')) {
-      this.hoveredVideoId = this.item.id;
-    }
+    // Audio only animates an icon, so there is no load to defer.
     if (this.item.mimeType?.startsWith('audio/')) {
       this.hoveredAudioId = this.item.id;
+    }
+    if (this.item.mimeType?.startsWith('video/')) {
+      // Nothing to preview if the item carries no playable clips.
+      if (!this.item.presignedUrls?.length) {
+        return;
+      }
+      // Defer playback until the pointer lingers past the intent threshold.
+      this.clearHoverIntent();
+      if (!isPlatformBrowser(this.platformId)) {
+        return;
+      }
+      this.hoverIntentTimer = setTimeout(() => {
+        this.hoveredVideoId = this.item.id;
+        this.hoverIntentTimer = null;
+      }, GalleryCardComponent.HOVER_INTENT_MS);
     }
   }
 
   onMouseLeave() {
+    this.clearHoverIntent();
     this.hoveredVideoId = null;
     this.hoveredAudioId = null;
+  }
+
+  /**
+   * Defensive playback trigger for browsers (Safari/iOS) where declarative
+   * autoplay is not always honored after a programmatic src swap. Compiles to
+   * addEventListener, so it stays CSP-safe unlike an inline on* attribute.
+   */
+  onVideoCanPlay(event: Event): void {
+    const video = event.target as HTMLVideoElement | null;
+    void video?.play().catch(() => {
+      // Autoplay may be blocked (e.g. Low Power Mode); the first frame remains.
+    });
   }
 
   nextImageItem(event: Event) {
