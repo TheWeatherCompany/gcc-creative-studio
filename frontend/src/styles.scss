@@ -448,10 +448,10 @@ app-workspace-switcher .workspace-name {
   html {
     min-height: 100vh;
     height: auto;
-    background: radial-gradient(ellipse 100% 100% at 50% 0%, #4D4D4D 0%, #161616 100%) !important;
-    background-attachment: fixed;
-    background-repeat: no-repeat;
-    background-size: cover;
+    // The .gradient-bg blob is the page background at this breakpoint, and its
+    // own base wash is transparent here (see --color-bg1/2 below), so this flat
+    // colour is what shows through it. A gradient here would compete with it.
+    background: #2e3031 !important;
   }
   body { 
     background: transparent !important;
