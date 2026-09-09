@@ -45,6 +45,7 @@ import {AdminDashboardService} from '../../services/admin/admin-dashboard.servic
   selector: 'app-media-gallery-management',
   templateUrl: './media-gallery-management.component.html',
   styleUrls: ['./media-gallery-management.component.scss'],
+  standalone: false,
 })
 export class MediaGalleryManagementComponent implements OnInit {
   private platformId = inject(PLATFORM_ID);

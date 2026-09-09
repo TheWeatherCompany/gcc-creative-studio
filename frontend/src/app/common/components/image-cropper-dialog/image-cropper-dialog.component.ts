@@ -83,6 +83,7 @@ interface TextInputCanvas {
   selector: 'app-image-cropper-dialog',
   templateUrl: './image-cropper-dialog.component.html',
   styleUrls: ['./image-cropper-dialog.component.scss'],
+  standalone: false,
 })
 export class ImageCropperDialogComponent implements AfterViewInit, OnDestroy {
   @ViewChild('drawingCanvas') drawingCanvas!: ElementRef<HTMLCanvasElement>;

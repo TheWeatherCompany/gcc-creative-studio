@@ -48,6 +48,7 @@ import * as d3 from 'd3';
   selector: 'app-admin-home',
   templateUrl: './admin-home.component.html',
   styleUrls: ['./admin-home.component.scss'],
+  standalone: false,
 })
 export class AdminHomeComponent implements OnInit, AfterViewInit, OnDestroy {
   isSuperAdmin$: Observable<boolean>;

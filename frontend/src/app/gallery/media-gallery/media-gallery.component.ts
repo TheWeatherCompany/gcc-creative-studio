@@ -78,6 +78,7 @@ import {ConfirmationDialogComponent} from '../../common/components/confirmation-
       ]),
     ]),
   ],
+  standalone: false,
 })
 export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
   @Output() mediaItemSelected = new EventEmitter<MediaItemSelection>();

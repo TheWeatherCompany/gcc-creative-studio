@@ -30,6 +30,7 @@ interface StepTypeOption {
   selector: 'app-add-step-modal',
   templateUrl: './add-step-modal.component.html',
   styleUrls: ['./add-step-modal.component.scss'],
+  standalone: false,
 })
 export class AddStepModalComponent {
   // This list drives the UI. Add/remove items here to change the palette.

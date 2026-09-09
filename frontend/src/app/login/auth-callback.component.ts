@@ -37,6 +37,7 @@ const LOGIN_ROUTE = '/login';
       <p class="text-white">{{ statusMessage }}</p>
     </div>
   `,
+  standalone: false,
 })
 export class AuthCallbackComponent implements OnInit {
   statusMessage = 'Signing you in...';

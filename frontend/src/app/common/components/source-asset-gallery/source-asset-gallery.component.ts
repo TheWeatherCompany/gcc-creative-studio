@@ -49,6 +49,7 @@ import {ConfirmationDialogComponent} from '../confirmation-dialog/confirmation-d
   selector: 'app-source-asset-gallery',
   templateUrl: './source-asset-gallery.component.html',
   styleUrls: ['./source-asset-gallery.component.scss'],
+  standalone: false,
 })
 export class SourceAssetGalleryComponent
   implements OnInit, OnDestroy, AfterViewInit

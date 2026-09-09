@@ -29,6 +29,7 @@ import {
   selector: 'studio-search-filter',
   templateUrl: './studio-search-filter.component.html',
   styleUrls: ['./studio-search-filter.component.scss'],
+  standalone: false,
 })
 export class StudioSearchFilterComponent {
   @Input() value = '';

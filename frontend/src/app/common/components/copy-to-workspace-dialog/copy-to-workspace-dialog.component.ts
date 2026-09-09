@@ -28,6 +28,7 @@ export interface CopyToWorkspaceDialogData {
   selector: 'app-copy-to-workspace-dialog',
   templateUrl: './copy-to-workspace-dialog.component.html',
   styleUrls: ['./copy-to-workspace-dialog.component.scss'],
+  standalone: false,
 })
 export class CopyToWorkspaceDialogComponent implements OnInit {
   workspaces: Workspace[] = [];

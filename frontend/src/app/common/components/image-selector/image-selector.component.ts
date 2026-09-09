@@ -40,6 +40,7 @@ export interface MediaItemSelection {
   selector: 'app-image-selector',
   templateUrl: './image-selector.component.html',
   styleUrls: ['./image-selector.component.scss'],
+  standalone: false,
 })
 export class ImageSelectorComponent implements OnInit {
   isUploading = false;

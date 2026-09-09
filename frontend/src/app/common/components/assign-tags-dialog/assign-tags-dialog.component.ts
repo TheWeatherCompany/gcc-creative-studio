@@ -24,6 +24,7 @@ import {UserService} from '../../../common/services/user.service';
   selector: 'app-assign-tags-dialog',
   templateUrl: './assign-tags-dialog.component.html',
   styleUrls: ['./assign-tags-dialog.component.scss'],
+  standalone: false,
 })
 export class AssignTagsDialogComponent implements OnInit {
   availableTags: TagModel[] = [];

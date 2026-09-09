@@ -20,6 +20,7 @@ import {Component, Input} from '@angular/core';
   selector: 'studio-button',
   templateUrl: './studio-button.component.html',
   styleUrls: ['./studio-button.component.scss'],
+  standalone: false,
 })
 export class StudioButtonComponent {
   @Input() variant: 'primary' | 'cta' = 'primary';

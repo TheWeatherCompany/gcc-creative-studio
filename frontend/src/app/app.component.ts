@@ -49,6 +49,7 @@ import {LoadingService} from './common/services/loading.service';
       ]),
     ]),
   ],
+  standalone: false,
 })
 export class AppComponent {
   title = 'creative-studio';

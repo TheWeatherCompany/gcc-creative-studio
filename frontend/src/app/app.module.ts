@@ -30,7 +30,7 @@ import {MatSelectModule} from '@angular/material/select';
 import {MatTabsModule} from '@angular/material/tabs';
 import {MatToolbarModule} from '@angular/material/toolbar';
 import {MatTooltipModule} from '@angular/material/tooltip';
-import {BrowserModule, provideClientHydration} from '@angular/platform-browser';
+import {BrowserModule} from '@angular/platform-browser';
 import {environment} from '../environments/environment';
 import {setAppInjector} from './app-injector';
 import {NotificationContainerComponent} from './common/components/notification-container/notification-container.component';
@@ -186,7 +186,6 @@ import {UpscaleComponent} from './upscale/upscale.component';
     WorkflowStatusPipe,
   ],
   providers: [
-    provideClientHydration(),
     provideHttpClient(withInterceptorsFromDi()),
     provideFirebaseApp(() => initializeApp(environment.firebase)),
     provideFirestore(() => getFirestore()),

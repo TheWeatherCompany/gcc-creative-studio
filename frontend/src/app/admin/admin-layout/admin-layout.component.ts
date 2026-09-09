@@ -20,5 +20,6 @@ import {Component} from '@angular/core';
   selector: 'app-admin-layout',
   templateUrl: './admin-layout.component.html',
   styleUrl: './admin-layout.component.scss',
+  standalone: false,
 })
 export class AdminLayoutComponent {}

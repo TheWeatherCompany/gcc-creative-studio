@@ -26,6 +26,7 @@ export interface InviteUserData {
 @Component({
   selector: 'app-invite-user-modal',
   templateUrl: './invite-user-modal.component.html',
+  standalone: false,
 })
 export class InviteUserModalComponent {
   inviteForm: FormGroup;

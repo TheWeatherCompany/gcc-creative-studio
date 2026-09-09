@@ -84,6 +84,7 @@ interface Model {
   selector: 'app-vto',
   templateUrl: './vto.component.html',
   styleUrls: ['./vto.component.scss'],
+  standalone: false,
 })
 export class VtoComponent implements OnInit, AfterViewInit {
   firstFormGroup: FormGroup;

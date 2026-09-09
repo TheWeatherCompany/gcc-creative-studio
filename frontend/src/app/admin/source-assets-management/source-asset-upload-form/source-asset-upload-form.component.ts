@@ -27,6 +27,7 @@ import {handleErrorSnackbar} from '../../../utils/handleMessageSnackbar';
   selector: 'app-source-asset-upload-form',
   templateUrl: './source-asset-upload-form.component.html',
   styleUrls: ['./source-asset-upload-form.component.scss'],
+  standalone: false,
 })
 export class SourceAssetUploadFormComponent {
   form: FormGroup;

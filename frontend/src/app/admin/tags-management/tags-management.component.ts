@@ -25,6 +25,7 @@ import {MatPaginator, PageEvent} from '@angular/material/paginator';
   selector: 'app-tags-management',
   templateUrl: './tags-management.component.html',
   styleUrls: ['./tags-management.component.scss'],
+  standalone: false,
 })
 export class TagsManagementComponent implements OnInit {
   dataSource = new MatTableDataSource<TagModel>();

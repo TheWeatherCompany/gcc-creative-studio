@@ -37,6 +37,7 @@ import {WorkflowStep} from '../../workflow.models';
   selector: 'app-run-workflow-modal',
   templateUrl: './run-workflow-modal.component.html',
   styleUrls: ['./run-workflow-modal.component.scss'],
+  standalone: false,
 })
 export class RunWorkflowModalComponent implements OnInit {
   runForm!: FormGroup;

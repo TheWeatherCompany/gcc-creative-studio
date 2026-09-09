@@ -35,6 +35,7 @@ import {AuthService} from '../../common/services/auth.service';
   selector: 'app-execution-history',
   templateUrl: './execution-history.component.html',
   styleUrls: ['./execution-history.component.scss'],
+  standalone: false,
 })
 export class ExecutionHistoryComponent implements OnInit, OnDestroy {
   workflowId: string | null = null;

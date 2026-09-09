@@ -21,6 +21,7 @@ import {MatDialogRef} from '@angular/material/dialog';
   selector: 'app-add-voice-dialog',
   templateUrl: './add-voice-dialog.component.html',
   styleUrls: ['./add-voice-dialog.component.scss'],
+  standalone: false,
 })
 export class AddVoiceDialogComponent {
   voiceName = '';

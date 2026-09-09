@@ -47,6 +47,7 @@ import {GalleryService} from '../../../gallery/gallery.service';
   selector: 'app-media-lightbox',
   templateUrl: './media-lightbox.component.html',
   styleUrls: ['./media-lightbox.component.scss'],
+  standalone: false,
 })
 export class MediaLightboxComponent
   implements OnChanges, AfterViewInit, OnDestroy

@@ -26,6 +26,7 @@ import {WorkflowService} from '../../workflow.service';
   selector: 'app-batch-execution-modal',
   templateUrl: './batch-execution-modal.component.html',
   styleUrls: ['./batch-execution-modal.component.scss'],
+  standalone: false,
 })
 export class BatchExecutionModalComponent {
   workflow: WorkflowModel;

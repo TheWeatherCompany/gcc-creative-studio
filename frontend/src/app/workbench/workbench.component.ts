@@ -69,6 +69,7 @@ interface TimelineClip {
   selector: 'app-workbench',
   templateUrl: './workbench.component.html',
   styleUrls: ['./workbench.component.scss'],
+  standalone: false,
 })
 export class WorkbenchComponent implements OnInit, OnDestroy {
   // Signals for State

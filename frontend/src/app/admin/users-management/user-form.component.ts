@@ -31,6 +31,7 @@ import {UserModel, UserRolesEnum} from '../../common/models/user.model';
   selector: 'app-user-form',
   templateUrl: './user-form.component.html',
   styleUrls: ['./user-form.component.scss'],
+  standalone: false,
 })
 export class UserFormComponent {
   userForm: FormGroup;

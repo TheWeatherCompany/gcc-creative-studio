@@ -20,5 +20,6 @@ import {Component} from '@angular/core';
   selector: 'studio-toolbar',
   template: '<div class="glass-toolbar"><ng-content></ng-content></div>',
   styleUrls: ['./studio-toolbar.component.scss'],
+  standalone: false,
 })
 export class StudioToolbarComponent {}

@@ -42,6 +42,7 @@ import {WorkspaceStateService} from '../../services/workspace/workspace-state.se
   selector: 'app-media-detail',
   templateUrl: './media-detail.component.html',
   styleUrls: ['./media-detail.component.scss'],
+  standalone: false,
 })
 export class MediaDetailComponent implements OnDestroy {
   private routeSub?: Subscription;

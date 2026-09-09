@@ -49,6 +49,7 @@ import {isPlatformBrowser} from '@angular/common';
       ]),
     ]),
   ],
+  standalone: false,
 })
 export class HeaderComponent implements OnDestroy {
   currentUser: UserModel | null;

@@ -32,6 +32,7 @@ import {MediaTemplate} from '../../fun-templates/media-template.model';
   selector: 'app-media-templates-management',
   templateUrl: './media-templates-management.component.html',
   styleUrls: ['./media-templates-management.component.scss'],
+  standalone: false,
 })
 export class MediaTemplatesManagementComponent
   implements OnInit, AfterViewInit
