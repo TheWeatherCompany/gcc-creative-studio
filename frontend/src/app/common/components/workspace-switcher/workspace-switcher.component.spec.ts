@@ -141,6 +141,13 @@ describe('WorkspaceSwitcherComponent session readiness gate', () => {
     localStorage.removeItem('activeWorkspaceId');
   });
 
+  // A successful load writes the chosen workspace back to localStorage, and
+  // Karma shares one browser context across every spec file. Clean up after
+  // the fact too, so nothing downstream inherits this spec's preference.
+  afterEach(() => {
+    localStorage.removeItem('activeWorkspaceId');
+  });
+
   it('does not fetch workspaces before the session is ready', () => {
     fixture.detectChanges(); // runs ngOnInit
 

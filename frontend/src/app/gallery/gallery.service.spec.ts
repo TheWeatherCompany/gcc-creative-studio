@@ -135,7 +135,12 @@ describe('GalleryService list mapping favorite state', () => {
 
   const searchUrl = `${environment.backendURL}/gallery/search`;
 
-  /** Minimal list row: only the fields the mapper needs to produce an item. */
+  /**
+   * Minimal list row: only the fields the mapper needs to produce an item.
+   * `metadata` is deliberately omitted, so every metadata-derived field maps
+   * to undefined here. That is fine for the favorite assertions below; anyone
+   * extending this block to cover other mapped fields needs to add it.
+   */
   const listRow = (overrides: Record<string, unknown>) => ({
     id: 11,
     workspaceId: 1,
