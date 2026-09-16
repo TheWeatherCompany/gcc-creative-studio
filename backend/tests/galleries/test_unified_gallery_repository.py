@@ -154,6 +154,219 @@ async def test_query_free_text_matches_tag_substring(mock_db):
 
 
 @pytest.mark.anyio
+async def test_query_threads_current_user_id_into_favorites_subquery(mock_db):
+    """`favorites_only` compiles to a correlated EXISTS against
+    media_item_favorites that is scoped to the requesting user.
+
+    Honest about the limit: this asserts the `current_user_id` parameter is
+    threaded into the statement the repository builds, not that the SQL is
+    semantically correct (nothing here touches a real engine). That is
+    deliberate. The regression being guarded is the parameter disappearing from
+    `query()` entirely, which would widen the favorites filter to every user's
+    favorites while still returning rows and still passing every other test.
+    """
+    repo = UnifiedGalleryRepository(db=mock_db)
+
+    mock_count_result = MagicMock()
+    mock_count_result.scalar_one.return_value = 1
+
+    mock_data_result = MagicMock()
+    favorited_item = MockItem(
+        id=42,
+        workspace_id=10,
+        user_id=1,
+        created_at=datetime.datetime.now(),
+        item_type="media_item",
+        status="completed",
+        gcs_uris=["gs://b/42"],
+        thumbnail_uris=[],
+        deleted_at=None,
+        metadata_={"mime_type": "image/png"},
+    )
+    mock_data_result.scalars.return_value.all.return_value = [favorited_item]
+
+    # Third execute: the per-user favorite-state lookup for the rows on this
+    # page, which also has to carry the requesting user's id.
+    mock_favorite_result = MagicMock()
+    mock_favorite_result.scalars.return_value.all.return_value = [42]
+
+    mock_db.execute.side_effect = [
+        mock_count_result,
+        mock_data_result,
+        mock_favorite_result,
+    ]
+
+    search_dto = GallerySearchDto(
+        workspace_id=10,
+        limit=10,
+        offset=0,
+    )
+    search_dto.favorites_only = True
+
+    res = await repo.query(search_dto, current_user_id=99)
+
+    data_stmt = mock_db.execute.call_args_list[1].args[0]
+    compiled_data = str(
+        data_stmt.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    ).lower()
+
+    # The correlation itself: an EXISTS over the favorites join table tied to
+    # the gallery row, scoped to the caller, and guarded to media items so a
+    # source_asset sharing an id cannot match.
+    assert "exists" in compiled_data
+    assert "media_item_favorites" in compiled_data
+    assert "media_item_favorites.user_id = 99" in compiled_data
+    assert "media_item_favorites.media_item_id = unified_gallery_view.id" in (
+        compiled_data
+    )
+    assert "unified_gallery_view.item_type = 'media_item'" in compiled_data
+
+    # And the per-row `is_favorite` hydration is scoped to the same user.
+    favorite_stmt = mock_db.execute.call_args_list[2].args[0]
+    compiled_favorites = str(
+        favorite_stmt.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    ).lower()
+    assert "media_item_favorites.user_id = 99" in compiled_favorites
+
+    assert mock_db.execute.call_count == 3
+    assert [item.id for item in res.data] == [42]
+    assert res.data[0].is_favorite is True
+
+
+@pytest.mark.anyio
+async def test_query_hydrates_is_favorite_on_an_unfiltered_page(mock_db):
+    """The per-row `is_favorite` hydration is gated on `current_user_id` alone,
+    not on `favorites_only`.
+
+    This is the ordinary gallery-browsing path and the backend half of the
+    frontend list-mapping regression: hearts have to render correctly on a
+    normal page, not only inside a favorites-filtered view. A port that folds
+    the hydration branch into the `favorites_only` branch would still pass the
+    filtered test above, so this case exists to catch that.
+    """
+    repo = UnifiedGalleryRepository(db=mock_db)
+
+    mock_count_result = MagicMock()
+    mock_count_result.scalar_one.return_value = 3
+
+    def row(item_id, item_type="media_item"):
+        return MockItem(
+            id=item_id,
+            workspace_id=10,
+            user_id=1,
+            created_at=datetime.datetime.now(),
+            item_type=item_type,
+            status="completed",
+            gcs_uris=[f"gs://b/{item_id}"],
+            thumbnail_uris=[],
+            deleted_at=None,
+            metadata_={"mime_type": "image/png"},
+        )
+
+    mock_data_result = MagicMock()
+    mock_data_result.scalars.return_value.all.return_value = [
+        row(1),
+        row(2),
+        # Same id as the favorited media item, different type: a source asset
+        # is never favorited and must not inherit the flag.
+        row(1, item_type="source_asset"),
+    ]
+
+    mock_favorite_result = MagicMock()
+    mock_favorite_result.scalars.return_value.all.return_value = [1]
+
+    mock_db.execute.side_effect = [
+        mock_count_result,
+        mock_data_result,
+        mock_favorite_result,
+    ]
+
+    # favorites_only left at its default False: this is plain browsing.
+    search_dto = GallerySearchDto(workspace_id=10, limit=10, offset=0)
+
+    res = await repo.query(search_dto, current_user_id=99)
+
+    data_stmt = mock_db.execute.call_args_list[1].args[0]
+    compiled_data = str(
+        data_stmt.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    ).lower()
+    # Not a favorites-filtered page, so no EXISTS narrowing the result set...
+    assert "media_item_favorites" not in compiled_data
+
+    # ...but the hydration round trip still happens, still scoped to the caller.
+    assert mock_db.execute.call_count == 3
+    favorite_stmt = mock_db.execute.call_args_list[2].args[0]
+    compiled_favorites = str(
+        favorite_stmt.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    ).lower()
+    assert "media_item_favorites.user_id = 99" in compiled_favorites
+
+    assert [item.is_favorite for item in res.data] == [True, False, False]
+
+
+@pytest.mark.anyio
+async def test_query_without_current_user_id_skips_favorite_lookup(mock_db):
+    """No requesting user means no favorites work at all.
+
+    Two things are proved here, and both are intentional behaviour rather than
+    bugs: the `favorites_only` filter is skipped outright (the page comes back
+    unfiltered, because there is no user to scope it to), and the hydration
+    round trip does not happen, so `is_favorite` stays false rather than
+    leaking some other user's state.
+    """
+    repo = UnifiedGalleryRepository(db=mock_db)
+
+    mock_count_result = MagicMock()
+    mock_count_result.scalar_one.return_value = 1
+
+    mock_data_result = MagicMock()
+    mock_data_result.scalars.return_value.all.return_value = [
+        MockItem(
+            id=42,
+            workspace_id=10,
+            user_id=1,
+            created_at=datetime.datetime.now(),
+            item_type="media_item",
+            status="completed",
+            gcs_uris=["gs://b/42"],
+            thumbnail_uris=[],
+            deleted_at=None,
+            metadata_={"mime_type": "image/png"},
+        )
+    ]
+    mock_db.execute.side_effect = [mock_count_result, mock_data_result]
+
+    search_dto = GallerySearchDto(workspace_id=10, limit=10, offset=0)
+    search_dto.favorites_only = True
+
+    res = await repo.query(search_dto)
+
+    data_stmt = mock_db.execute.call_args_list[1].args[0]
+    compiled_data = str(
+        data_stmt.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    ).lower()
+    assert "media_item_favorites" not in compiled_data
+
+    assert mock_db.execute.call_count == 2
+    assert res.data[0].is_favorite is False
+
+
+@pytest.mark.anyio
 async def test_query_mime_type_wildcard(mock_db):
     repo = UnifiedGalleryRepository(db=mock_db)
 
