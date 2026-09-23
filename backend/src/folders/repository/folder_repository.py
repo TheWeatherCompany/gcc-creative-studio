@@ -1729,3 +1729,23 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         if commit:
             await self.db.commit()
         return res
+
+    async def get_folder_for_update(self, folder_id: int) -> Folder | None:
+        """Fetch a single active folder, holding a row lock until commit.
+
+        Callers validate the locked row, so a concurrent move or delete of it
+        queues behind their write instead of landing between check and write.
+        """
+        # populate_existing so the locked read reflects the committed row, not
+        # a stale copy the identity map is already holding.
+        query = (
+            select(self.model)
+            .where(
+                self.model.id == folder_id,
+                self.model.deleted_at.is_(None),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        result = await self.db.execute(query)
+        return result.scalars().first()

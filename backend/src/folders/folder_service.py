@@ -123,7 +123,8 @@ class FolderService:
             )
 
         if dto.parent_id is not None:
-            parent = await self.folder_repo.get_folder_by_id(dto.parent_id)
+            # Locked read: see move_items.
+            parent = await self.folder_repo.get_folder_for_update(dto.parent_id)
             if not parent or parent.workspace_id != dto.workspace_id:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -296,7 +297,10 @@ class FolderService:
                 )
 
             if new_parent_id is not None:
-                parent = await self.folder_repo.get_folder_by_id(new_parent_id)
+                # Locked read: see move_items.
+                parent = await self.folder_repo.get_folder_for_update(
+                    new_parent_id
+                )
                 if not parent or parent.workspace_id != folder.workspace_id:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
@@ -414,7 +418,11 @@ class FolderService:
         dest_folder_id = dto.destination_folder_id
         dest_depth = 0
         if dest_folder_id is not None:
-            dest_folder = await self.folder_repo.get_folder_by_id(
+            # Validate the destination from a row locked until the commit
+            # below. After an unlocked read, a concurrent move or delete of
+            # the destination could land between these checks and the write,
+            # leaving items in a deleted folder or in another workspace.
+            dest_folder = await self.folder_repo.get_folder_for_update(
                 dest_folder_id
             )
             if not dest_folder or dest_folder.workspace_id != dto.workspace_id:
@@ -553,7 +561,9 @@ class FolderService:
         dest_folder_id = dto.destination_folder_id
         dest_depth = 0
         if dest_folder_id is not None:
-            dest_folder = await self.folder_repo.get_folder_by_id(
+            # Locked read: see move_items. The lock holds until
+            # folder_repo.copy_items commits on this same session.
+            dest_folder = await self.folder_repo.get_folder_for_update(
                 dest_folder_id
             )
             if not dest_folder or dest_folder.workspace_id != dto.workspace_id:

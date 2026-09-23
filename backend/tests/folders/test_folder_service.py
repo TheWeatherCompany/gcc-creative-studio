@@ -106,6 +106,14 @@ def fixture_mock_folder_repo():
     mock.get_existing_folders_map.return_value = {}
     mock.get_folder_counts.return_value = (0, 0)
     mock.get_descendant_ids_batch.return_value = []
+
+    # A locked read returns whatever the plain read is configured to, so
+    # tests that set get_folder_by_id keep working. Lock-specific tests
+    # override this to tell the two reads apart.
+    async def locked_read(folder_id):
+        return await mock.get_folder_by_id(folder_id)
+
+    mock.get_folder_for_update.side_effect = locked_read
     return mock
 
 
@@ -1678,4 +1686,156 @@ class TestIntegrityErrorClassification:
             await folder_service.move_items(dto, sample_user)
         assert exc_info.value is error
         mock_folder_repo.db.rollback.assert_called_once()
+        mock_folder_repo.db.commit.assert_not_called()
+
+
+def locked_calls_before_first_write(mock_folder_repo, write_name):
+    """Returns the repo calls made between the lock and the first write."""
+    names = [c[0] for c in mock_folder_repo.mock_calls]
+    lock = names.index("get_folder_for_update")
+    write = names.index(write_name)
+    assert lock < write
+    return names[lock:write]
+
+
+class TestDestinationRowLock:
+    """Destinations are validated from a row locked until the write commits.
+
+    Each test hands the plain read a valid folder and the locked read a
+    different answer, so it only passes if validation used the locked row.
+    """
+
+    @staticmethod
+    def lock_returns(mock_folder_repo, folder):
+        mock_folder_repo.get_folder_by_id.return_value = Folder(
+            id=5, workspace_id=1, user_email="a@b.com", name="Stale"
+        )
+        mock_folder_repo.get_folder_for_update.side_effect = None
+        mock_folder_repo.get_folder_for_update.return_value = folder
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "locked",
+        [
+            None,  # soft-deleted after the plain read
+            Folder(id=5, workspace_id=2, user_email="a@b.com", name="Moved"),
+        ],
+    )
+    async def test_move_items_validates_the_locked_destination(
+        self, folder_service, mock_folder_repo, sample_user, locked
+    ):
+        self.lock_returns(mock_folder_repo, locked)
+        dto = MoveItemsDto(
+            workspace_id=1, media_item_ids=[1], destination_folder_id=5
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.move_items(dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_404_NOT_FOUND
+        mock_folder_repo.get_folder_for_update.assert_awaited_once_with(5)
+        mock_folder_repo.move_media_items.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_move_items_holds_the_lock_into_the_write_transaction(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        self.lock_returns(
+            mock_folder_repo,
+            Folder(id=5, workspace_id=1, user_email="a@b.com", name="D"),
+        )
+        mock_folder_repo.move_media_items.return_value = 1
+        mock_folder_repo.move_source_assets.return_value = 0
+        mock_folder_repo.move_folders.return_value = 0
+        dto = MoveItemsDto(
+            workspace_id=1, media_item_ids=[1], destination_folder_id=5
+        )
+
+        await folder_service.move_items(dto, sample_user)
+
+        between = locked_calls_before_first_write(
+            mock_folder_repo, "move_media_items"
+        )
+        # A commit or rollback here would release the lock before the write.
+        assert "db.commit" not in between
+        assert "db.rollback" not in between
+        mock_folder_repo.get_folder_by_id.assert_not_called()
+        mock_folder_repo.db.commit.assert_awaited_once()
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "locked",
+        [
+            None,
+            Folder(id=5, workspace_id=2, user_email="a@b.com", name="Moved"),
+        ],
+    )
+    async def test_copy_items_validates_the_locked_destination(
+        self, folder_service, mock_folder_repo, sample_user, locked
+    ):
+        self.lock_returns(mock_folder_repo, locked)
+        dto = CopyItemsDto(
+            workspace_id=1, media_item_ids=[1], destination_folder_id=5
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.copy_items(dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_404_NOT_FOUND
+        mock_folder_repo.get_folder_for_update.assert_awaited_once_with(5)
+        mock_folder_repo.copy_items.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_copy_items_holds_the_lock_into_the_write_transaction(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        self.lock_returns(
+            mock_folder_repo,
+            Folder(id=5, workspace_id=1, user_email="a@b.com", name="D"),
+        )
+        dto = CopyItemsDto(
+            workspace_id=1, media_item_ids=[1], destination_folder_id=5
+        )
+
+        await folder_service.copy_items(dto, sample_user)
+
+        between = locked_calls_before_first_write(
+            mock_folder_repo, "copy_items"
+        )
+        assert "db.commit" not in between
+        assert "db.rollback" not in between
+        mock_folder_repo.get_folder_by_id.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_create_folder_validates_the_locked_parent(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        self.lock_returns(
+            mock_folder_repo,
+            Folder(id=5, workspace_id=2, user_email="a@b.com", name="Moved"),
+        )
+        dto = FolderCreateDto(name="Child", workspace_id=1, parent_id=5)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.create_folder(dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_404_NOT_FOUND
+        mock_folder_repo.get_folder_for_update.assert_awaited_once_with(5)
+        mock_folder_repo.db.commit.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_update_folder_validates_the_locked_new_parent(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        self.lock_returns(
+            mock_folder_repo,
+            Folder(id=5, workspace_id=2, user_email="a@b.com", name="Moved"),
+        )
+        folder = Folder(
+            id=1, workspace_id=1, user_email="a@b.com", name="F", parent_id=None
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.update_folder(
+                1, FolderUpdateDto(parent_id=5), sample_user, folder=folder
+            )
+        assert exc_info.value.status_code == status.HTTP_404_NOT_FOUND
+        mock_folder_repo.get_folder_for_update.assert_awaited_once_with(5)
         mock_folder_repo.db.commit.assert_not_called()
