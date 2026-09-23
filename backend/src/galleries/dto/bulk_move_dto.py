@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ from pydantic.alias_generators import to_camel
 from src.folders.dto.folder_dto import ConflictStrategyEnum
 
 
-class BulkCopyItemDto(BaseModel):
+class BulkMoveItemDto(BaseModel):
     id: int
     type: str
 
@@ -29,8 +29,8 @@ class BulkCopyItemDto(BaseModel):
     )
 
 
-class BulkCopyDto(BaseModel):
-    items: list[BulkCopyItemDto]
+class BulkMoveDto(BaseModel):
+    items: list[BulkMoveItemDto]
     target_workspace_id: int
     conflict_strategy: ConflictStrategyEnum | None = None
 
