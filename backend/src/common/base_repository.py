@@ -96,8 +96,14 @@ class BaseRepositoryMixin(Generic[ModelT, SchemaT, IdT]):
             return None
         return self.schema.model_validate(item)
 
-    async def create(self, schema: BaseModel | dict[str, Any]) -> SchemaT:
-        """Creates a new record in the database."""
+    async def create(
+        self, schema: BaseModel | dict[str, Any], *, commit: bool = True
+    ) -> SchemaT:
+        """Creates a new record in the database.
+
+        commit=False flushes instead, so a caller inside a savepoint keeps
+        the write in its own transaction.
+        """
         # Convert Pydantic schema to SQLAlchemy model
         if isinstance(schema, BaseModel):
             data = schema.model_dump(exclude_unset=True)
@@ -111,7 +117,10 @@ class BaseRepositoryMixin(Generic[ModelT, SchemaT, IdT]):
 
         db_item = self.model(**data)
         self.db.add(db_item)
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
+        else:
+            await self.db.flush()
         await self.db.refresh(db_item)
         return self.schema.model_validate(db_item)
 

@@ -770,6 +770,7 @@ class GalleryService:
         copied_count = 0
         for item in bulk_copy_dto.items:
             try:
+                item_copied = 0
                 async with self.db.begin_nested():
                     if item.type == "media_item":
                         media_item = await self.media_repo.get_by_id(item.id)
@@ -803,7 +804,9 @@ class GalleryService:
                         new_item_data["user_id"] = current_user.id
                         new_item_data["user_email"] = current_user.email
 
-                        new_item = await self.media_repo.create(new_item_data)
+                        new_item = await self.media_repo.create(
+                            new_item_data, commit=False
+                        )
                         if (
                             media_item.workspace_id
                             == bulk_copy_dto.target_workspace_id
@@ -817,9 +820,9 @@ class GalleryService:
                             )
                             for t in existing_tags:
                                 await self.tags_repo.assign_tag_to_media_item(
-                                    new_item.id, t.id
+                                    new_item.id, t.id, commit=False
                                 )
-                        copied_count += 1
+                        item_copied = 1
 
                     elif item.type == "source_asset":
                         asset = await self.source_asset_repo.get_by_id(item.id)
@@ -852,7 +855,7 @@ class GalleryService:
                         new_asset_data["user_id"] = current_user.id
 
                         new_asset = await self.source_asset_repo.create(
-                            new_asset_data
+                            new_asset_data, commit=False
                         )
                         if (
                             asset.workspace_id
@@ -867,9 +870,9 @@ class GalleryService:
                             )
                             for t in existing_tags:
                                 await self.tags_repo.assign_tag_to_source_asset(
-                                    new_asset.id, t.id
+                                    new_asset.id, t.id, commit=False
                                 )
-                        copied_count += 1
+                        item_copied = 1
 
                     elif item.type == "folder":
                         folder = folder_map.get(item.id)
@@ -891,11 +894,15 @@ class GalleryService:
                             or ConflictStrategyEnum.KEEP_BOTH,
                             commit=False,
                         )
-                        copied_count += (
+                        item_copied = (
                             copy_results.get("folders_copied", 0)
                             + copy_results.get("media_copied", 0)
                             + copy_results.get("assets_copied", 0)
                         )
+
+                # Counted only once the savepoint has released, as in
+                # bulk_move.
+                copied_count += item_copied
 
             except HTTPException:
                 raise
@@ -962,6 +969,7 @@ class GalleryService:
         failed: list[BulkMoveFailureDto] = []
         for item in bulk_move_dto.items:
             try:
+                item_moved = 0
                 async with self.db.begin_nested():
                     if item.type == "media_item":
                         media_item = await self.media_repo.get_by_id(item.id)
@@ -984,7 +992,7 @@ class GalleryService:
                             != bulk_move_dto.target_workspace_id
                         ):
                             await self.tags_repo.clear_tags_for_media_item(
-                                item.id
+                                item.id, commit=False
                             )
 
                         stmt = (
@@ -997,7 +1005,7 @@ class GalleryService:
                         )
                         await self.db.execute(stmt)
                         await self.db.flush()
-                        moved_count += 1
+                        item_moved = 1
 
                     elif item.type == "source_asset":
                         asset = await self.source_asset_repo.get_by_id(item.id)
@@ -1020,7 +1028,7 @@ class GalleryService:
                             != bulk_move_dto.target_workspace_id
                         ):
                             await self.tags_repo.clear_tags_for_source_asset(
-                                item.id
+                                item.id, commit=False
                             )
 
                         stmt = (
@@ -1033,7 +1041,7 @@ class GalleryService:
                         )
                         await self.db.execute(stmt)
                         await self.db.flush()
-                        moved_count += 1
+                        item_moved = 1
 
                     elif item.type == "folder":
                         folder = folder_map.get(item.id)
@@ -1071,7 +1079,7 @@ class GalleryService:
                             or ConflictStrategyEnum.KEEP_BOTH,
                             commit=False,
                         )
-                        moved_count += (
+                        item_moved = (
                             move_results.get("folders_moved", 0)
                             + move_results.get("media_moved", 0)
                             + move_results.get("assets_moved", 0)
@@ -1088,6 +1096,7 @@ class GalleryService:
                 # Recorded only once the savepoint has released, since its
                 # flush can still fail. A folder appears once, however many
                 # rows it added to moved_count.
+                moved_count += item_moved
                 moved.append(BulkMoveResultDto(id=item.id, type=item.type))
 
             except HTTPException:

@@ -101,7 +101,9 @@ class TagsRepository(BaseRepository[Tag, TagModel]):
         )
         return result.scalar_one()
 
-    async def assign_tag_to_media_item(self, media_item_id: int, tag_id: int):
+    async def assign_tag_to_media_item(
+        self, media_item_id: int, tag_id: int, *, commit: bool = True
+    ):
         """Links a tag to a media item."""
         await self.db.execute(
             pg_insert(media_item_tags)
@@ -114,10 +116,13 @@ class TagsRepository(BaseRepository[Tag, TagModel]):
             .where(self.model.id == tag_id)
             .values(updated_at=func.now())
         )
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
+        else:
+            await self.db.flush()
 
     async def assign_tag_to_source_asset(
-        self, source_asset_id: int, tag_id: int
+        self, source_asset_id: int, tag_id: int, *, commit: bool = True
     ):
         """Links a tag to a source asset."""
         await self.db.execute(
@@ -131,7 +136,10 @@ class TagsRepository(BaseRepository[Tag, TagModel]):
             .where(self.model.id == tag_id)
             .values(updated_at=func.now())
         )
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
+        else:
+            await self.db.flush()
 
     async def remove_tag_from_media_item(self, media_item_id: int, tag_id: int):
         """Unlinks a tag from a media item."""
@@ -153,23 +161,33 @@ class TagsRepository(BaseRepository[Tag, TagModel]):
         )
         await self.db.commit()
 
-    async def clear_tags_for_media_item(self, media_item_id: int):
+    async def clear_tags_for_media_item(
+        self, media_item_id: int, *, commit: bool = True
+    ):
         """Removes all tags from a media item."""
         await self.db.execute(
             delete(media_item_tags).where(
                 media_item_tags.c.media_item_id == media_item_id
             )
         )
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
+        else:
+            await self.db.flush()
 
-    async def clear_tags_for_source_asset(self, source_asset_id: int):
+    async def clear_tags_for_source_asset(
+        self, source_asset_id: int, *, commit: bool = True
+    ):
         """Removes all tags from a source asset."""
         await self.db.execute(
             delete(source_asset_tags).where(
                 source_asset_tags.c.source_asset_id == source_asset_id
             )
         )
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
+        else:
+            await self.db.flush()
 
     async def clear_tags_for_items(
         self, item_ids: list[int], item_type: str, commit: bool = True

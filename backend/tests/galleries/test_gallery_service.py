@@ -737,7 +737,9 @@ async def test_bulk_move_media_item_success(service):
     result = await service.bulk_move(bulk_dto, current_user)
 
     assert result["moved_count"] == 1
-    service.mock_tags_repo.clear_tags_for_media_item.assert_called_once_with(1)
+    service.mock_tags_repo.clear_tags_for_media_item.assert_called_once_with(
+        1, commit=False
+    )
     service.mock_media_repo.update.assert_not_called()
     assert service.mock_db.execute.call_count == 1
     assert service.mock_db.flush.call_count == 1
@@ -825,7 +827,7 @@ async def test_bulk_move_source_asset_success(service):
     result = await service.bulk_move(bulk_dto, current_user)
     assert result["moved_count"] == 1
     service.mock_tags_repo.clear_tags_for_source_asset.assert_called_once_with(
-        5
+        5, commit=False
     )
     service.mock_source_asset_repo.update.assert_not_called()
     assert service.mock_db.execute.call_count == 1
