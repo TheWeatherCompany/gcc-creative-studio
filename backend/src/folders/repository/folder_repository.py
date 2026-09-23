@@ -1091,6 +1091,8 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         )
 
         if root_folder.workspace_id != target_workspace_id:
+            await self._detach_trashed_rows(descendant_ids)
+
             # Remove tag associations from media items and source assets being moved across workspaces
             media_tags_delete = delete(media_item_tags).where(
                 media_item_tags.c.media_item_id.in_(
@@ -1153,6 +1155,26 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
             "assets_moved": asset_res.rowcount,
         }
 
+    async def _detach_trashed_rows(self, folder_ids: list[int]) -> None:
+        """Clears folder_id on trashed media items and assets in folder_ids.
+
+        Call this before those folders leave their workspace, so the updates
+        that re-home the subtree no longer match the trashed rows. Restore only
+        clears deleted_at, so a trashed row carried along would reappear in a
+        workspace it was never in. Left in place with its folder_id, it would
+        point at a folder in another workspace. Detached, it stays in the
+        source workspace and a restore lands it at that workspace's root.
+        """
+        for model in (MediaItem, SourceAsset):
+            await self.db.execute(
+                update(model)
+                .where(
+                    model.folder_id.in_(folder_ids),
+                    model.deleted_at.is_not(None),
+                )
+                .values(folder_id=None)
+            )
+
     async def merge_folders(
         self,
         source_folder_id: int,
@@ -1172,6 +1194,9 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
             key_m = "media_copied" if is_copy else "media_moved"
             key_a = "assets_copied" if is_copy else "assets_moved"
             return {key_f: 0, key_m: 0, key_a: 0}
+
+        if not is_copy and source_folder.workspace_id != target_workspace_id:
+            await self._detach_trashed_rows([source_folder_id])
 
         # 1. Media items directly in source_folder
         media_stmt = select(MediaItem).where(
@@ -1421,6 +1446,7 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                     child_descendants = await self.get_descendant_ids(child.id)
                     folders_count += len(child_descendants)
                     if child.workspace_id != target_workspace_id:
+                        await self._detach_trashed_rows(child_descendants)
                         if clear_tags:
                             await self.db.execute(
                                 delete(media_item_tags).where(

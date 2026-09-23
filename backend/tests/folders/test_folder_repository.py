@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import Delete, Insert, Select, Update
+from sqlalchemy.dialects import sqlite as sqlite_dialect
 from sqlalchemy.sql.elements import TextClause
 
 from src.common.schema.media_item_model import MediaItem
@@ -453,6 +454,8 @@ class TestFolderRepository:
             mock_get_root,
             mock_desc_res,
             mock_existing_root_res,
+            MagicMock(),  # detach trashed media
+            MagicMock(),  # detach trashed assets
             mock_delete_media_tags,
             mock_delete_asset_tags,
             mock_media_res,
@@ -469,7 +472,7 @@ class TestFolderRepository:
         assert root_folder.workspace_id == 99
         assert root_folder.parent_id is None
         assert root_folder.name == "ExistingRoot (1)"
-        assert mock_db.execute.call_count == 8
+        assert mock_db.execute.call_count == 10
         mock_db.commit.assert_called_once()
 
     @pytest.mark.anyio
@@ -500,6 +503,8 @@ class TestFolderRepository:
             mock_get_root,
             mock_desc_res,
             mock_existing_root_res,
+            MagicMock(),  # detach trashed media
+            MagicMock(),  # detach trashed assets
             MagicMock(),  # delete media tags
             MagicMock(),  # delete asset tags
             mock_media_res,
@@ -1186,6 +1191,8 @@ class TestFolderRepository:
         mock_target_children_res.scalars.return_value.all.return_value = []
 
         mock_db.execute.side_effect = [
+            MagicMock(),  # detach trashed media
+            MagicMock(),  # detach trashed assets
             mock_media_res,
             MagicMock(),  # delete media tags
             MagicMock(),  # update media
@@ -1194,6 +1201,8 @@ class TestFolderRepository:
             MagicMock(),  # update asset
             mock_children_res,
             mock_target_children_res,
+            MagicMock(),  # detach trashed child media
+            MagicMock(),  # detach trashed child assets
             MagicMock(),  # delete child media tags
             MagicMock(),  # delete child asset tags
             MagicMock(),  # update child folders
@@ -1244,6 +1253,8 @@ class TestFolderRepository:
         mock_target_children_res.scalars.return_value.all.return_value = []
 
         mock_db.execute.side_effect = [
+            MagicMock(),  # detach trashed media
+            MagicMock(),  # detach trashed assets
             mock_media_res,
             mock_asset_res,
             mock_children_res,
@@ -1550,20 +1561,35 @@ def _orm_result(rows):
     return result
 
 
-def _route_to_sqlite(mock_db, folders, orm_results=None):
-    """Runs text() statements on SQLite and returns the statements executed."""
+def _route_to_sqlite(mock_db, folders, orm_results=None, items=None):
+    """Runs text() statements on SQLite and returns the statements executed.
+
+    With `items` (table name to rows), ORM writes run on SQLite too, and the
+    connection is returned alongside so the test can read the outcome.
+    """
     conn = sqlite3.connect(":memory:")
     conn.row_factory = lambda cur, row: SimpleNamespace(
         **{col[0]: val for col, val in zip(cur.description, row)}
     )
     conn.execute(
         "CREATE TABLE folders (id INTEGER PRIMARY KEY, name TEXT, color TEXT,"
-        " parent_id INTEGER, workspace_id INTEGER, deleted_at TEXT)"
+        " parent_id INTEGER, workspace_id INTEGER, deleted_at TEXT,"
+        " updated_at TEXT)"
     )
     conn.executemany(
-        "INSERT INTO folders VALUES (?, ?, ?, ?, ?, NULL)",
+        "INSERT INTO folders VALUES (?, ?, ?, ?, ?, NULL, NULL)",
         [(f.id, f.name, f.color, f.parent_id, f.workspace_id) for f in folders],
     )
+    for table in ("media_items", "source_assets"):
+        conn.execute(
+            f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, folder_id INTEGER,"
+            " workspace_id INTEGER, deleted_at TEXT, updated_at TEXT)"
+        )
+    conn.execute("CREATE TABLE media_item_tags (media_item_id, tag_id)")
+    conn.execute("CREATE TABLE source_asset_tags (source_asset_id, tag_id)")
+    for table, rows in (items or {}).items():
+        placeholders = ", ".join("?" * len(rows[0]))
+        conn.executemany(f"INSERT INTO {table} VALUES ({placeholders})", rows)
     # An unbounded walk over a cycle never returns. Abort it, so a missing
     # bound fails the test instead of hanging the suite.
     conn.set_progress_handler(lambda: 1, 1_000_000)
@@ -1572,6 +1598,16 @@ def _route_to_sqlite(mock_db, folders, orm_results=None):
 
     async def execute(stmt, params=None):
         executed.append(stmt)
+        if items is not None and isinstance(stmt, (Update, Delete)):
+            compiled = stmt.compile(
+                dialect=sqlite_dialect.dialect(),
+                compile_kwargs={"render_postcompile": True},
+            )
+            cur = conn.execute(
+                str(compiled),
+                [compiled.params[name] for name in compiled.positiontup],
+            )
+            return MagicMock(rowcount=cur.rowcount)
         if not isinstance(stmt, TextClause):
             if queued:
                 return queued.pop(0)
@@ -1598,7 +1634,7 @@ def _route_to_sqlite(mock_db, folders, orm_results=None):
         return result
 
     mock_db.execute.side_effect = execute
-    return executed
+    return (executed, conn) if items is not None else executed
 
 
 def _writes(executed):
@@ -1744,3 +1780,137 @@ class TestFolderWalkDepthCeiling:
         )
         assert MAX_FOLDER_DEPTH == 20
         assert not hasattr(folder_repository_module, "MAX_FOLDER_DEPTH")
+
+
+TRASHED = "2026-01-01"
+
+
+def _item_state(conn, table):
+    """Maps id to (workspace_id, folder_id) for every row in table."""
+    rows = conn.execute(f"SELECT id, workspace_id, folder_id FROM {table}")
+    return {row.id: (row.workspace_id, row.folder_id) for row in rows}
+
+
+def _tagged(conn, table, column):
+    return {
+        row.item
+        for row in conn.execute(f"SELECT {column} AS item FROM {table}")
+    }
+
+
+class TestTrashedRowsInSubtreeMoves:
+    """A trashed row never follows its folder into another workspace.
+
+    Restore (BaseRepository.restore) only clears deleted_at, so wherever a
+    trashed row sits when its folder moves is where it comes back.
+    """
+
+    # Folder 1 (workspace 1) holds folder 2. Each folder has one live and one
+    # trashed media item and source asset, and every row carries a tag.
+    ITEMS = {
+        "media_items": [
+            (100, 1, 1, None, None),
+            (101, 1, 1, TRASHED, None),
+            (102, 2, 1, None, None),
+            (103, 2, 1, TRASHED, None),
+        ],
+        "source_assets": [
+            (200, 1, 1, None, None),
+            (201, 1, 1, TRASHED, None),
+            (202, 2, 1, None, None),
+            (203, 2, 1, TRASHED, None),
+        ],
+        "media_item_tags": [(100, 7), (101, 7), (102, 7), (103, 7)],
+        "source_asset_tags": [(200, 7), (201, 7), (202, 7), (203, 7)],
+    }
+
+    def _assert_trashed_rows_stayed_at_source_root(self, conn):
+        media = _item_state(conn, "media_items")
+        assets = _item_state(conn, "source_assets")
+        assert media[101] == (1, None)
+        assert media[103] == (1, None)
+        assert assets[201] == (1, None)
+        assert assets[203] == (1, None)
+        # They are still in workspace 1, so they keep workspace 1's tags.
+        assert {101, 103} <= _tagged(conn, "media_item_tags", "media_item_id")
+        assert {201, 203} <= _tagged(
+            conn, "source_asset_tags", "source_asset_id"
+        )
+
+    @pytest.mark.anyio
+    async def test_move_folder_to_workspace_leaves_trashed_rows_behind(
+        self, folder_repo, mock_db
+    ):
+        _, conn = _route_to_sqlite(mock_db, _chain(2), items=self.ITEMS)
+
+        res = await folder_repo.move_folder_to_workspace(1, 2)
+
+        media = _item_state(conn, "media_items")
+        assets = _item_state(conn, "source_assets")
+        assert media[100] == (2, 1)
+        assert media[102] == (2, 2)
+        assert assets[200] == (2, 1)
+        assert assets[202] == (2, 2)
+        assert res["media_moved"] == 2
+        assert res["assets_moved"] == 2
+        self._assert_trashed_rows_stayed_at_source_root(conn)
+
+    @pytest.mark.anyio
+    async def test_move_folder_within_workspace_keeps_trashed_rows_in_place(
+        self, folder_repo, mock_db
+    ):
+        # Nothing changes workspace, so there is nothing to protect, and a
+        # restore should still land the row in the folder it was deleted from.
+        _, conn = _route_to_sqlite(mock_db, _chain(2), items=self.ITEMS)
+
+        await folder_repo.move_folder_to_workspace(1, 1)
+
+        assert _item_state(conn, "media_items")[103] == (1, 2)
+        assert _item_state(conn, "source_assets")[201] == (1, 1)
+
+    @pytest.mark.anyio
+    async def test_merge_folders_leaves_trashed_rows_behind(
+        self, folder_repo, mock_db
+    ):
+        # Folder 1 merges into folder 10 in workspace 2. Its direct content
+        # moves into folder 10; its child, folder 2, has no namesake under
+        # folder 10 and is reparented there whole.
+        source, child = _chain(2)
+        target = Folder(
+            id=10,
+            workspace_id=2,
+            user_id=1,
+            user_email="a@b.com",
+            name="F1",
+            parent_id=None,
+        )
+        _, conn = _route_to_sqlite(
+            mock_db,
+            [source, child],
+            items=self.ITEMS,
+            orm_results=[
+                _orm_result([source]),
+                _orm_result([target]),
+                _orm_result([SimpleNamespace(id=100)]),  # live direct media
+                _orm_result([SimpleNamespace(id=200)]),  # live direct assets
+                _orm_result([child]),  # source children
+                _orm_result([]),  # target children
+            ],
+        )
+
+        await folder_repo.merge_folders(
+            source_folder_id=1,
+            target_folder_id=10,
+            target_workspace_id=2,
+            is_copy=False,
+            clear_tags=True,
+            commit=False,
+        )
+
+        media = _item_state(conn, "media_items")
+        assets = _item_state(conn, "source_assets")
+        assert media[100] == (2, 10)
+        assert media[102] == (2, 2)
+        assert assets[200] == (2, 10)
+        assert assets[202] == (2, 2)
+        self._assert_trashed_rows_stayed_at_source_root(conn)
