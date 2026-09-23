@@ -759,6 +759,40 @@ class GalleryService:
         )
         return {f.id: f for f in folders if f.workspace_id in locked}
 
+    async def _carried_folders(self, folders: list) -> dict[int, int]:
+        """Maps each requested folder that sits inside another requested
+        folder's subtree to the top-most requested folder above it.
+
+        Moving or copying that ancestor takes the whole subtree, so handling
+        the inner folder on its own as well would copy it twice or, for a
+        move, detach it to the target root first and flatten the tree. A
+        folder is inside another's subtree exactly when its parent is in the
+        union of the requested subtrees. Call after the structure lock.
+        """
+        if len(folders) < 2:
+            return {}
+        requested = {f.id for f in folders}
+        covered = set(
+            await self.folder_repo.get_descendant_ids_batch(sorted(requested))
+        )
+        carried = {}
+        for folder in folders:
+            if folder.parent_id not in covered:
+                continue
+            # Root first, so the first requested id is the top-most one.
+            crumbs = await self.folder_repo.get_breadcrumbs(folder.id)
+            carrier = next(
+                (
+                    c.id
+                    for c in crumbs
+                    if c.id in requested and c.id != folder.id
+                ),
+                None,
+            )
+            if carrier is not None:
+                carried[folder.id] = carrier
+        return carried
+
     async def bulk_copy(
         self,
         bulk_copy_dto: BulkCopyDto,
@@ -777,6 +811,8 @@ class GalleryService:
         folder_map = await self._lock_folder_workspaces(
             folder_ids, bulk_copy_dto.target_workspace_id, current_user
         )
+        # Copied with the requested folder above them, not on their own.
+        carried = await self._carried_folders(list(folder_map.values()))
 
         if folder_ids and bulk_copy_dto.conflict_strategy is None:
             existing_map = await self.folder_repo.get_existing_folders_map(
@@ -786,7 +822,7 @@ class GalleryService:
             conflicts = []
             for f_id in folder_ids:
                 f = folder_map.get(f_id)
-                if f:
+                if f and f.id not in carried:
                     key = f.name.strip().lower()
                     if key in existing_map:
                         conflicts.append(
@@ -914,7 +950,7 @@ class GalleryService:
 
                     elif item.type == "folder":
                         folder = folder_map.get(item.id)
-                        if not folder:
+                        if not folder or folder.id in carried:
                             continue
 
                         # Authorize source workspace access
@@ -973,6 +1009,9 @@ class GalleryService:
         folder_map = await self._lock_folder_workspaces(
             folder_ids, bulk_move_dto.target_workspace_id, current_user
         )
+        # Moved with the requested folder above them, not on their own, and
+        # reported after the loop.
+        carried = await self._carried_folders(list(folder_map.values()))
 
         if folder_ids and bulk_move_dto.conflict_strategy is None:
             existing_map = await self.folder_repo.get_existing_folders_map(
@@ -982,7 +1021,11 @@ class GalleryService:
             conflicts = []
             for f_id in folder_ids:
                 f = folder_map.get(f_id)
-                if f and f.workspace_id != bulk_move_dto.target_workspace_id:
+                if (
+                    f
+                    and f.workspace_id != bulk_move_dto.target_workspace_id
+                    and f.id not in carried
+                ):
                     key = f.name.strip().lower()
                     if key in existing_map:
                         conflicts.append(
@@ -1004,7 +1047,11 @@ class GalleryService:
         moved_count = 0
         moved: list[BulkMoveResultDto] = []
         failed: list[BulkMoveFailureDto] = []
+        carried_items = []
         for item in bulk_move_dto.items:
+            if item.type == "folder" and item.id in carried:
+                carried_items.append(item)
+                continue
             try:
                 item_moved = 0
                 async with self.db.begin_nested():
@@ -1142,6 +1189,23 @@ class GalleryService:
                 logger.error(f"Error moving {item.type} {item.id}: {e}")
                 failed.append(
                     _move_failure(item, BulkMoveFailureReason.MOVE_FAILED)
+                )
+
+        # A carried folder shares its carrier's outcome, which includes
+        # ALREADY_IN_TARGET when the whole subtree is there already. Its rows
+        # are already in the carrier's share of moved_count.
+        moved_folders = {m.id for m in moved if m.type == "folder"}
+        reasons = {f.id: f.reason for f in failed if f.type == "folder"}
+        for item in carried_items:
+            carrier = carried[item.id]
+            if carrier in moved_folders:
+                moved.append(BulkMoveResultDto(id=item.id, type=item.type))
+            else:
+                failed.append(
+                    _move_failure(
+                        item,
+                        reasons.get(carrier, BulkMoveFailureReason.MOVE_FAILED),
+                    )
                 )
 
         await self.db.commit()
