@@ -1633,6 +1633,85 @@ async def test_bulk_folder_request_locks_both_workspaces_first(
     assert order == ["read", ("lock", [1, 3]), "reread", "savepoint", "write"]
 
 
+async def _bulk_folders(service, operation, folder_ids, target=1):
+    """Runs bulk_move or bulk_copy over the given folders."""
+    if operation == "move":
+        return await service.bulk_move(
+            move_dto.BulkMoveDto(
+                target_workspace_id=target,
+                items=[
+                    move_dto.BulkMoveItemDto(id=i, type="folder")
+                    for i in folder_ids
+                ],
+            ),
+            _move_user(),
+        )
+    return await service.bulk_copy(
+        copy_dto.BulkCopyDto(
+            target_workspace_id=target,
+            items=[
+                copy_dto.BulkCopyItemDto(id=i, type="folder")
+                for i in folder_ids
+            ],
+        ),
+        _move_user(),
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["move", "copy"])
+async def test_bulk_folder_request_authorizes_sources_before_the_lock(
+    service, operation
+):
+    """The structure lock blocks every folder change in a workspace, so the
+    caller is authorized for the source the unlocked read found before it
+    is taken, not when the loop reaches the folder."""
+    order, _ = _record_structure_lock(service, operation)
+
+    async def authorize(workspace_id, user):
+        del user
+        order.append(("authorize", workspace_id))
+
+    service.mock_workspace_auth.authorize.side_effect = authorize
+    await _bulk_folders(service, operation, [1])
+
+    assert order[:4] == [
+        ("authorize", 1),
+        "read",
+        ("authorize", 3),
+        ("lock", [1, 3]),
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["move", "copy"])
+async def test_bulk_folder_request_refused_source_takes_no_lock(
+    service, operation
+):
+    """A folder in a workspace the caller cannot access refuses the request
+    before any workspace, its own or the foreign one, is locked."""
+    repo = service.mock_folder_repo
+    repo.get_folders_by_ids.return_value = [
+        SimpleNamespace(id=1, workspace_id=3, name="A", parent_id=None),
+        SimpleNamespace(id=2, workspace_id=5, name="B", parent_id=None),
+    ]
+
+    async def authorize(workspace_id, user):
+        del user
+        if workspace_id == 5:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+    service.mock_workspace_auth.authorize.side_effect = authorize
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _bulk_folders(service, operation, [1, 2])
+
+    assert exc_info.value.status_code == 403
+    repo.lock_workspace_structure.assert_not_called()
+    service.mock_db.begin_nested.assert_not_called()
+    service.mock_db.commit.assert_not_called()
+
+
 @pytest.mark.anyio
 async def test_bulk_move_skips_a_folder_that_left_the_locked_workspaces(
     service,
@@ -1652,9 +1731,10 @@ async def test_bulk_move_skips_a_folder_that_left_the_locked_workspaces(
     assert [(f.id, f.reason) for f in result["failed"]] == [
         (1, move_dto.BulkMoveFailureReason.NOT_FOUND)
     ]
-    # Only the target was authorized: the moved folder was never touched.
+    # The target and the source the unlocked read found were authorized;
+    # the workspace the folder moved to never was, and it was not touched.
     authorized = service.mock_workspace_auth.authorize.await_args_list
-    assert [c.kwargs["workspace_id"] for c in authorized] == [1]
+    assert [c.kwargs["workspace_id"] for c in authorized] == [1, 3]
 
 
 @pytest.mark.anyio

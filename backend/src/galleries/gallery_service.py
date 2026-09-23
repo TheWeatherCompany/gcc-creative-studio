@@ -721,21 +721,38 @@ class GalleryService:
             raise e
 
     async def _lock_folder_workspaces(
-        self, folder_ids: list[int], target_workspace_id: int
+        self,
+        folder_ids: list[int],
+        target_workspace_id: int,
+        current_user: UserModel,
     ) -> dict:
         """Locks the structure of every workspace a bulk folder request spans.
 
         The source workspaces are only known from a first, unlocked read, so
-        this locks them and the target (in ascending order, before any row
-        lock) and then reads the folders again. The lock is held to the
-        single commit at the end of bulk_copy and bulk_move. A folder that a
-        concurrent request moved to a workspace outside that set is left out
-        of the map, so the caller treats it as not found.
+        this authorizes the caller for each of them, then locks them and the
+        target (in ascending order, before any row lock) and reads the
+        folders again. The caller has already authorized the target. The
+        lock is held to the single commit at the end of bulk_copy and
+        bulk_move. A folder that a concurrent request moved to a workspace
+        outside that set is left out of the map, so the caller treats it as
+        not found.
+
+        Authorizing first matters because the lock blocks every folder
+        change in the workspace until this request commits: naming one
+        foreign folder after a long list of padding items would otherwise
+        freeze a workspace the caller cannot even read. An HTTPException
+        from WorkspaceAuth propagates, refusing the request as before.
         """
         if not folder_ids:
             return {}
         folders = await self.folder_repo.get_folders_by_ids(folder_ids)
-        locked = {target_workspace_id} | {f.workspace_id for f in folders}
+        sources = {f.workspace_id for f in folders} - {target_workspace_id}
+        for workspace_id in sorted(sources):
+            await self.workspace_auth.authorize(
+                workspace_id=workspace_id,
+                user=current_user,
+            )
+        locked = {target_workspace_id} | sources
         await self.folder_repo.lock_workspace_structure(*locked)
         folders = await self.folder_repo.get_folders_by_ids(
             folder_ids, populate_existing=True
@@ -758,7 +775,7 @@ class GalleryService:
             it.id for it in bulk_copy_dto.items if it.type == "folder"
         ]
         folder_map = await self._lock_folder_workspaces(
-            folder_ids, bulk_copy_dto.target_workspace_id
+            folder_ids, bulk_copy_dto.target_workspace_id, current_user
         )
 
         if folder_ids and bulk_copy_dto.conflict_strategy is None:
@@ -954,7 +971,7 @@ class GalleryService:
             it.id for it in bulk_move_dto.items if it.type == "folder"
         ]
         folder_map = await self._lock_folder_workspaces(
-            folder_ids, bulk_move_dto.target_workspace_id
+            folder_ids, bulk_move_dto.target_workspace_id, current_user
         )
 
         if folder_ids and bulk_move_dto.conflict_strategy is None:

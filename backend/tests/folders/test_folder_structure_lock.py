@@ -410,3 +410,81 @@ async def test_bulk_copy_locks_both_workspaces_and_rereads_the_folders(
     assert res["copied_count"] == 1
     tree = await _tree(engine)
     assert sorted(ws for ws, _ in tree.values()) == [3, 4, 5]
+
+
+def _member_of(svc, *workspace_ids):
+    """Makes svc authorize only the given workspaces; returns the calls."""
+    calls = []
+
+    async def authorize(workspace_id, user):
+        del user
+        calls.append(workspace_id)
+        if workspace_id not in workspace_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden"
+            )
+
+    svc.workspace_auth.authorize.side_effect = authorize
+    return calls
+
+
+def _bulk(svc, operation, target, *folder_ids):
+    items = [{"id": i, "type": "folder"} for i in folder_ids]
+    if operation == "move":
+        return svc.bulk_move(
+            BulkMoveDto(target_workspace_id=target, items=items), USER
+        )
+    return svc.bulk_copy(
+        BulkCopyDto(target_workspace_id=target, items=items), USER
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["move", "copy"])
+async def test_bulk_request_naming_a_foreign_folder_locks_nothing(
+    engine, locks, operation
+):
+    """A member of 1 and 3 names a folder from 5. The request is refused
+    before any lock, so it cannot hold 5's structure lock while it works
+    through the rest of the request."""
+    await _folders(engine, (1, 3, None), (2, 5, None))
+
+    async with AsyncSession(engine) as session:
+        svc = _gallery_service(session)
+        _member_of(svc, 1, 3)
+        with pytest.raises(HTTPException) as exc_info:
+            await _bulk(svc, operation, 1, 1, 2)
+
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+    assert locks["calls"] == []
+    assert await _tree(engine) == {1: (3, None), 2: (5, None)}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["move", "copy"])
+async def test_bulk_request_skips_a_folder_moved_to_a_foreign_workspace(
+    engine, locks, operation
+):
+    """Folder 2 was in 3, which the caller may use, when first read, and a
+    concurrent request moved it to 5, which the caller may not, while this
+    one waited. 5 is neither locked nor authorized, and 2 is not found."""
+    await _folders(engine, (1, 3, None), (2, 3, None))
+    locks["committed"] = ["UPDATE folders SET workspace_id = 5 WHERE id = 2"]
+
+    async with AsyncSession(engine) as session:
+        svc = _gallery_service(session)
+        authorized = _member_of(svc, 1, 3)
+        res = await _bulk(svc, operation, 1, 1, 2)
+
+    assert locks["calls"] == [[1, 3]]
+    assert 5 not in authorized
+    tree = await _tree(engine)
+    assert tree[2] == (5, None)
+    if operation == "move":
+        assert [(f.id, f.reason) for f in res["failed"]] == [
+            (2, BulkMoveFailureReason.NOT_FOUND)
+        ]
+        assert tree[1] == (1, None)
+    else:
+        assert res["copied_count"] == 1
+        assert sorted(ws for ws, _ in tree.values()) == [1, 3, 5]
