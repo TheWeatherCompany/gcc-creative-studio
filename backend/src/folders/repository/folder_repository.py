@@ -13,9 +13,10 @@
 # limitations under the License.
 
 import copy
+import logging
 import re
 from datetime import datetime, timezone
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 from sqlalchemy import delete, func, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +32,52 @@ from src.folders.dto.folder_dto import (
 from src.folders.schema.folder_model import Folder, FolderModel
 from src.source_assets.schema.source_asset_model import SourceAsset
 from src.tags.schema.tags_model import media_item_tags, source_asset_tags
+
+logger = logging.getLogger(__name__)
+
+# Ceiling for every recursive folder walk in this module. This is a safety net
+# against parent cycles and corrupt data, not a product rule: the user-facing
+# nesting limit is MAX_FOLDER_DEPTH (20) in folder_service.py. A WITH RECURSIVE
+# over a cycle never terminates, so each walk stops one level past this
+# ceiling, and reaching that level raises rather than returning a prefix.
+FOLDER_WALK_DEPTH_CEILING = 100
+
+
+class FolderSubtreeTooDeepError(HTTPException):
+    """Raised when a recursive folder walk passes FOLDER_WALK_DEPTH_CEILING.
+
+    Callers treat these walks as complete: a subtree move or soft delete
+    would strand the remainder, and a cycle check could miss the cycle it
+    exists to catch. A truncated walk is therefore an error, never a shorter
+    answer. It is an HTTPException so that it reaches the client as a 409
+    from every route, including through the per-item handlers in
+    GalleryService.bulk_copy and bulk_move, which re-raise HTTPException but
+    log and skip anything else.
+    """
+
+    def __init__(self, folder_id: int | list[int]):
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This folder hierarchy is nested too deeply, or contains a"
+                " cycle, and cannot be processed."
+            ),
+        )
+        self.folder_id = folder_id
+
+
+def _raise_if_walk_truncated(
+    deepest_level: int, folder_id: int | list[int]
+) -> None:
+    """Raises when a walk reached the level past FOLDER_WALK_DEPTH_CEILING."""
+    if deepest_level > FOLDER_WALK_DEPTH_CEILING:
+        logger.warning(
+            "Folder walk from %s passed %d levels; parent cycle or corrupt"
+            " hierarchy suspected",
+            folder_id,
+            FOLDER_WALK_DEPTH_CEILING,
+        )
+        raise FolderSubtreeTooDeepError(folder_id)
 
 
 def generate_disambiguated_name(
@@ -371,13 +418,21 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 SELECT f.id, f.name, f.parent_id, f.workspace_id, b.depth + 1
                 FROM folders f
                 JOIN breadcrumbs b ON f.id = b.parent_id
-                WHERE f.deleted_at IS NULL
+                WHERE f.deleted_at IS NULL AND b.depth <= :depth_ceiling
             )
-            SELECT id, name, parent_id, workspace_id FROM breadcrumbs ORDER BY depth DESC;
+            SELECT id, name, parent_id, workspace_id, depth FROM breadcrumbs ORDER BY depth DESC;
             """
         )
-        result = await self.db.execute(cte_query, {"folder_id": folder_id})
+        result = await self.db.execute(
+            cte_query,
+            {
+                "folder_id": folder_id,
+                "depth_ceiling": FOLDER_WALK_DEPTH_CEILING,
+            },
+        )
         rows = result.fetchall()
+        if rows:
+            _raise_if_walk_truncated(rows[0].depth, folder_id)
         return [
             FolderBreadcrumbDto(
                 id=row.id,
@@ -393,17 +448,27 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         cte_query = text(
             """
             WITH RECURSIVE descendants AS (
-                SELECT id FROM folders WHERE id = :folder_id AND deleted_at IS NULL
+                SELECT id, 1 AS depth FROM folders WHERE id = :folder_id AND deleted_at IS NULL
                 UNION ALL
-                SELECT f.id FROM folders f
+                SELECT f.id, d.depth + 1 FROM folders f
                 JOIN descendants d ON f.parent_id = d.id
-                WHERE f.deleted_at IS NULL
+                WHERE f.deleted_at IS NULL AND d.depth <= :depth_ceiling
             )
-            SELECT id FROM descendants;
+            SELECT id, depth FROM descendants;
             """
         )
-        result = await self.db.execute(cte_query, {"folder_id": folder_id})
-        return [row.id for row in result.fetchall()]
+        result = await self.db.execute(
+            cte_query,
+            {
+                "folder_id": folder_id,
+                "depth_ceiling": FOLDER_WALK_DEPTH_CEILING,
+            },
+        )
+        rows = result.fetchall()
+        _raise_if_walk_truncated(
+            max((row.depth for row in rows), default=0), folder_id
+        )
+        return [row.id for row in rows]
 
     async def get_descendant_ids_batch(
         self, folder_ids: list[int]
@@ -414,17 +479,27 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         cte_query = text(
             """
             WITH RECURSIVE descendants AS (
-                SELECT id FROM folders WHERE id = ANY(:folder_ids) AND deleted_at IS NULL
+                SELECT id, 1 AS depth FROM folders WHERE id = ANY(:folder_ids) AND deleted_at IS NULL
                 UNION ALL
-                SELECT f.id FROM folders f
+                SELECT f.id, d.depth + 1 FROM folders f
                 JOIN descendants d ON f.parent_id = d.id
-                WHERE f.deleted_at IS NULL
+                WHERE f.deleted_at IS NULL AND d.depth <= :depth_ceiling
             )
-            SELECT id FROM descendants;
+            SELECT id, depth FROM descendants;
             """
         )
-        result = await self.db.execute(cte_query, {"folder_ids": folder_ids})
-        return [row.id for row in result.fetchall()]
+        result = await self.db.execute(
+            cte_query,
+            {
+                "folder_ids": folder_ids,
+                "depth_ceiling": FOLDER_WALK_DEPTH_CEILING,
+            },
+        )
+        rows = result.fetchall()
+        _raise_if_walk_truncated(
+            max((row.depth for row in rows), default=0), folder_ids
+        )
+        return [row.id for row in rows]
 
     async def get_folder_depth(self, folder_id: int) -> int:
         """Returns the depth of a folder from the workspace root (root folder = 1)."""
@@ -443,14 +518,22 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 SELECT f.id, s.depth + 1
                 FROM folders f
                 JOIN subtree s ON f.parent_id = s.id
-                WHERE f.deleted_at IS NULL
+                WHERE f.deleted_at IS NULL AND s.depth <= :depth_ceiling
             )
             SELECT COALESCE(MAX(depth), 0) FROM subtree;
             """
         )
-        result = await self.db.execute(cte_query, {"folder_id": folder_id})
+        result = await self.db.execute(
+            cte_query,
+            {
+                "folder_id": folder_id,
+                "depth_ceiling": FOLDER_WALK_DEPTH_CEILING,
+            },
+        )
         val = result.scalar()
-        return int(val) if val is not None else 0
+        depth = int(val) if val is not None else 0
+        _raise_if_walk_truncated(depth, folder_id)
+        return depth
 
     async def get_tree(self, workspace_id: int) -> list[FolderTreeNodeDto]:
         """Fetch full folder hierarchy tree for a workspace."""
@@ -1624,15 +1707,23 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 SELECT f.id, f.name, f.color, f.parent_id, d.depth + 1 AS depth
                 FROM folders f
                 JOIN descendants d ON f.parent_id = d.id
-                WHERE f.deleted_at IS NULL
+                WHERE f.deleted_at IS NULL AND d.depth < :depth_ceiling
             )
             SELECT id, name, color, parent_id, depth FROM descendants ORDER BY depth ASC, id ASC;
             """
         )
-        res = await self.db.execute(cte_query, {"folder_id": subtree_root_id})
+        res = await self.db.execute(
+            cte_query,
+            {
+                "folder_id": subtree_root_id,
+                "depth_ceiling": FOLDER_WALK_DEPTH_CEILING,
+            },
+        )
         folder_rows = res.fetchall()
         if not folder_rows:
             return {"folders_copied": 0, "media_copied": 0, "assets_copied": 0}
+        # depth is 0-based in this walk, so the level count is depth + 1.
+        _raise_if_walk_truncated(folder_rows[-1].depth + 1, subtree_root_id)
 
         return await self._insert_copied_hierarchy(
             folder_rows=folder_rows,
@@ -1697,15 +1788,23 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
                 SELECT f.id, f.name, f.color, f.parent_id, d.depth + 1 AS depth
                 FROM folders f
                 JOIN descendants d ON f.parent_id = d.id
-                WHERE f.deleted_at IS NULL
+                WHERE f.deleted_at IS NULL AND d.depth < :depth_ceiling
             )
             SELECT id, name, color, parent_id, depth FROM descendants ORDER BY depth ASC, id ASC;
             """
         )
-        res = await self.db.execute(cte_query, {"folder_id": folder_id})
+        res = await self.db.execute(
+            cte_query,
+            {
+                "folder_id": folder_id,
+                "depth_ceiling": FOLDER_WALK_DEPTH_CEILING,
+            },
+        )
         folder_rows = res.fetchall()
         if not folder_rows:
             return {"folders_copied": 0, "media_copied": 0, "assets_copied": 0}
+        # depth is 0-based in this walk, so the level count is depth + 1.
+        _raise_if_walk_truncated(folder_rows[-1].depth + 1, folder_id)
 
         # Check for name collision at root level of target workspace
         existing_root_names = await self.get_existing_folder_names(

@@ -14,14 +14,22 @@
 
 """Tests for Folder Repository."""
 
+import json
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 import pytest
+from fastapi import HTTPException
+from sqlalchemy import Delete, Insert, Select, Update
+from sqlalchemy.sql.elements import TextClause
 
 from src.common.schema.media_item_model import MediaItem
 from src.folders.dto.folder_dto import ConflictStrategyEnum
+from src.folders.folder_service import MAX_FOLDER_DEPTH
+from src.folders.repository import folder_repository as folder_repository_module
 from src.folders.repository.folder_repository import (
     FolderRepository,
+    FolderSubtreeTooDeepError,
     generate_disambiguated_name,
 )
 from src.folders.schema.folder_model import Folder
@@ -201,10 +209,10 @@ class TestFolderRepository:
     @pytest.mark.anyio
     async def test_get_breadcrumbs(self, folder_repo, mock_db):
         mock_row1 = SimpleNamespace(
-            id=1, name="Root", parent_id=None, workspace_id=1
+            id=1, name="Root", parent_id=None, workspace_id=1, depth=2
         )
         mock_row2 = SimpleNamespace(
-            id=2, name="Child", parent_id=1, workspace_id=1
+            id=2, name="Child", parent_id=1, workspace_id=1, depth=1
         )
         mock_result = MagicMock()
         mock_result.fetchall.return_value = [mock_row1, mock_row2]
@@ -217,8 +225,8 @@ class TestFolderRepository:
 
     @pytest.mark.anyio
     async def test_get_descendant_ids(self, folder_repo, mock_db):
-        mock_row1 = MagicMock(id=1)
-        mock_row2 = MagicMock(id=2)
+        mock_row1 = MagicMock(id=1, depth=1)
+        mock_row2 = MagicMock(id=2, depth=2)
         mock_result = MagicMock()
         mock_result.fetchall.return_value = [mock_row1, mock_row2]
         mock_db.execute.return_value = mock_result
@@ -228,8 +236,8 @@ class TestFolderRepository:
 
     @pytest.mark.anyio
     async def test_get_descendant_ids_batch(self, folder_repo, mock_db):
-        mock_row1 = MagicMock(id=1)
-        mock_row2 = MagicMock(id=2)
+        mock_row1 = MagicMock(id=1, depth=1)
+        mock_row2 = MagicMock(id=2, depth=1)
         mock_result = MagicMock()
         mock_result.fetchall.return_value = [mock_row1, mock_row2]
         mock_db.execute.return_value = mock_result
@@ -246,10 +254,10 @@ class TestFolderRepository:
     @pytest.mark.anyio
     async def test_get_folder_depth(self, folder_repo, mock_db):
         mock_row1 = SimpleNamespace(
-            id=1, name="Root", parent_id=None, workspace_id=1
+            id=1, name="Root", parent_id=None, workspace_id=1, depth=2
         )
         mock_row2 = SimpleNamespace(
-            id=2, name="Child", parent_id=1, workspace_id=1
+            id=2, name="Child", parent_id=1, workspace_id=1, depth=1
         )
         mock_result = MagicMock()
         mock_result.fetchall.return_value = [mock_row1, mock_row2]
@@ -295,7 +303,7 @@ class TestFolderRepository:
 
     @pytest.mark.anyio
     async def test_soft_delete(self, folder_repo, mock_db):
-        mock_row1 = MagicMock(id=1)
+        mock_row1 = MagicMock(id=1, depth=1)
         mock_result = MagicMock()
         mock_result.fetchall.return_value = [mock_row1]
         mock_db.execute.return_value = mock_result
@@ -427,8 +435,8 @@ class TestFolderRepository:
         mock_get_root = MagicMock()
         mock_get_root.scalars.return_value.first.return_value = root_folder
 
-        mock_row1 = MagicMock(id=1)
-        mock_row2 = MagicMock(id=2)
+        mock_row1 = MagicMock(id=1, depth=1)
+        mock_row2 = MagicMock(id=2, depth=2)
         mock_desc_res = MagicMock()
         mock_desc_res.fetchall.return_value = [mock_row1, mock_row2]
 
@@ -478,7 +486,7 @@ class TestFolderRepository:
         mock_get_root = MagicMock()
         mock_get_root.scalars.return_value.first.return_value = root_folder
 
-        mock_row1 = MagicMock(id=1)
+        mock_row1 = MagicMock(id=1, depth=1)
         mock_desc_res = MagicMock()
         mock_desc_res.fetchall.return_value = [mock_row1]
 
@@ -518,7 +526,7 @@ class TestFolderRepository:
         mock_get_root = MagicMock()
         mock_get_root.scalars.return_value.first.return_value = root_folder
 
-        mock_row1 = MagicMock(id=1)
+        mock_row1 = MagicMock(id=1, depth=1)
         mock_desc_res = MagicMock()
         mock_desc_res.fetchall.return_value = [mock_row1]
 
@@ -1503,3 +1511,236 @@ class TestFolderRepository:
         assert res["folders_copied"] == 1
         folder_repo.merge_folders.assert_awaited_once()
         mock_db.commit.assert_called_once()
+
+
+# The recursive walks are raw SQL, so a mock cannot show that they stop on a
+# cycle or that they see one level past the ceiling. These tests run the exact
+# text() statements the repository sends against an in-memory SQLite folders
+# table; every ORM statement still goes to a mock, as in the tests above.
+WALK_CEILING = 5
+
+
+def _folder(folder_id, parent_id=None):
+    return Folder(
+        id=folder_id,
+        workspace_id=1,
+        user_id=1,
+        user_email="a@b.com",
+        name=f"F{folder_id}",
+        parent_id=parent_id,
+        color="#fff",
+    )
+
+
+def _chain(levels):
+    """Folders 1..levels, each the child of the one before."""
+    return [_folder(i, i - 1 if i > 1 else None) for i in range(1, levels + 1)]
+
+
+def _cycle():
+    """Folders 1 -> 2 -> 3 -> 1, which no bounded walk can finish."""
+    return [_folder(1, 3), _folder(2, 1), _folder(3, 2)]
+
+
+def _orm_result(rows):
+    result = MagicMock(rowcount=0)
+    result.scalars.return_value.all.return_value = rows
+    result.scalars.return_value.first.return_value = rows[0] if rows else None
+    result.fetchall.return_value = []
+    return result
+
+
+def _route_to_sqlite(mock_db, folders, orm_results=None):
+    """Runs text() statements on SQLite and returns the statements executed."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = lambda cur, row: SimpleNamespace(
+        **{col[0]: val for col, val in zip(cur.description, row)}
+    )
+    conn.execute(
+        "CREATE TABLE folders (id INTEGER PRIMARY KEY, name TEXT, color TEXT,"
+        " parent_id INTEGER, workspace_id INTEGER, deleted_at TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO folders VALUES (?, ?, ?, ?, ?, NULL)",
+        [(f.id, f.name, f.color, f.parent_id, f.workspace_id) for f in folders],
+    )
+    # An unbounded walk over a cycle never returns. Abort it, so a missing
+    # bound fails the test instead of hanging the suite.
+    conn.set_progress_handler(lambda: 1, 1_000_000)
+    queued = list(orm_results or [])
+    executed = []
+
+    async def execute(stmt, params=None):
+        executed.append(stmt)
+        if not isinstance(stmt, TextClause):
+            if queued:
+                return queued.pop(0)
+            if isinstance(stmt, Select):
+                entity = stmt.column_descriptions[0].get("entity")
+                # Every ORM folder read in these walks is of the root.
+                return _orm_result(folders[:1] if entity is Folder else [])
+            return _orm_result([])
+        params = dict(params or {})
+        sql = stmt.text
+        if "folder_ids" in params:
+            # SQLite has no = ANY(array); json_each is the closest equivalent.
+            sql = sql.replace(
+                "= ANY(:folder_ids)",
+                "IN (SELECT value FROM json_each(:folder_ids))",
+            )
+            params["folder_ids"] = json.dumps(params["folder_ids"])
+        rows = conn.execute(sql, params).fetchall()
+        result = MagicMock()
+        result.fetchall.return_value = rows
+        result.scalar.return_value = (
+            next(iter(vars(rows[0]).values())) if rows else None
+        )
+        return result
+
+    mock_db.execute.side_effect = execute
+    return executed
+
+
+def _writes(executed):
+    return [s for s in executed if isinstance(s, (Update, Delete, Insert))]
+
+
+# Each entry: how to call the walk from a subtree root (1), and what a complete
+# answer looks like for a chain of `levels` folders.
+WALKS = {
+    "get_breadcrumbs": (
+        lambda repo, leaf: repo.get_breadcrumbs(leaf),
+        lambda res, levels: [b.id for b in res] == list(range(1, levels + 1)),
+    ),
+    "get_folder_depth": (
+        lambda repo, leaf: repo.get_folder_depth(leaf),
+        lambda res, levels: res == levels,
+    ),
+    "get_descendant_ids": (
+        lambda repo, _leaf: repo.get_descendant_ids(1),
+        lambda res, levels: sorted(res) == list(range(1, levels + 1)),
+    ),
+    "get_descendant_ids_batch": (
+        lambda repo, _leaf: repo.get_descendant_ids_batch([1]),
+        lambda res, levels: sorted(res) == list(range(1, levels + 1)),
+    ),
+    "get_subtree_depth": (
+        lambda repo, _leaf: repo.get_subtree_depth(1),
+        lambda res, levels: res == levels,
+    ),
+    "soft_delete": (
+        lambda repo, _leaf: repo.soft_delete(1, user_id=1),
+        lambda res, _levels: res is True,
+    ),
+    "move_folder_to_workspace": (
+        lambda repo, _leaf: repo.move_folder_to_workspace(1, 2),
+        lambda res, levels: res["folders_moved"] == levels,
+    ),
+    "copy_folder_to_workspace": (
+        lambda repo, _leaf: repo.copy_folder_to_workspace(1, 2, user_id=1),
+        lambda res, levels: res["folders_copied"] == levels,
+    ),
+    # copy_folders reaches the second copy walk, in _copy_subtree_under.
+    "copy_folders": (
+        lambda repo, _leaf: repo.copy_folders([1], 1, None, user_id=1),
+        lambda res, levels: res["folders_copied"] == levels,
+    ),
+}
+
+
+class TestFolderWalkDepthCeiling:
+    """Every recursive walk is bounded, and passing the bound raises."""
+
+    @pytest.fixture(autouse=True)
+    def small_ceiling(self, monkeypatch):
+        monkeypatch.setattr(
+            folder_repository_module, "FOLDER_WALK_DEPTH_CEILING", WALK_CEILING
+        )
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("walk", WALKS)
+    async def test_tree_exactly_at_the_ceiling_is_returned_whole(
+        self, walk, folder_repo, mock_db
+    ):
+        call, is_complete = WALKS[walk]
+        _route_to_sqlite(mock_db, _chain(WALK_CEILING))
+
+        res = await call(folder_repo, WALK_CEILING)
+
+        assert is_complete(res, WALK_CEILING)
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("walk", WALKS)
+    @pytest.mark.parametrize(
+        "folders", [_chain(WALK_CEILING + 1), _cycle()], ids=["deep", "cycle"]
+    )
+    async def test_walk_past_the_ceiling_raises_before_any_write(
+        self, walk, folders, folder_repo, mock_db
+    ):
+        call, _ = WALKS[walk]
+        executed = _route_to_sqlite(mock_db, folders)
+
+        with pytest.raises(FolderSubtreeTooDeepError) as exc_info:
+            await call(folder_repo, len(folders))
+
+        assert exc_info.value.status_code == 409
+        assert not _writes(executed)
+        mock_db.add.assert_not_called()
+        mock_db.commit.assert_not_called()
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("is_copy", [False, True], ids=["move", "copy"])
+    async def test_merge_folders_raises_on_a_too_deep_child_subtree(
+        self, is_copy, folder_repo, mock_db
+    ):
+        # Source 1 and target 10 collide by name; source's only child (2)
+        # has no namesake under the target, so merge_folders walks its
+        # subtree: get_descendant_ids on move, _copy_subtree_under on copy.
+        source = _folder(1)
+        target = Folder(
+            id=10,
+            workspace_id=1,
+            user_id=1,
+            user_email="a@b.com",
+            name="F1",
+            parent_id=None,
+        )
+        child = _chain(WALK_CEILING + 2)[1]
+        executed = _route_to_sqlite(
+            mock_db,
+            _chain(WALK_CEILING + 2),
+            orm_results=[
+                _orm_result([source]),
+                _orm_result([target]),
+                _orm_result([]),  # media directly in source
+                _orm_result([]),  # assets directly in source
+                _orm_result([child]),  # source children
+                _orm_result([]),  # target children
+                _orm_result([child]),  # _copy_subtree_under root read
+            ],
+        )
+
+        with pytest.raises(FolderSubtreeTooDeepError):
+            await folder_repo.merge_folders(
+                source_folder_id=1,
+                target_folder_id=10,
+                target_workspace_id=1,
+                is_copy=is_copy,
+                commit=False,
+            )
+
+        assert not _writes(executed)
+        mock_db.add.assert_not_called()
+
+    def test_too_deep_error_is_not_swallowed_by_bulk_handlers(self):
+        # GalleryService.bulk_copy and bulk_move re-raise HTTPException and
+        # log-and-skip everything else, so the error must be one.
+        assert issubclass(FolderSubtreeTooDeepError, HTTPException)
+        assert FolderSubtreeTooDeepError(1).status_code == 409
+
+    def test_ceiling_is_separate_from_the_product_depth_limit(self):
+        assert (
+            folder_repository_module.FOLDER_WALK_DEPTH_CEILING == WALK_CEILING
+        )
+        assert MAX_FOLDER_DEPTH == 20
+        assert not hasattr(folder_repository_module, "MAX_FOLDER_DEPTH")
