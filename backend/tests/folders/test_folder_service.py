@@ -34,6 +34,65 @@ from src.folders.schema.folder_model import Folder
 from src.users.user_model import UserModel, UserRoleEnum
 
 
+PARENT_NAME_INDEX = "uq_folders_workspace_parent_name_active"
+ROOT_NAME_INDEX = "uq_folders_workspace_root_name_active"
+
+
+def db_integrity_error(
+    sqlstate: str,
+    constraint_name: str | None,
+    message: str,
+    statement: str = "INSERT INTO folders ...",
+    params: tuple = (),
+) -> IntegrityError:
+    """Builds an IntegrityError shaped the way SQLAlchemy's asyncpg raises one.
+
+    ``exc.orig`` is the dialect's adapter exception, which carries only
+    ``pgcode``/``sqlstate``; the asyncpg error holding ``constraint_name`` is
+    its ``__cause__``. Building anything else (a bare ``Exception("Unique
+    violation")``, or a psycopg ``diag``) asserts a shape production never sees.
+    """
+    cause = Exception(message)
+    cause.sqlstate = sqlstate
+    cause.constraint_name = constraint_name
+    orig = Exception(f"<class 'asyncpg.exceptions.IntegrityError'>: {message}")
+    orig.pgcode = orig.sqlstate = sqlstate
+    orig.__cause__ = cause
+    return IntegrityError(statement, params, orig)
+
+
+def name_clash(constraint_name: str = ROOT_NAME_INDEX) -> IntegrityError:
+    """A clash on one of the folder name indexes."""
+    return db_integrity_error(
+        "23505",
+        constraint_name,
+        f'duplicate key value violates unique constraint "{constraint_name}"',
+    )
+
+
+def fk_violation(constraint_name: str, column: str) -> IntegrityError:
+    """A foreign key violation on the given folders column."""
+    return db_integrity_error(
+        "23503",
+        constraint_name,
+        'insert or update on table "folders" violates foreign key constraint '
+        f'"{constraint_name}"\nDETAIL: Key ({column})=(999) is not present.',
+        # The statement names every column, so wording must not come from it.
+        statement="INSERT INTO folders (workspace_id, user_id, user_email, "
+        "name, parent_id, color) VALUES (...)",
+    )
+
+
+def check_violation() -> IntegrityError:
+    """A CHECK violation, which no folder name index can explain."""
+    return db_integrity_error(
+        "23514",
+        "folders_name_check",
+        'new row for relation "folders" violates check constraint '
+        '"folders_name_check"',
+    )
+
+
 @pytest.fixture(name="mock_folder_repo")
 def fixture_mock_folder_repo():
     """Provides a mocked FolderRepository."""
@@ -191,9 +250,7 @@ class TestCreateFolder:
             workspace_id=1,
             parent_id=None,
         )
-        mock_folder_repo.db.commit.side_effect = IntegrityError(
-            "statement", {}, Exception("Unique violation")
-        )
+        mock_folder_repo.db.commit.side_effect = name_clash()
 
         with pytest.raises(HTTPException) as exc_info:
             await folder_service.create_folder(dto, sample_user)
@@ -205,21 +262,18 @@ class TestCreateFolder:
     async def test_create_folder_integrity_error_pgcode_unique(
         self, folder_service, mock_folder_repo, sample_user
     ):
+        """SQLSTATE 23505 alone is not a name clash: the index must match."""
         dto = FolderCreateDto(
             name="New Folder",
             workspace_id=1,
             parent_id=None,
         )
-        orig_exc = Exception("duplicate key")
-        orig_exc.pgcode = "23505"
-        mock_folder_repo.db.commit.side_effect = IntegrityError(
-            "statement", {}, orig_exc
-        )
+        error = name_clash("folders_pkey")
+        mock_folder_repo.db.commit.side_effect = error
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(IntegrityError) as exc_info:
             await folder_service.create_folder(dto, sample_user)
-        assert exc_info.value.status_code == status.HTTP_409_CONFLICT
-        assert "already exists" in exc_info.value.detail
+        assert exc_info.value is error
         mock_folder_repo.db.rollback.assert_called_once()
 
     @pytest.mark.anyio
@@ -231,12 +285,8 @@ class TestCreateFolder:
             workspace_id=999,
             parent_id=None,
         )
-        mock_folder_repo.db.commit.side_effect = IntegrityError(
-            "statement",
-            {},
-            Exception(
-                'Key (workspace_id)=(999) is not present in table "workspaces".'
-            ),
+        mock_folder_repo.db.commit.side_effect = fk_violation(
+            "folders_workspace_id_fkey", "workspace_id"
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -254,10 +304,8 @@ class TestCreateFolder:
             workspace_id=1,
             parent_id=None,
         )
-        mock_folder_repo.db.commit.side_effect = IntegrityError(
-            "statement",
-            {},
-            Exception('Key (user_id)=(999) is not present in table "users".'),
+        mock_folder_repo.db.commit.side_effect = fk_violation(
+            "folders_user_id_fkey", "user_id"
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -278,10 +326,8 @@ class TestCreateFolder:
         mock_folder_repo.get_folder_by_id.return_value = Folder(
             id=5, workspace_id=1, user_email="a@b.com", name="Parent"
         )
-        mock_folder_repo.db.commit.side_effect = IntegrityError(
-            "statement",
-            {},
-            Exception('Key (parent_id)=(5) is not present in table "folders".'),
+        mock_folder_repo.db.commit.side_effect = fk_violation(
+            "folders_parent_id_fkey", "parent_id"
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -299,8 +345,8 @@ class TestCreateFolder:
             workspace_id=1,
             parent_id=None,
         )
-        mock_folder_repo.db.commit.side_effect = IntegrityError(
-            "statement", {}, Exception("foreign key violation")
+        mock_folder_repo.db.commit.side_effect = fk_violation(
+            "folders_deleted_by_fkey", "deleted_by"
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -313,21 +359,18 @@ class TestCreateFolder:
     async def test_create_folder_integrity_error_other(
         self, folder_service, mock_folder_repo, sample_user
     ):
+        """An unrecognised integrity failure is a server fault, not a 400."""
         dto = FolderCreateDto(
             name="New Folder",
             workspace_id=1,
             parent_id=None,
         )
-        mock_folder_repo.db.commit.side_effect = IntegrityError(
-            "statement", {}, Exception("CHECK constraint failed")
-        )
+        error = check_violation()
+        mock_folder_repo.db.commit.side_effect = error
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(IntegrityError) as exc_info:
             await folder_service.create_folder(dto, sample_user)
-        assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
-        assert (
-            "Database integrity constraint violation" in exc_info.value.detail
-        )
+        assert exc_info.value is error
         mock_folder_repo.db.rollback.assert_called_once()
 
 
@@ -688,9 +731,7 @@ class TestUpdateFolder:
             id=1, workspace_id=1, user_email="a@b.com", name="Old Name"
         )
         mock_folder_repo.get_folder_by_id.return_value = folder
-        mock_folder_repo.db.commit.side_effect = IntegrityError(
-            "statement", {}, Exception("Unique violation")
-        )
+        mock_folder_repo.db.commit.side_effect = name_clash(PARENT_NAME_INDEX)
 
         dto = FolderUpdateDto(name="New Name")
         with pytest.raises(HTTPException) as exc_info:
@@ -707,10 +748,8 @@ class TestUpdateFolder:
             id=1, workspace_id=1, user_email="a@b.com", name="Old Name"
         )
         mock_folder_repo.get_folder_by_id.return_value = folder
-        mock_folder_repo.db.commit.side_effect = IntegrityError(
-            "statement",
-            {},
-            Exception('Key (parent_id)=(5) is not present in table "folders".'),
+        mock_folder_repo.db.commit.side_effect = fk_violation(
+            "folders_parent_id_fkey", "parent_id"
         )
 
         dto = FolderUpdateDto(name="New Name")
@@ -728,17 +767,13 @@ class TestUpdateFolder:
             id=1, workspace_id=1, user_email="a@b.com", name="Old Name"
         )
         mock_folder_repo.get_folder_by_id.return_value = folder
-        mock_folder_repo.db.commit.side_effect = IntegrityError(
-            "statement", {}, Exception("CHECK constraint failed")
-        )
+        error = check_violation()
+        mock_folder_repo.db.commit.side_effect = error
 
         dto = FolderUpdateDto(name="New Name")
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(IntegrityError) as exc_info:
             await folder_service.update_folder(1, dto, sample_user)
-        assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
-        assert (
-            "Database integrity constraint violation" in exc_info.value.detail
-        )
+        assert exc_info.value is error
         mock_folder_repo.db.rollback.assert_called_once()
 
 
@@ -1168,8 +1203,8 @@ class TestMoveItems:
         ]
         mock_folder_repo.move_media_items.return_value = 1
         mock_folder_repo.move_source_assets.return_value = 1
-        mock_folder_repo.move_folders.side_effect = IntegrityError(
-            "statement", {}, Exception("Unique violation")
+        mock_folder_repo.move_folders.side_effect = name_clash(
+            PARENT_NAME_INDEX
         )
 
         dto = MoveItemsDto(
@@ -1550,3 +1585,97 @@ class TestCopyItems:
             user_id=10,
             user_email="test@example.com",
         )
+
+
+class TestIntegrityErrorClassification:
+    """Only exact folder name indexes are 409s; unknown faults propagate."""
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "constraint_name", [PARENT_NAME_INDEX, ROOT_NAME_INDEX]
+    )
+    async def test_each_folder_name_index_maps_to_409(
+        self, folder_service, mock_folder_repo, sample_user, constraint_name
+    ):
+        dto = FolderCreateDto(name="Drafts", workspace_id=1, parent_id=None)
+        mock_folder_repo.db.commit.side_effect = name_clash(constraint_name)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.create_folder(dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_409_CONFLICT
+
+    @pytest.mark.anyio
+    async def test_uq_in_the_message_of_another_violation_is_not_409(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """A folder named 'uq_drafts' is in the bound parameters of str(e).
+
+        Substring matching on "uq_" would call this NOT NULL failure a name
+        clash, and the client would rename and retry a write that can never
+        succeed.
+        """
+        dto = FolderCreateDto(name="uq_drafts", workspace_id=1, parent_id=None)
+        error = db_integrity_error(
+            "23502",
+            None,
+            'null value in column "user_email" of relation "folders" violates '
+            "not-null constraint",
+            params=(1, 10, None, "uq_drafts", None, None),
+        )
+        assert "uq_drafts" in str(error)
+        mock_folder_repo.db.commit.side_effect = error
+
+        with pytest.raises(IntegrityError) as exc_info:
+            await folder_service.create_folder(dto, sample_user)
+        assert exc_info.value is error
+        mock_folder_repo.db.rollback.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_foreign_key_violation_maps_to_404(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """Wording comes from the constraint, not the INSERT's column list."""
+        dto = FolderCreateDto(name="Drafts", workspace_id=1, parent_id=5)
+        mock_folder_repo.get_folder_by_id.return_value = Folder(
+            id=5, workspace_id=1, user_email="a@b.com", name="Parent"
+        )
+        mock_folder_repo.db.commit.side_effect = fk_violation(
+            "folders_parent_id_fkey", "parent_id"
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await folder_service.create_folder(dto, sample_user)
+        assert exc_info.value.status_code == status.HTTP_404_NOT_FOUND
+        assert "parent folder does not exist" in exc_info.value.detail
+
+    @pytest.mark.anyio
+    async def test_unrecognised_error_is_reraised_from_update(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        folder = Folder(id=1, workspace_id=1, user_email="a@b.com", name="Old")
+        error = check_violation()
+        mock_folder_repo.db.commit.side_effect = error
+
+        with pytest.raises(IntegrityError) as exc_info:
+            await folder_service.update_folder(
+                1, FolderUpdateDto(name="New"), sample_user, folder=folder
+            )
+        assert exc_info.value is error
+        mock_folder_repo.db.rollback.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_move_items_reraises_non_name_integrity_error(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        """move_items used to turn every IntegrityError into a 409."""
+        error = check_violation()
+        mock_folder_repo.move_media_items.side_effect = error
+        dto = MoveItemsDto(
+            workspace_id=1, media_item_ids=[1], destination_folder_id=None
+        )
+
+        with pytest.raises(IntegrityError) as exc_info:
+            await folder_service.move_items(dto, sample_user)
+        assert exc_info.value is error
+        mock_folder_repo.db.rollback.assert_called_once()
+        mock_folder_repo.db.commit.assert_not_called()

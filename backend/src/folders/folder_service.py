@@ -18,6 +18,7 @@ import logging
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 
+from src.common.db_errors import constraint_name_of
 from src.folders.dto.folder_dto import (
     ConflictStrategyEnum,
     FolderBreadcrumbDto,
@@ -36,6 +37,16 @@ logger = logging.getLogger(__name__)
 
 MAX_FOLDER_DEPTH: int = 20
 
+# The partial unique indexes that guard folder names (created by the
+# e5f6a7b8c9d0_enforce_unique_folder_names migration). Only these two mean
+# "name already taken"; any other integrity failure is a genuine fault.
+FOLDER_NAME_CONSTRAINTS = frozenset(
+    {
+        "uq_folders_workspace_parent_name_active",
+        "uq_folders_workspace_root_name_active",
+    }
+)
+
 
 class FolderService:
     """Service layer handling validation, hierarchy integrity, and business logic for folders."""
@@ -48,9 +59,11 @@ class FolderService:
     ) -> None:
         """Inspects an IntegrityError and raises an appropriate HTTPException.
 
-        Differentiates between unique constraint violations (e.g. name collisions),
-        foreign key constraint violations (e.g. non-existent workspace, user, parent),
-        and other database integrity errors.
+        Only a foreign key violation (SQLSTATE 23503) maps to a 404, and only
+        a clash on one of the FOLDER_NAME_CONSTRAINTS maps to a 409. Anything
+        else (a NOT NULL or CHECK violation, an unknown index) is re-raised so
+        it surfaces as a server error rather than as a client mistake, and a
+        client is never told to rename and retry a write that cannot succeed.
         """
         await self.folder_repo.db.rollback()
         logger.warning(
@@ -65,41 +78,21 @@ class FolderService:
             or getattr(orig, "sqlstate", None)
             or getattr(e, "pgcode", None)
         )
-
-        error_parts = [
-            str(e),
-            str(orig) if orig is not None else "",
-            str(getattr(orig, "detail", "") or ""),
-            str(getattr(orig, "constraint_name", "") or ""),
-        ]
-        diag = getattr(orig, "diag", None)
-        if diag is not None:
-            error_parts.append(str(getattr(diag, "constraint_name", "") or ""))
-            error_parts.append(str(getattr(diag, "message_detail", "") or ""))
-
-        combined_msg = " ".join(error_parts).lower()
-
-        is_fk = (
-            pgcode == "23503"
-            or "foreign key" in combined_msg
-            or "foreignkey" in combined_msg
-            or "is not present in table" in combined_msg
-            or "violates foreign key constraint" in combined_msg
-        )
-        is_unique = (
-            pgcode == "23505"
-            or "unique" in combined_msg
-            or "duplicate key" in combined_msg
-            or "uq_" in combined_msg
-        )
+        # Read from the driver error, not from str(e): str(e) also carries the
+        # SQL statement, and an INSERT's column list names workspace_id and
+        # parent_id whichever constraint actually failed.
+        constraint = constraint_name_of(e)
 
         # 1. Foreign Key Constraint Violation
-        if pgcode == "23503" or (is_fk and not is_unique):
-            if "workspace" in combined_msg:
+        if pgcode == "23503":
+            # The constraint name only picks the wording; the SQLSTATE above
+            # is what classifies the error.
+            fk_name = (constraint or "").lower()
+            if "workspace" in fk_name:
                 detail = "The specified workspace does not exist."
-            elif "user" in combined_msg:
+            elif "user" in fk_name:
                 detail = "The specified user does not exist."
-            elif "parent" in combined_msg:
+            elif "parent" in fk_name:
                 detail = "The specified parent folder does not exist."
             else:
                 detail = "Referenced entity (workspace, user, or parent folder) does not exist."
@@ -109,17 +102,14 @@ class FolderService:
             ) from e
 
         # 2. Unique Constraint Violation
-        if pgcode == "23505" or is_unique:
+        if constraint in FOLDER_NAME_CONSTRAINTS:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"A folder named '{folder_name}' already exists in this location.",
             ) from e
 
-        # 3. Other Database Integrity Errors (e.g. check constraints, not-null constraints)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Database integrity constraint violation.",
-        ) from e
+        # 3. Anything else is a real fault, not a client error.
+        raise e
 
     async def create_folder(
         self, dto: FolderCreateDto, user: UserModel
@@ -537,6 +527,10 @@ class FolderService:
             await self.folder_repo.db.commit()
         except IntegrityError as e:
             await self.folder_repo.db.rollback()
+            # As in _handle_integrity_error, only a folder name clash is a
+            # conflict; any other integrity failure is re-raised.
+            if constraint_name_of(e) not in FOLDER_NAME_CONSTRAINTS:
+                raise
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A database conflict occurred while moving items.",
