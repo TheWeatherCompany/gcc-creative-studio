@@ -720,6 +720,28 @@ class GalleryService:
             temp_file.close()
             raise e
 
+    async def _lock_folder_workspaces(
+        self, folder_ids: list[int], target_workspace_id: int
+    ) -> dict:
+        """Locks the structure of every workspace a bulk folder request spans.
+
+        The source workspaces are only known from a first, unlocked read, so
+        this locks them and the target (in ascending order, before any row
+        lock) and then reads the folders again. The lock is held to the
+        single commit at the end of bulk_copy and bulk_move. A folder that a
+        concurrent request moved to a workspace outside that set is left out
+        of the map, so the caller treats it as not found.
+        """
+        if not folder_ids:
+            return {}
+        folders = await self.folder_repo.get_folders_by_ids(folder_ids)
+        locked = {target_workspace_id} | {f.workspace_id for f in folders}
+        await self.folder_repo.lock_workspace_structure(*locked)
+        folders = await self.folder_repo.get_folders_by_ids(
+            folder_ids, populate_existing=True
+        )
+        return {f.id: f for f in folders if f.workspace_id in locked}
+
     async def bulk_copy(
         self,
         bulk_copy_dto: BulkCopyDto,
@@ -735,10 +757,9 @@ class GalleryService:
         folder_ids = [
             it.id for it in bulk_copy_dto.items if it.type == "folder"
         ]
-        folder_map = {}
-        if folder_ids:
-            folders = await self.folder_repo.get_folders_by_ids(folder_ids)
-            folder_map = {f.id: f for f in folders}
+        folder_map = await self._lock_folder_workspaces(
+            folder_ids, bulk_copy_dto.target_workspace_id
+        )
 
         if folder_ids and bulk_copy_dto.conflict_strategy is None:
             existing_map = await self.folder_repo.get_existing_folders_map(
@@ -932,10 +953,9 @@ class GalleryService:
         folder_ids = [
             it.id for it in bulk_move_dto.items if it.type == "folder"
         ]
-        folder_map = {}
-        if folder_ids:
-            folders = await self.folder_repo.get_folders_by_ids(folder_ids)
-            folder_map = {f.id: f for f in folders}
+        folder_map = await self._lock_folder_workspaces(
+            folder_ids, bulk_move_dto.target_workspace_id
+        )
 
         if folder_ids and bulk_move_dto.conflict_strategy is None:
             existing_map = await self.folder_repo.get_existing_folders_map(

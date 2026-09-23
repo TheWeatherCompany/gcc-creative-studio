@@ -42,6 +42,14 @@ logger = logging.getLogger(__name__)
 # ceiling, and reaching that level raises rather than returning a prefix.
 FOLDER_WALK_DEPTH_CEILING = 100
 
+# First key of the transaction-scoped advisory lock that serializes changes to
+# folder structure within a workspace; the second key is the workspace id. The
+# only other advisory lock in the codebase is the migration lock
+# (database_migrations.MIGRATION_LOCK_ID), which takes the single bigint key
+# form, and PostgreSQL keeps that key space apart from this two int4 key form.
+# The value is "Fold" in ASCII.
+FOLDER_STRUCTURE_LOCK_NAMESPACE = 0x466F6C64
+
 
 class FolderSubtreeTooDeepError(HTTPException):
     """Raised when a recursive folder walk passes FOLDER_WALK_DEPTH_CEILING.
@@ -109,6 +117,41 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
 
     def __init__(self, db: AsyncSession = Depends(get_db)):
         super().__init__(model=Folder, schema=FolderModel, db=db)
+
+    async def lock_workspace_structure(self, *workspace_ids: int) -> None:
+        """Serializes folder structure changes in the given workspaces.
+
+        Takes pg_advisory_xact_lock once per distinct workspace, in ascending
+        id order, so two requests that need an overlapping set always queue
+        in the same order and cannot deadlock on these locks. PostgreSQL
+        releases them at commit or rollback, so they must be taken in the
+        transaction that commits the change, before any row lock, and never
+        inside a savepoint that can roll back without it.
+
+        Without this, two reparents lock only their own destinations: each
+        cycle check passes against the other's pre-commit tree and both
+        commit a cycle. A reparent racing a cross-workspace move likewise
+        lands a parent from the old workspace. Callers must re-read what they
+        validate after this returns, since the wait may have been behind a
+        request that changed it.
+
+        A no-op on any dialect but PostgreSQL: the unit tests run on mocks and
+        on SQLite, neither of which has advisory locks.
+        """
+        bind = getattr(self.db, "bind", None)
+        if bind is None or bind.dialect.name != "postgresql":
+            return
+        for workspace_id in sorted(set(workspace_ids)):
+            await self.db.execute(
+                text(
+                    "SELECT pg_advisory_xact_lock("
+                    "CAST(:namespace AS integer), CAST(:workspace_id AS integer))"
+                ),
+                {
+                    "namespace": FOLDER_STRUCTURE_LOCK_NAMESPACE,
+                    "workspace_id": workspace_id,
+                },
+            )
 
     async def is_folder_name_taken(
         self,
@@ -237,11 +280,18 @@ class FolderRepository(BaseRepository[Folder, FolderModel]):
         folder_ids: list[int],
         workspace_id: int | None = None,
         include_deleted: bool = False,
+        populate_existing: bool = False,
     ) -> list[Folder]:
-        """Fetch multiple active folders by IDs, optionally scoped to a workspace."""
+        """Fetch multiple active folders by IDs, optionally scoped to a workspace.
+
+        populate_existing overwrites copies already in the identity map, for a
+        re-read after lock_workspace_structure.
+        """
         if not folder_ids:
             return []
         query = select(self.model).where(self.model.id.in_(folder_ids))
+        if populate_existing:
+            query = query.execution_options(populate_existing=True)
         if not include_deleted:
             query = query.where(self.model.deleted_at.is_(None))
         if workspace_id is not None:

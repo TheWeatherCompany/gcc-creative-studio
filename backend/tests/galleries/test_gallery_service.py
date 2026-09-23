@@ -35,6 +35,7 @@ from src.common.schema.media_item_model import (
 )
 from src.folders.dto.folder_dto import ConflictStrategyEnum
 from src.galleries.dto import bulk_move_dto as move_dto
+from src.galleries.dto import bulk_copy_dto as copy_dto
 from src.galleries.dto.gallery_search_dto import GallerySearchDto
 from src.galleries.dto.unified_gallery_response import (
     UnifiedGalleryItemResponse,
@@ -1560,3 +1561,114 @@ async def test_bulk_move_authorization_error_is_not_a_per_item_failure(
 
     assert exc_info.value.status_code == 403
     service.mock_db.commit.assert_not_called()
+
+
+def _record_structure_lock(service, operation):
+    """Records, in order, the lock, each item savepoint and the folder write.
+
+    operation is "move" or "copy", naming the folder write to record.
+
+    The folder read before the lock says workspace 3; the re-read after it
+    returns whatever `reread` holds, so a test can move a folder while the
+    request waited.
+    """
+    order = []
+    repo = service.mock_folder_repo
+    before = [SimpleNamespace(id=1, workspace_id=3, name="F")]
+    reread = {"folders": before}
+
+    async def get_folders_by_ids(folder_ids, **kwargs):
+        del folder_ids
+        if kwargs.get("populate_existing"):
+            order.append("reread")
+            return reread["folders"]
+        order.append("read")
+        return before
+
+    async def lock(*workspace_ids):
+        order.append(("lock", sorted(workspace_ids)))
+
+    async def write(**_):
+        order.append("write")
+        return {}
+
+    real_nested = service.mock_db.begin_nested.side_effect
+
+    def nested():
+        order.append("savepoint")
+        return real_nested()
+
+    repo.get_folders_by_ids.side_effect = get_folders_by_ids
+    repo.lock_workspace_structure.side_effect = lock
+    getattr(repo, f"{operation}_folder_to_workspace").side_effect = write
+    service.mock_db.begin_nested.side_effect = nested
+    return order, reread
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["move", "copy"])
+async def test_bulk_folder_request_locks_both_workspaces_first(
+    service, operation
+):
+    """Source (3) and target (1) are locked together, after the unlocked
+    read that finds the source and before the re-read and any savepoint."""
+    order, _ = _record_structure_lock(service, operation)
+    if operation == "move":
+        await service.bulk_move(
+            move_dto.BulkMoveDto(
+                target_workspace_id=1,
+                items=[move_dto.BulkMoveItemDto(id=1, type="folder")],
+            ),
+            _move_user(),
+        )
+    else:
+        await service.bulk_copy(
+            copy_dto.BulkCopyDto(
+                target_workspace_id=1,
+                items=[copy_dto.BulkCopyItemDto(id=1, type="folder")],
+            ),
+            _move_user(),
+        )
+
+    assert order == ["read", ("lock", [1, 3]), "reread", "savepoint", "write"]
+
+
+@pytest.mark.anyio
+async def test_bulk_move_skips_a_folder_that_left_the_locked_workspaces(
+    service,
+):
+    order, reread = _record_structure_lock(service, "move")
+    reread["folders"] = [SimpleNamespace(id=1, workspace_id=9, name="F")]
+
+    result = await service.bulk_move(
+        move_dto.BulkMoveDto(
+            target_workspace_id=1,
+            items=[move_dto.BulkMoveItemDto(id=1, type="folder")],
+        ),
+        _move_user(),
+    )
+
+    assert "write" not in order
+    assert [(f.id, f.reason) for f in result["failed"]] == [
+        (1, move_dto.BulkMoveFailureReason.NOT_FOUND)
+    ]
+    # Only the target was authorized: the moved folder was never touched.
+    authorized = service.mock_workspace_auth.authorize.await_args_list
+    assert [c.kwargs["workspace_id"] for c in authorized] == [1]
+
+
+@pytest.mark.anyio
+async def test_bulk_move_without_folders_takes_no_structure_lock(service):
+    service.mock_media_repo.get_by_id.return_value = SimpleNamespace(
+        id=1, workspace_id=2
+    )
+
+    await service.bulk_move(
+        move_dto.BulkMoveDto(
+            target_workspace_id=1,
+            items=[move_dto.BulkMoveItemDto(id=1, type="media_item")],
+        ),
+        _move_user(),
+    )
+
+    service.mock_folder_repo.lock_workspace_structure.assert_not_called()

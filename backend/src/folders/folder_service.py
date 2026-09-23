@@ -111,6 +111,23 @@ class FolderService:
         # 3. Anything else is a real fault, not a client error.
         raise e
 
+    async def _lock_and_reload(self, folder: Folder) -> None:
+        """Locks the folder's workspace structure, then re-reads the folder.
+
+        The caller authorized against the workspace the folder was in when
+        first read. If a move took it elsewhere while this request waited for
+        the lock, it is no longer in a workspace this request locked or
+        authorized, so it reads as not found.
+        """
+        workspace_id = folder.workspace_id
+        await self.folder_repo.lock_workspace_structure(workspace_id)
+        await self.folder_repo.db.refresh(folder)
+        if folder.deleted_at is not None or folder.workspace_id != workspace_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Folder with ID {folder.id} not found in this workspace.",
+            )
+
     async def create_folder(
         self, dto: FolderCreateDto, user: UserModel
     ) -> FolderResponseDto:
@@ -122,6 +139,7 @@ class FolderService:
                 detail="Folder name cannot be empty.",
             )
 
+        await self.folder_repo.lock_workspace_structure(dto.workspace_id)
         if dto.parent_id is not None:
             # Locked read: see move_items.
             parent = await self.folder_repo.get_folder_for_update(dto.parent_id)
@@ -283,6 +301,7 @@ class FolderService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Folder with ID {folder_id} not found.",
                 )
+        await self._lock_and_reload(folder)
 
         is_moving = False
         new_parent_id = folder.parent_id
@@ -405,6 +424,7 @@ class FolderService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Folder with ID {folder_id} not found.",
                 )
+        await self._lock_and_reload(folder)
 
         success = await self.folder_repo.soft_delete(
             folder_id=folder.id, user_id=user.id
@@ -415,6 +435,9 @@ class FolderService:
         self, dto: MoveItemsDto, user: UserModel
     ) -> dict[str, int]:
         """Batch moves media items, source assets, and folders to a destination folder."""
+        # Every check below, including the cycle check, reads the tree after
+        # this lock, so it sees whatever a request it waited behind committed.
+        await self.folder_repo.lock_workspace_structure(dto.workspace_id)
         dest_folder_id = dto.destination_folder_id
         dest_depth = 0
         if dest_folder_id is not None:
@@ -558,6 +581,7 @@ class FolderService:
         self, dto: CopyItemsDto, user: UserModel
     ) -> dict[str, int]:
         """Batch copies media items, source assets, and folders to a destination folder."""
+        await self.folder_repo.lock_workspace_structure(dto.workspace_id)
         dest_folder_id = dto.destination_folder_id
         dest_depth = 0
         if dest_folder_id is not None:

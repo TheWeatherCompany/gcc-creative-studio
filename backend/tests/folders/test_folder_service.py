@@ -1839,3 +1839,175 @@ class TestDestinationRowLock:
         assert exc_info.value.status_code == status.HTTP_404_NOT_FOUND
         mock_folder_repo.get_folder_for_update.assert_awaited_once_with(5)
         mock_folder_repo.db.commit.assert_not_called()
+
+
+def calls_around_structure_lock(mock_folder_repo):
+    """Returns (names before the lock, the lock's args, names after it)."""
+    calls = mock_folder_repo.mock_calls
+    names = [c[0] for c in calls]
+    at = names.index("lock_workspace_structure")
+    assert names.count("lock_workspace_structure") == 1
+    return names[:at], calls[at].args, names[at + 1 :]
+
+
+class TestWorkspaceStructureLock:
+    """Every structure change takes the workspace lock before any row lock
+    or write, then validates against what it reads after the lock."""
+
+    @staticmethod
+    def folders(mock_folder_repo, *folders):
+        by_id = {f.id: f for f in folders}
+
+        async def get(folder_id, **_):
+            return by_id.get(folder_id)
+
+        mock_folder_repo.get_folder_by_id.side_effect = get
+
+    @pytest.mark.anyio
+    async def test_create_folder(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        self.folders(
+            mock_folder_repo,
+            Folder(id=5, workspace_id=3, user_email="a@b.com", name="P"),
+        )
+        dto = FolderCreateDto(name="Child", workspace_id=3, parent_id=5)
+
+        async def refresh(obj):
+            obj.id = 10
+
+        mock_folder_repo.db.refresh.side_effect = refresh
+        await folder_service.create_folder(dto, sample_user)
+
+        before, args, after = calls_around_structure_lock(mock_folder_repo)
+        assert before == []
+        assert args == (3,)
+        assert after.index("get_folder_for_update") < after.index("db.add")
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("preloaded", [True, False])
+    async def test_update_folder(
+        self, folder_service, mock_folder_repo, sample_user, preloaded
+    ):
+        folder = Folder(id=1, workspace_id=7, user_email="a@b.com", name="F")
+        self.folders(
+            mock_folder_repo,
+            folder,
+            Folder(id=5, workspace_id=7, user_email="a@b.com", name="D"),
+        )
+        mock_folder_repo.get_descendant_ids.return_value = [1]
+        mock_folder_repo.get_unique_folder_name.return_value = "F"
+
+        await folder_service.update_folder(
+            1,
+            FolderUpdateDto(parent_id=5),
+            sample_user,
+            folder=folder if preloaded else None,
+        )
+
+        before, args, after = calls_around_structure_lock(mock_folder_repo)
+        assert before == ([] if preloaded else ["get_folder_by_id"])
+        assert args == (7,)
+        # Re-read first, then the locked destination, the cycle check and
+        # the write.
+        assert after[0] == "db.refresh"
+        assert (
+            after.index("get_folder_for_update")
+            < after.index("get_descendant_ids")
+            < after.index("db.commit")
+        )
+
+    @pytest.mark.anyio
+    async def test_delete_folder(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        folder = Folder(id=1, workspace_id=7, user_email="a@b.com", name="F")
+
+        await folder_service.delete_folder(1, sample_user, folder=folder)
+
+        before, args, after = calls_around_structure_lock(mock_folder_repo)
+        assert before == []
+        assert args == (7,)
+        assert after == ["db.refresh", "soft_delete"]
+
+    @pytest.mark.anyio
+    async def test_move_items(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        self.folders(
+            mock_folder_repo,
+            Folder(id=5, workspace_id=3, user_email="a@b.com", name="D"),
+        )
+        mock_folder_repo.get_folders_by_ids.return_value = [
+            Folder(id=1, workspace_id=3, user_email="a@b.com", name="F")
+        ]
+        dto = MoveItemsDto(
+            workspace_id=3,
+            media_item_ids=[9],
+            folder_ids=[1],
+            destination_folder_id=5,
+        )
+
+        await folder_service.move_items(dto, sample_user)
+
+        before, args, after = calls_around_structure_lock(mock_folder_repo)
+        assert before == []
+        assert args == (3,)
+        assert (
+            after.index("get_folder_for_update")
+            < after.index("get_descendant_ids_batch")
+            < after.index("move_media_items")
+        )
+
+    @pytest.mark.anyio
+    async def test_copy_items(
+        self, folder_service, mock_folder_repo, sample_user
+    ):
+        self.folders(
+            mock_folder_repo,
+            Folder(id=5, workspace_id=3, user_email="a@b.com", name="D"),
+        )
+        dto = CopyItemsDto(
+            workspace_id=3, media_item_ids=[9], destination_folder_id=5
+        )
+
+        await folder_service.copy_items(dto, sample_user)
+
+        before, args, after = calls_around_structure_lock(mock_folder_repo)
+        assert before == []
+        assert args == (3,)
+        assert after.index("get_folder_for_update") < after.index("copy_items")
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"workspace_id": 8},  # moved to another workspace while waiting
+            {"deleted_at": "2026-01-01"},  # trashed while waiting
+        ],
+    )
+    @pytest.mark.parametrize("operation", ["update", "delete"])
+    async def test_folder_changed_while_waiting_is_not_found(
+        self, folder_service, mock_folder_repo, sample_user, change, operation
+    ):
+        folder = Folder(id=1, workspace_id=7, user_email="a@b.com", name="F")
+
+        async def refresh(obj):
+            for key, value in change.items():
+                setattr(obj, key, value)
+
+        mock_folder_repo.db.refresh.side_effect = refresh
+
+        with pytest.raises(HTTPException) as exc_info:
+            if operation == "update":
+                await folder_service.update_folder(
+                    1, FolderUpdateDto(parent_id=5), sample_user, folder=folder
+                )
+            else:
+                await folder_service.delete_folder(
+                    1, sample_user, folder=folder
+                )
+        assert exc_info.value.status_code == status.HTTP_404_NOT_FOUND
+        mock_folder_repo.get_folder_for_update.assert_not_called()
+        mock_folder_repo.soft_delete.assert_not_called()
+        mock_folder_repo.db.commit.assert_not_called()
