@@ -37,7 +37,13 @@ from src.common.storage_service import GcsService
 from src.galleries.dto.bulk_copy_dto import BulkCopyDto
 from src.galleries.dto.bulk_delete_dto import BulkDeleteDto
 from src.galleries.dto.bulk_download_dto import BulkDownloadDto
-from src.galleries.dto.bulk_move_dto import BulkMoveDto
+from src.galleries.dto.bulk_move_dto import (
+    BulkMoveDto,
+    BulkMoveFailureDto,
+    BulkMoveFailureReason,
+    BulkMoveItemDto,
+    BulkMoveResultDto,
+)
 from src.galleries.dto.gallery_response_dto import (
     MediaItemResponse,
     SourceAssetLinkResponse,
@@ -67,6 +73,12 @@ from src.folders.dto.folder_dto import ConflictStrategyEnum
 from src.folders.repository.folder_repository import FolderRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _move_failure(
+    item: BulkMoveItemDto, reason: BulkMoveFailureReason
+) -> BulkMoveFailureDto:
+    return BulkMoveFailureDto(id=item.id, type=item.type, reason=reason)
 
 
 class GalleryService:
@@ -898,7 +910,12 @@ class GalleryService:
         bulk_move_dto: BulkMoveDto,
         current_user: UserModel,
     ) -> dict:
-        """Moves multiple gallery items to a target workspace."""
+        """Moves multiple gallery items to a target workspace.
+
+        Returns upstream's moved_count plus moved and failed, so a partial
+        failure says which items did not move and why (see
+        BulkMoveResponseDto). An HTTPException still aborts the request.
+        """
         # 1. Authorize target workspace access
         await self.workspace_auth.authorize(
             workspace_id=bulk_move_dto.target_workspace_id,
@@ -941,12 +958,19 @@ class GalleryService:
                 )
 
         moved_count = 0
+        moved: list[BulkMoveResultDto] = []
+        failed: list[BulkMoveFailureDto] = []
         for item in bulk_move_dto.items:
             try:
                 async with self.db.begin_nested():
                     if item.type == "media_item":
                         media_item = await self.media_repo.get_by_id(item.id)
                         if not media_item:
+                            failed.append(
+                                _move_failure(
+                                    item, BulkMoveFailureReason.NOT_FOUND
+                                )
+                            )
                             continue
 
                         # Authorize source workspace access (where the item is currently)
@@ -978,6 +1002,11 @@ class GalleryService:
                     elif item.type == "source_asset":
                         asset = await self.source_asset_repo.get_by_id(item.id)
                         if not asset:
+                            failed.append(
+                                _move_failure(
+                                    item, BulkMoveFailureReason.NOT_FOUND
+                                )
+                            )
                             continue
 
                         # Authorize source workspace access
@@ -1009,6 +1038,11 @@ class GalleryService:
                     elif item.type == "folder":
                         folder = folder_map.get(item.id)
                         if not folder:
+                            failed.append(
+                                _move_failure(
+                                    item, BulkMoveFailureReason.NOT_FOUND
+                                )
+                            )
                             continue
 
                         # Authorize source workspace access
@@ -1021,6 +1055,12 @@ class GalleryService:
                             folder.workspace_id
                             == bulk_move_dto.target_workspace_id
                         ):
+                            failed.append(
+                                _move_failure(
+                                    item,
+                                    BulkMoveFailureReason.ALREADY_IN_TARGET,
+                                )
+                            )
                             continue
 
                         move_results = await self.folder_repo.move_folder_to_workspace(
@@ -1037,12 +1077,28 @@ class GalleryService:
                             + move_results.get("assets_moved", 0)
                         )
 
+                    else:
+                        failed.append(
+                            _move_failure(
+                                item, BulkMoveFailureReason.UNSUPPORTED_TYPE
+                            )
+                        )
+                        continue
+
+                # Recorded only once the savepoint has released, since its
+                # flush can still fail. A folder appears once, however many
+                # rows it added to moved_count.
+                moved.append(BulkMoveResultDto(id=item.id, type=item.type))
+
             except HTTPException:
                 raise
             except Exception as e:
                 logger.error(f"Error moving {item.type} {item.id}: {e}")
+                failed.append(
+                    _move_failure(item, BulkMoveFailureReason.MOVE_FAILED)
+                )
 
         await self.db.commit()
-        return {"moved_count": moved_count}
+        return {"moved_count": moved_count, "moved": moved, "failed": failed}
 
     bulk_move_items = bulk_move

@@ -16,6 +16,7 @@
 
 from contextlib import asynccontextmanager
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -33,6 +34,7 @@ from src.common.schema.media_item_model import (
     SourceAssetLink,
 )
 from src.folders.dto.folder_dto import ConflictStrategyEnum
+from src.galleries.dto import bulk_move_dto as move_dto
 from src.galleries.dto.gallery_search_dto import GallerySearchDto
 from src.galleries.dto.unified_gallery_response import (
     UnifiedGalleryItemResponse,
@@ -1364,3 +1366,195 @@ async def test_bulk_move_reraises_http_exception(service):
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "Forbidden"
+
+
+def _move_user():
+    return UserModel(
+        id=1,
+        email="user@test.com",
+        name="User",
+        roles=[UserRoleEnum.USER],
+    )
+
+
+@pytest.mark.anyio
+async def test_bulk_move_reports_failed_item_with_reason_code(service, caplog):
+    bulk_dto = move_dto.BulkMoveDto(
+        target_workspace_id=88,
+        items=[
+            move_dto.BulkMoveItemDto(id=1, type="media_item"),
+            move_dto.BulkMoveItemDto(id=2, type="media_item"),
+        ],
+    )
+    service.mock_media_repo.get_by_id.side_effect = [
+        SimpleNamespace(id=1, workspace_id=99),
+        SimpleNamespace(id=2, workspace_id=99),
+    ]
+    raw = 'duplicate key violates "media_items_pkey" (id)=(1)'
+    service.mock_db.execute.side_effect = [Exception(raw), MagicMock()]
+
+    with caplog.at_level("ERROR"):
+        result = await service.bulk_move(bulk_dto, _move_user())
+
+    assert result["moved_count"] == 1
+    assert result["moved"] == [
+        move_dto.BulkMoveResultDto(id=2, type="media_item")
+    ]
+    assert result["failed"] == [
+        move_dto.BulkMoveFailureDto(
+            id=1,
+            type="media_item",
+            reason=move_dto.BulkMoveFailureReason.MOVE_FAILED,
+        )
+    ]
+    # The detail stays in the server log and never reaches the client.
+    assert raw in caplog.text
+    wire = move_dto.BulkMoveResponseDto.model_validate(result).model_dump_json()
+    assert "media_items_pkey" not in wire
+    assert "duplicate key" not in wire
+
+
+@pytest.mark.anyio
+async def test_bulk_move_folder_counts_rows_but_lists_folder_once(service):
+    bulk_dto = move_dto.BulkMoveDto(
+        target_workspace_id=88,
+        items=[
+            move_dto.BulkMoveItemDto(id=10, type="folder"),
+            move_dto.BulkMoveItemDto(id=1, type="media_item"),
+        ],
+    )
+    service.mock_folder_repo.get_folders_by_ids.return_value = [
+        SimpleNamespace(id=10, workspace_id=99, name="Campaigns")
+    ]
+    service.mock_folder_repo.get_existing_folders_map.return_value = {}
+    service.mock_folder_repo.move_folder_to_workspace.return_value = {
+        "folders_moved": 2,
+        "media_moved": 3,
+        "assets_moved": 1,
+    }
+    service.mock_media_repo.get_by_id.return_value = SimpleNamespace(
+        id=1, workspace_id=99
+    )
+
+    result = await service.bulk_move(bulk_dto, _move_user())
+
+    # Upstream's row count: 2 + 3 + 1 for the folder, 1 for the media item.
+    assert result["moved_count"] == 7
+    assert result["moved"] == [
+        move_dto.BulkMoveResultDto(id=10, type="folder"),
+        move_dto.BulkMoveResultDto(id=1, type="media_item"),
+    ]
+    assert result["failed"] == []
+
+
+@pytest.mark.anyio
+async def test_bulk_move_reports_items_upstream_skipped(service):
+    bulk_dto = move_dto.BulkMoveDto(
+        target_workspace_id=88,
+        items=[
+            move_dto.BulkMoveItemDto(id=1, type="media_item"),
+            move_dto.BulkMoveItemDto(id=5, type="source_asset"),
+            move_dto.BulkMoveItemDto(id=10, type="folder"),
+            move_dto.BulkMoveItemDto(id=11, type="folder"),
+            move_dto.BulkMoveItemDto(id=7, type="workflow"),
+        ],
+        conflict_strategy=ConflictStrategyEnum.KEEP_BOTH,
+    )
+    service.mock_media_repo.get_by_id.return_value = None
+    service.mock_source_asset_repo.get_by_id.return_value = None
+    service.mock_folder_repo.get_folders_by_ids.return_value = [
+        SimpleNamespace(id=10, workspace_id=88, name="Already here")
+    ]
+
+    result = await service.bulk_move(bulk_dto, _move_user())
+
+    assert result["moved_count"] == 0
+    assert result["moved"] == []
+    assert result["failed"] == [
+        move_dto.BulkMoveFailureDto(
+            id=1,
+            type="media_item",
+            reason=move_dto.BulkMoveFailureReason.NOT_FOUND,
+        ),
+        move_dto.BulkMoveFailureDto(
+            id=5,
+            type="source_asset",
+            reason=move_dto.BulkMoveFailureReason.NOT_FOUND,
+        ),
+        move_dto.BulkMoveFailureDto(
+            id=10,
+            type="folder",
+            reason=move_dto.BulkMoveFailureReason.ALREADY_IN_TARGET,
+        ),
+        move_dto.BulkMoveFailureDto(
+            id=11,
+            type="folder",
+            reason=move_dto.BulkMoveFailureReason.NOT_FOUND,
+        ),
+        move_dto.BulkMoveFailureDto(
+            id=7,
+            type="workflow",
+            reason=move_dto.BulkMoveFailureReason.UNSUPPORTED_TYPE,
+        ),
+    ]
+    service.mock_folder_repo.move_folder_to_workspace.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_bulk_move_savepoint_release_failure_is_not_reported_moved(
+    service,
+):
+    @asynccontextmanager
+    async def failing_release():
+        yield
+        raise RuntimeError("flush failed on savepoint release")
+
+    service.mock_db.begin_nested = MagicMock(side_effect=failing_release)
+    bulk_dto = move_dto.BulkMoveDto(
+        target_workspace_id=88,
+        items=[move_dto.BulkMoveItemDto(id=1, type="media_item")],
+    )
+    service.mock_media_repo.get_by_id.return_value = SimpleNamespace(
+        id=1, workspace_id=99
+    )
+
+    result = await service.bulk_move(bulk_dto, _move_user())
+
+    assert result["moved"] == []
+    assert result["failed"] == [
+        move_dto.BulkMoveFailureDto(
+            id=1,
+            type="media_item",
+            reason=move_dto.BulkMoveFailureReason.MOVE_FAILED,
+        )
+    ]
+
+
+@pytest.mark.anyio
+async def test_bulk_move_authorization_error_is_not_a_per_item_failure(
+    service,
+):
+    bulk_dto = move_dto.BulkMoveDto(
+        target_workspace_id=88,
+        items=[
+            move_dto.BulkMoveItemDto(id=1, type="media_item"),
+            move_dto.BulkMoveItemDto(id=2, type="media_item"),
+        ],
+    )
+    service.mock_media_repo.get_by_id.side_effect = [
+        SimpleNamespace(id=1, workspace_id=99),
+        SimpleNamespace(id=2, workspace_id=77),
+    ]
+
+    async def fake_authorize(workspace_id, user):
+        _ = user
+        if workspace_id == 77:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+    service.mock_workspace_auth.authorize.side_effect = fake_authorize
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.bulk_move(bulk_dto, _move_user())
+
+    assert exc_info.value.status_code == 403
+    service.mock_db.commit.assert_not_called()
