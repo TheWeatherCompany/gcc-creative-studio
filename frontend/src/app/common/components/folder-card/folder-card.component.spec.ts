@@ -121,6 +121,18 @@ describe('FolderCardComponent', () => {
     expect(component.itemDropped.emit).not.toHaveBeenCalled();
   });
 
+  // Owner decision: folders stay browsable in the image selector, but their
+  // management actions are not offered there.
+  it('hides the actions menu in selector mode only', () => {
+    const menuButton = () =>
+      fixture.nativeElement.querySelector('.folder-menu-button');
+    expect(menuButton()).not.toBeNull();
+
+    fixture.componentRef.setInput('isSelectorMode', true);
+    fixture.detectChanges();
+    expect(menuButton()).toBeNull();
+  });
+
   it('should emit copyRequested when onCopy is called', () => {
     spyOn(component.copyRequested, 'emit');
     component.menuTrigger = {closeMenu: jasmine.createSpy('closeMenu')} as any;

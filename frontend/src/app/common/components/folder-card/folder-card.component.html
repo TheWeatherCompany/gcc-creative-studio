@@ -46,7 +46,8 @@
     </div>
   </div>
 
-  <div class="folder-options" (click)="onMenuClick($event)">
+  <!-- Rename, copy, move and delete are hidden while picking an image. -->
+  <div class="folder-options" *ngIf="!isSelectorMode" (click)="onMenuClick($event)">
     <button
       mat-icon-button
       [matMenuTriggerFor]="menu"
