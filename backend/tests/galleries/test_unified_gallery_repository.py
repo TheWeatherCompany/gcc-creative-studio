@@ -14,10 +14,12 @@
 """Tests for UnifiedGalleryRepository using mocks."""
 
 import datetime
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import asyncpg
 
 from src.common.base_dto import GenerationModelEnum, MimeTypeEnum
 from src.common.schema.media_item_model import JobStatusEnum
@@ -151,6 +153,40 @@ async def test_query_free_text_matches_tag_substring(mock_db):
     assert "jsonb_path_query_array" in compiled
     assert "$[*].name" in compiled
     assert "ilike" in compiled
+
+
+@pytest.mark.anyio
+async def test_query_free_text_binds_tag_path_as_jsonpath(mock_db):
+    """The tag path must reach Postgres as jsonpath. Bound as a plain string
+    it arrives as VARCHAR, and jsonb_path_query_array(jsonb, varchar) does not
+    exist, so every free-text search failed with a 500. literal_binds hides
+    this (an inlined literal is untyped and coerces), so render the SQL the way
+    asyncpg sends it, with real bind parameters."""
+    repo = UnifiedGalleryRepository(db=mock_db)
+
+    mock_count_result = MagicMock()
+    mock_count_result.scalar_one.return_value = 0
+    mock_data_result = MagicMock()
+    mock_data_result.scalars.return_value.all.return_value = []
+    mock_db.execute.side_effect = [mock_count_result, mock_data_result]
+
+    await repo.query(
+        GallerySearchDto(workspace_id=10, query="sun", limit=10, offset=0)
+    )
+
+    data_stmt = mock_db.execute.call_args_list[1].args[0]
+    compiled = data_stmt.compile(dialect=asyncpg.dialect())
+    # asyncpg numbers parameters in positiontup order: $1, $2, ...
+    (placeholder,) = [
+        position
+        for position, name in enumerate(compiled.positiontup, start=1)
+        if compiled.binds[name].value == "$[*].name"
+    ]
+    assert re.search(
+        rf"jsonb_path_query_array\([^;]*?, "
+        rf"CAST\(\${placeholder}::\w+ AS JSONPATH\)\)",
+        str(compiled),
+    ), str(compiled)
 
 
 @pytest.mark.anyio

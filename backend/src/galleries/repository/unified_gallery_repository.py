@@ -17,7 +17,8 @@ from src.users.user_model import User
 
 
 from fastapi import Depends
-from sqlalchemy import Text, func, select
+from sqlalchemy import Text, cast, func, literal, select
+from sqlalchemy.dialects.postgresql import JSONPATH
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.common.base_repository import BaseRepository
@@ -155,8 +156,12 @@ class UnifiedGalleryRepository(
             # cast it to text so a partial term matches any tag name (e.g.
             # "sun" -> ["sunset"]). Casting only the names avoids false hits on
             # tag keys/colors. NULL (no tags) collapses to a non-match in the OR.
+            # The path must be bound as JSONPATH: a plain string binds as
+            # VARCHAR, and Postgres has no jsonb_path_query_array(jsonb,
+            # varchar), so every search would fail with UndefinedFunctionError.
             tag_names_text = func.jsonb_path_query_array(
-                self.model.metadata_["tags"], "$[*].name"
+                self.model.metadata_["tags"],
+                cast(literal("$[*].name"), JSONPATH),
             ).cast(Text)
             query = query.where(
                 func.coalesce(self.model.metadata_["prompt"].astext, "").ilike(
