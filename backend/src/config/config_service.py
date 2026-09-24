@@ -180,6 +180,12 @@ class ConfigService(BaseSettings):
             return "development"
         return str(v).strip()
 
+    @field_validator("JOB_WORKER_URL", mode="before")
+    @classmethod
+    def strip_worker_url_trailing_slash(cls, v: Any) -> Any:
+        """Normalizes the URL once so every OIDC audience check agrees."""
+        return v.rstrip("/") if isinstance(v, str) else v
+
     # <<< FIX 2: New validator to handle dependent default values >>>
     @model_validator(mode="after")
     def set_dependent_defaults(self) -> "ConfigService":

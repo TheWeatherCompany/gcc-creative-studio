@@ -82,7 +82,7 @@ class CloudTasksExecutor(GenerationExecutor):
     ):
         super().__init__(**kwargs)
         self._queue_path = queue_path
-        self._target_url = target_url.rstrip("/")
+        self._target_url = target_url
         self._invoker_sa = invoker_sa
         self._dispatch_deadline_seconds = dispatch_deadline_seconds
         self._tasks_client = tasks_client

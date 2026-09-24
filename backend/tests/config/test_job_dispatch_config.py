@@ -43,3 +43,15 @@ def test_in_process_mode_needs_no_queue_settings():
         JOB_DISPATCH_MODE="in_process",
     )
     assert config.JOB_DISPATCH_MODE == "in_process"
+
+
+@pytest.mark.parametrize(
+    "raw", ["https://worker.example", "https://worker.example/"]
+)
+def test_worker_url_is_stored_without_a_trailing_slash(raw):
+    # The enqueue side and the OIDC verifier both use JOB_WORKER_URL as the
+    # audience, so they only agree if it is normalized in one place.
+    config = ConfigService(
+        _env_file=None, **{**_COMPLETE, "JOB_WORKER_URL": raw}
+    )
+    assert config.JOB_WORKER_URL == "https://worker.example"

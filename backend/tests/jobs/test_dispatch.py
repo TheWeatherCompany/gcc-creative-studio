@@ -15,11 +15,13 @@
 """Guards what the API sends to Cloud Tasks, and what happens when it can't."""
 
 import json
+import sqlite3
 import threading
 from unittest.mock import MagicMock
 
 import pytest
 from google.cloud import tasks_v2
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from src.audios.audio_service import _process_audio_in_background
 from src.audios.dto.create_audio_dto import CreateAudioDto
@@ -31,9 +33,11 @@ from src.jobs.dispatch import (
     ENQUEUE_FAILED_MESSAGE,
     CloudTasksExecutor,
     build_executor,
+    fail_job_from_thread,
 )
 from src.jobs.job_codec import STAGED_BYTES_KEY, decode_call
 from src.users.user_model import UserModel, UserRoleEnum
+from tests.jobs.test_job_rows import _CREATE_MEDIA_ITEMS
 
 QUEUE = "projects/p/locations/us-central1/queues/q"
 WORKER = "https://worker.example"
@@ -122,11 +126,12 @@ def test_upload_bytes_go_to_gcs_not_into_the_task():
         media_item_id=9,
         workspace_id=1,
         user=USER,
-        gcs_uri="",
+        gcs_uri=None,
         file_bytes=b"\x89PNG\r\n\x1a\n",
         filename="in.png",
         upscale_factor="x2",
         aspect_ratio=None,
+        mime_type="image/png",
     ).result(timeout=5)
     executor.shutdown()
 
@@ -199,3 +204,66 @@ def test_build_executor_follows_the_dispatch_mode(monkeypatch, mode, expected):
         assert type(executor) is expected
     finally:
         executor.shutdown()
+
+
+def _sqlite_worker_database(path, error=None):
+    """Stands in for WorkerDatabase: a fresh engine on the caller's loop."""
+
+    class _FakeWorkerDatabase:
+        engine = None
+
+        async def __aenter__(self):
+            if error:
+                raise error
+            self.engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
+            return async_sessionmaker(self.engine, expire_on_commit=False)
+
+        async def __aexit__(self, *exc):
+            await self.engine.dispose()
+
+    return _FakeWorkerDatabase
+
+
+@pytest.mark.parametrize(
+    "error,expected_row",
+    [
+        (None, ("failed", ENQUEUE_FAILED_MESSAGE)),
+        (RuntimeError("database down"), ("processing", None)),
+    ],
+    ids=["marks the row failed", "swallows a database error"],
+)
+def test_fail_job_from_thread_works_from_a_pool_thread(
+    monkeypatch, tmp_path, error, expected_row
+):
+    # A failed enqueue calls this on a pool thread, which has no event loop.
+    # If it stops opening its own, the row is stranded as PROCESSING.
+    path = tmp_path / "rows.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(_CREATE_MEDIA_ITEMS)
+        conn.execute(
+            "INSERT INTO media_items (id, status) VALUES (5, 'processing')"
+        )
+    monkeypatch.setattr(
+        "src.jobs.dispatch.WorkerDatabase",
+        _sqlite_worker_database(path, error),
+    )
+    escaped = []
+
+    def run():
+        try:
+            fail_job_from_thread(5, ENQUEUE_FAILED_MESSAGE)
+        except BaseException as exc:  # pylint: disable=broad-exception-caught
+            escaped.append(exc)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join(timeout=10)
+
+    assert not escaped
+    with sqlite3.connect(path) as conn:
+        assert (
+            conn.execute(
+                "SELECT status, error_message FROM media_items WHERE id = 5"
+            ).fetchone()
+            == expected_row
+        )

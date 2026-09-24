@@ -33,6 +33,7 @@ from src.images.imagen_service import (
     _process_upload_upscale_in_background,
     _process_vto_in_background,
 )
+from src.jobs import job_codec
 from src.jobs.job_codec import (
     STAGED_BYTES_KEY,
     decode_call,
@@ -59,8 +60,48 @@ USER = UserModel(
     id=3, email="u@example.com", roles=[UserRoleEnum.USER], name="U"
 )
 
+
+def _upscale_call(**overrides):
+    """The kwargs start_upload_upscale_job passes, as the controller sends.
+
+    Every form field defaults to None, so absent inputs arrive as None, and
+    the controller's source_asset_id is an int despite the job's str hint.
+    """
+    return {
+        "media_item_id": 3,
+        "workspace_id": 1,
+        "user": USER,
+        "gcs_uri": None,
+        "file_bytes": None,
+        "filename": None,
+        "upscale_factor": "x2",
+        "aspect_ratio": None,
+        "asset_type": None,
+        "source_asset_id": None,
+        "media_item_id_existing": None,
+        "mime_type": None,
+        "scope": None,
+        "enhance_input_image": None,
+        "image_preservation_factor": None,
+        **overrides,
+    }
+
+
+UPLOAD_UPSCALE_NEW_FILE = _upscale_call(
+    file_bytes=b"\x89PNG\r\n\x1a\n",
+    filename="in.png",
+    mime_type="image/png",
+    aspect_ratio=AspectRatioEnum.RATIO_1_1,
+    asset_type=next(iter(AssetTypeEnum)),
+    scope=next(iter(AssetScopeEnum)),
+    enhance_input_image=True,
+    image_preservation_factor=0.5,
+)
+
+# (case id, job function, kwargs as the service submits them)
 CASES = [
     (
+        "image",
         _process_image_in_background,
         {
             "media_item_id": 1,
@@ -76,6 +117,7 @@ CASES = [
         },
     ),
     (
+        "vto",
         _process_vto_in_background,
         {
             "media_item_id": 2,
@@ -88,23 +130,27 @@ CASES = [
         },
     ),
     (
+        "upscale new upload",
         _process_upload_upscale_in_background,
-        {
-            "media_item_id": 3,
-            "workspace_id": 1,
-            "user": USER,
-            "gcs_uri": "gs://bucket/in.png",
-            "file_bytes": b"\x89PNG\r\n\x1a\n",
-            "filename": "in.png",
-            "upscale_factor": "x2",
-            "aspect_ratio": AspectRatioEnum.RATIO_1_1,
-            "asset_type": next(iter(AssetTypeEnum)),
-            "scope": next(iter(AssetScopeEnum)),
-            "enhance_input_image": True,
-            "image_preservation_factor": 0.5,
-        },
+        UPLOAD_UPSCALE_NEW_FILE,
     ),
     (
+        "upscale existing source asset",
+        _process_upload_upscale_in_background,
+        _upscale_call(source_asset_id=101),
+    ),
+    (
+        "upscale existing media item",
+        _process_upload_upscale_in_background,
+        _upscale_call(media_item_id_existing=55),
+    ),
+    (
+        "upscale explicit gcsUri",
+        _process_upload_upscale_in_background,
+        _upscale_call(gcs_uri="gs://bucket/in.png"),
+    ),
+    (
+        "video",
         _process_video_in_background,
         {
             "media_item_id": 4,
@@ -118,6 +164,7 @@ CASES = [
         },
     ),
     (
+        "video concatenation",
         _process_video_concatenation_in_background,
         {
             "media_item_id": 5,
@@ -132,6 +179,7 @@ CASES = [
         },
     ),
     (
+        "audio",
         _process_audio_in_background,
         {
             "media_item_id": 6,
@@ -146,6 +194,7 @@ CASES = [
         },
     ),
 ]
+AUDIO_KWARGS = CASES[-1][2]
 
 
 class _FakeBlobStore:
@@ -162,11 +211,13 @@ class _FakeBlobStore:
 
 
 def test_every_allowed_job_has_a_round_trip_case():
-    assert {job_name(fn) for fn, _ in CASES} == ALLOWED_JOBS
+    assert {job_name(fn) for _, fn, _ in CASES} == ALLOWED_JOBS
 
 
 @pytest.mark.parametrize(
-    "fn,kwargs", CASES, ids=[fn.__name__ for fn, _ in CASES]
+    "fn,kwargs",
+    [case[1:] for case in CASES],
+    ids=[case[0] for case in CASES],
 )
 def test_job_arguments_survive_a_json_round_trip(fn, kwargs):
     store = _FakeBlobStore()
@@ -178,8 +229,13 @@ def test_job_arguments_survive_a_json_round_trip(fn, kwargs):
 
 def test_bytes_are_staged_instead_of_inlined():
     store = _FakeBlobStore()
-    fn, kwargs = CASES[2]
-    wire = encode_call(fn, (), kwargs, stage_bytes=store.stage)
+    kwargs = UPLOAD_UPSCALE_NEW_FILE
+    wire = encode_call(
+        _process_upload_upscale_in_background,
+        (),
+        kwargs,
+        stage_bytes=store.stage,
+    )
     assert wire["file_bytes"] == {
         STAGED_BYTES_KEY: "gs://bucket/job_payloads/0"
     }
@@ -189,8 +245,28 @@ def test_bytes_are_staged_instead_of_inlined():
 
 def test_positional_arguments_are_bound_to_their_names():
     # audio_service submits its job positionally.
-    fn, kwargs = CASES[5]
     wire = encode_call(
-        fn, tuple(kwargs.values()), {}, stage_bytes=_FakeBlobStore().stage
+        _process_audio_in_background,
+        tuple(AUDIO_KWARGS.values()),
+        {},
+        stage_bytes=_FakeBlobStore().stage,
     )
-    assert set(wire) == set(kwargs)
+    assert set(wire) == set(AUDIO_KWARGS)
+
+
+def test_hint_drift_is_logged_once_with_the_function_and_parameter(
+    caplog, monkeypatch
+):
+    # The untyped fallback keeps jobs running; the log is what surfaces the
+    # upstream hint that needs fixing, once, not on every upscale.
+    monkeypatch.setattr(job_codec, "_logged_drift", set())
+    for _ in range(2):
+        encode_call(
+            _process_upload_upscale_in_background,
+            (),
+            _upscale_call(gcs_uri="gs://bucket/in.png", source_asset_id=101),
+            stage_bytes=_FakeBlobStore().stage,
+        )
+    [record] = [r for r in caplog.records if r.name == "src.jobs.job_codec"]
+    assert "source_asset_id" in record.getMessage()
+    assert "_process_upload_upscale_in_background" in record.getMessage()

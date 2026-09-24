@@ -138,9 +138,9 @@ async def lifespan(app: FastAPI):
     # raising it beyond ~4 requires confirmed quota headroom, otherwise the
     # extra workers simply contend for the same quota.
     # That holds for the default in-process mode. With
-    # JOB_DISPATCH_MODE=cloud_tasks this pool only enqueues, jobs run on the
-    # worker service, and the queue's concurrency cap is the quota guard
-    # (src/jobs/dispatch.py).
+    # JOB_DISPATCH_MODE=cloud_tasks, generation jobs only enqueue here and run
+    # on the worker; the queue's max_concurrent_dispatches (Terraform) is the
+    # quota guard. Brand guidelines still run on this pool.
     app.state.executor = build_executor()
 
     yield
