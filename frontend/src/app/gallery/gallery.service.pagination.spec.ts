@@ -181,6 +181,27 @@ describe('GalleryService infinite scroll', () => {
     expect(allLoaded).toBeFalse();
   }));
 
+  it('does not fetch the new filters at the old offset before the reset', fakeAsync(() => {
+    start();
+    workspaceId$.next(1);
+    service.setFilters(filters);
+    tick(50);
+    pending().forEach(req => answer(req));
+
+    // A new search empties the grid, so the sentinel fires inside the
+    // debounce window, before the pipeline has reset the paging.
+    service.setFilters({...filters, query: 'sunset'});
+    service.loadGallery();
+    tick(50);
+    pending().forEach(req => answer(req, 100, 1000));
+
+    expect(sentBodies.map(body => [body.query, body.offset ?? 0])).toEqual([
+      [undefined, 0],
+      ['sunset', 0],
+    ]);
+    expect(shownIds).toEqual(Array.from({length: 40}, (_, i) => 1001 + i));
+  }));
+
   // Without the guard, the old page's error marks the new search as fully
   // loaded, and it stops at 40 items with "You've reached the end".
   it('ignores a page that fails after the filters have changed', fakeAsync(() => {

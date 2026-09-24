@@ -29,6 +29,7 @@ import {
   shareReplay,
   switchMap,
   map,
+  tap,
 } from 'rxjs/operators';
 import {environment} from '../../environments/environment';
 import {MediaItem} from '../common/models/media-item.model';
@@ -69,6 +70,12 @@ export class GalleryService implements OnDestroy {
       this.filters$,
     ])
       .pipe(
+        // Reset the paging as soon as the workspace or filters change, not
+        // when the debounce fires. A new search empties the grid, so the
+        // sentinel can call loadGallery() inside the debounce window; with the
+        // page back at 0, its page-1 gate turns that call away instead of
+        // fetching the new filters at the old offset.
+        tap(() => this.resetCache()),
         debounceTime(50),
         switchMap(([workspaceId, filters]) => {
           if (!filters || !workspaceId) {
