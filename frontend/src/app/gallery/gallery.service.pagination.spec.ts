@@ -145,58 +145,6 @@ describe('GalleryService infinite scroll', () => {
     expect([...shownWorkspaceIds]).toEqual([1]);
   }));
 
-  it('discards a page requested under filters that have since changed', fakeAsync(() => {
-    start();
-    workspaceState.setActiveWorkspaceId(1);
-    service.setFilters(filters);
-    tick(50);
-    pending().forEach(req => answer(req));
-
-    // Page 2 of the old search is in flight when the user changes filters.
-    service.loadGallery();
-    const stalePage = pending();
-    service.setFilters({...filters, query: 'sunset'});
-    tick(50);
-    const freshPage = pending();
-
-    stalePage.forEach(req => answer(req));
-    expect(shownIds).toEqual([]);
-    expect(allLoaded).toBeFalse();
-
-    freshPage.forEach(req => answer(req, 100, 1000));
-    expect(shownIds.length).toBe(40);
-    expect(shownIds[0]).toBe(1001);
-
-    service.loadGallery();
-    const next = httpMock.expectOne(searchUrl);
-    expect(next.request.body.offset).toBe(40);
-    expect(next.request.body.query).toBe('sunset');
-    answer(next, 100, 1000);
-    expect(shownIds.length).toBe(80);
-    expect(allLoaded).toBeFalse();
-  }));
-
-  it('does not fetch the new filters at the old offset before the reset', fakeAsync(() => {
-    start();
-    workspaceState.setActiveWorkspaceId(1);
-    service.setFilters(filters);
-    tick(50);
-    pending().forEach(req => answer(req));
-
-    // A new search empties the grid, so the sentinel fires inside the
-    // debounce window, before the pipeline has reset the paging.
-    service.setFilters({...filters, query: 'sunset'});
-    service.loadGallery();
-    tick(50);
-    pending().forEach(req => answer(req, 100, 1000));
-
-    expect(sentBodies.map(body => [body.query, body.offset ?? 0])).toEqual([
-      [undefined, 0],
-      ['sunset', 0],
-    ]);
-    expect(shownIds).toEqual(Array.from({length: 40}, (_, i) => 1001 + i));
-  }));
-
   // No workspace means no search. The gallery must still end somewhere
   // visible, but only once the workspace list has settled, so that "No media
   // items found" never flashes during a normal load.
@@ -214,26 +162,102 @@ describe('GalleryService infinite scroll', () => {
     expect(shownIds).toEqual([]);
   }));
 
-  // Without the guard, the old page's error marks the new search as fully
-  // loaded, and it stops at 40 items with "You've reached the end".
-  it('ignores a page that fails after the filters have changed', fakeAsync(() => {
-    start();
-    workspaceState.setActiveWorkspaceId(1);
-    service.setFilters(filters);
-    tick(50);
-    pending().forEach(req => answer(req));
+  // Opening a folder reaches the service as a filter change: the gallery
+  // sends the folder in the search body. A folder switch must therefore reset
+  // the paging just as a new query does, or the grid shows the old folder's
+  // page, or fetches the new folder at the old offset.
+  const filterChanges: Array<{
+    change: string;
+    before: GallerySearchDto;
+    after: GallerySearchDto;
+  }> = [
+    {
+      change: 'the search query',
+      before: filters,
+      after: {...filters, query: 'sunset'},
+    },
+    {
+      change: 'the open folder',
+      before: {...filters, folderId: 7},
+      after: {...filters, folderId: 8},
+    },
+  ];
 
-    service.loadGallery();
-    const stalePage = httpMock.expectOne(searchUrl);
-    service.setFilters({...filters, query: 'sunset'});
-    tick(50);
-    const freshPage = httpMock.expectOne(searchUrl);
+  for (const {change, before, after} of filterChanges) {
+    describe(`when ${change} changes`, () => {
+      it('discards a page requested under the old filters', fakeAsync(() => {
+        start();
+        workspaceState.setActiveWorkspaceId(1);
+        service.setFilters(before);
+        tick(50);
+        pending().forEach(req => answer(req));
 
-    stalePage.flush(null, {status: 500, statusText: 'Server Error'});
-    answer(freshPage, 100, 1000);
+        // Page 2 of the old search is in flight when the filters change.
+        service.loadGallery();
+        const stalePage = pending();
+        service.setFilters(after);
+        tick(50);
+        const freshPage = pending();
 
-    expect(shownIds.length).toBe(40);
-    expect(allLoaded).toBeFalse();
-    expect(service.isLoading$.value).toBeFalse();
-  }));
+        stalePage.forEach(req => answer(req));
+        expect(shownIds).toEqual([]);
+        expect(allLoaded).toBeFalse();
+
+        freshPage.forEach(req => answer(req, 100, 1000));
+        expect(shownIds.length).toBe(40);
+        expect(shownIds[0]).toBe(1001);
+
+        service.loadGallery();
+        const next = httpMock.expectOne(searchUrl);
+        expect(next.request.body.offset).toBe(40);
+        expect(next.request.body).toEqual(jasmine.objectContaining(after));
+        answer(next, 100, 1000);
+        expect(shownIds.length).toBe(80);
+        expect(allLoaded).toBeFalse();
+      }));
+
+      it('does not fetch the new filters at the old offset before the reset', fakeAsync(() => {
+        start();
+        workspaceState.setActiveWorkspaceId(1);
+        service.setFilters(before);
+        tick(50);
+        pending().forEach(req => answer(req));
+
+        // A new search empties the grid, so the sentinel fires inside the
+        // debounce window, before the pipeline has reset the paging.
+        service.setFilters(after);
+        service.loadGallery();
+        tick(50);
+        pending().forEach(req => answer(req, 100, 1000));
+
+        expect(sentBodies.map(body => body.offset ?? 0)).toEqual([0, 0]);
+        expect(sentBodies[0]).not.toEqual(jasmine.objectContaining(after));
+        expect(sentBodies[1]).toEqual(jasmine.objectContaining(after));
+        expect(shownIds).toEqual(Array.from({length: 40}, (_, i) => 1001 + i));
+      }));
+
+      // Without the guard, the old page's error marks the new search as
+      // fully loaded, and it stops at 40 items with "You've reached the end".
+      it('ignores a page that fails after the filters have changed', fakeAsync(() => {
+        start();
+        workspaceState.setActiveWorkspaceId(1);
+        service.setFilters(before);
+        tick(50);
+        pending().forEach(req => answer(req));
+
+        service.loadGallery();
+        const stalePage = httpMock.expectOne(searchUrl);
+        service.setFilters(after);
+        tick(50);
+        const freshPage = httpMock.expectOne(searchUrl);
+
+        stalePage.flush(null, {status: 500, statusText: 'Server Error'});
+        answer(freshPage, 100, 1000);
+
+        expect(shownIds.length).toBe(40);
+        expect(allLoaded).toBeFalse();
+        expect(service.isLoading$.value).toBeFalse();
+      }));
+    });
+  }
 });

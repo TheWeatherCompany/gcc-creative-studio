@@ -50,6 +50,7 @@ export enum JobStatus {
 export interface MediaItem {
   id: number;
   userEmail?: string;
+  folderId?: number | null;
   isFavorite?: boolean;
   createdAt?: string; // ISO 8601 date string
   updatedAt?: string; // ISO 8601 date string

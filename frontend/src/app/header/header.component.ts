@@ -17,7 +17,7 @@
 import {Component, OnDestroy, Inject, PLATFORM_ID} from '@angular/core';
 import {DomSanitizer, SafeResourceUrl} from '@angular/platform-browser';
 import {MatIconRegistry} from '@angular/material/icon';
-import {Router} from '@angular/router';
+import {NavigationEnd, Router} from '@angular/router';
 import {UserService} from '../common/services/user.service';
 import {AuthService} from '../common/services/auth.service';
 import {environment} from '../../environments/environment';
@@ -25,7 +25,7 @@ import {UserModel} from '../common/models/user.model';
 import {animate, style, transition, trigger} from '@angular/animations';
 import {BreakpointObserver, Breakpoints} from '@angular/cdk/layout';
 import {Subject} from 'rxjs';
-import {takeUntil} from 'rxjs/operators';
+import {filter, takeUntil} from 'rxjs/operators';
 import {isPlatformBrowser} from '@angular/common';
 
 @Component({
@@ -62,6 +62,7 @@ export class HeaderComponent implements OnDestroy {
   toolsMenuHovered = false;
   private menuTimeout: any;
   isBrowser: boolean;
+  isGalleryActive = false;
 
   constructor(
     private sanitizer: DomSanitizer,
@@ -100,6 +101,19 @@ export class HeaderComponent implements OnDestroy {
       .pipe(takeUntil(this.destroy$))
       .subscribe(result => {
         this.isDesktop = result.matches;
+      });
+
+    this.isGalleryActive = this.checkIsGalleryActive();
+
+    this.router.events
+      .pipe(
+        filter(
+          (event): event is NavigationEnd => event instanceof NavigationEnd,
+        ),
+        takeUntil(this.destroy$),
+      )
+      .subscribe(() => {
+        this.isGalleryActive = this.checkIsGalleryActive();
       });
   }
 
@@ -148,5 +162,13 @@ export class HeaderComponent implements OnDestroy {
     this.menuTimeout = setTimeout(() => {
       this.toolsMenuHovered = false;
     }, 200);
+  }
+
+  private checkIsGalleryActive(): boolean {
+    return (
+      this.router.isActive('/gallery', false) ||
+      this.router.url.startsWith('/folders/') ||
+      this.router.url === '/folders'
+    );
   }
 }

@@ -25,7 +25,7 @@ import {MatProgressSpinnerModule} from '@angular/material/progress-spinner';
 import {MatSnackBarModule} from '@angular/material/snack-bar';
 import {MatTooltipModule} from '@angular/material/tooltip';
 import {NoopAnimationsModule} from '@angular/platform-browser/animations';
-import {provideRouter} from '@angular/router';
+import {ActivatedRoute, provideRouter} from '@angular/router';
 import {BehaviorSubject, Subject, of, throwError} from 'rxjs';
 
 import {WorkspaceSwitcherComponent} from './workspace-switcher.component';
@@ -207,5 +207,154 @@ describe('WorkspaceSwitcherComponent session readiness gate', () => {
     expect(
       TestBed.inject(WorkspaceStateService).setActiveWorkspaceId,
     ).toHaveBeenCalledOnceWith(null);
+  });
+});
+
+/**
+ * Which workspace wins once the list arrives. The session gate above delays
+ * that moment, so something else (a folder deep link switching to the
+ * folder's own workspace) may already have set the active workspace; a stale
+ * localStorage value must not override it.
+ */
+describe('WorkspaceSwitcherComponent initial workspace precedence', () => {
+  let fixture: ComponentFixture<WorkspaceSwitcherComponent>;
+  let sessionReady$: Subject<boolean>;
+  let getActiveWorkspaceId: jasmine.Spy;
+  let setActiveWorkspaceId: jasmine.Spy;
+  let queryParams: Record<string, string>;
+
+  const workspace = (id: number, scope: WorkspaceScope): Workspace => ({
+    id,
+    name: `Workspace ${id}`,
+    ownerId: '1',
+    scope,
+    members: [],
+    memberIds: [],
+  });
+  const workspaces = [
+    workspace(1, WorkspaceScope.PUBLIC),
+    workspace(2, WorkspaceScope.PRIVATE),
+    workspace(3, WorkspaceScope.PRIVATE),
+  ];
+
+  beforeEach(async () => {
+    sessionReady$ = new Subject<boolean>();
+    getActiveWorkspaceId = jasmine
+      .createSpy('getActiveWorkspaceId')
+      .and.returnValue(null);
+    setActiveWorkspaceId = jasmine.createSpy('setActiveWorkspaceId');
+    queryParams = {};
+
+    await TestBed.configureTestingModule({
+      declarations: [WorkspaceSwitcherComponent],
+      imports: [
+        CommonModule,
+        NoopAnimationsModule,
+        MatDialogModule,
+        MatDividerModule,
+        MatIconModule,
+        MatMenuModule,
+        MatProgressSpinnerModule,
+        MatSnackBarModule,
+        MatTooltipModule,
+      ],
+      providers: [
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: {
+            snapshot: {
+              queryParamMap: {get: (key: string) => queryParams[key] ?? null},
+            },
+          },
+        },
+        {
+          provide: AuthService,
+          useValue: {sessionReady$: sessionReady$.asObservable()},
+        },
+        {
+          provide: WorkspaceService,
+          useValue: {getWorkspaces: () => of(workspaces)},
+        },
+        {
+          provide: WorkspaceStateService,
+          useValue: {
+            activeWorkspaceId$: new BehaviorSubject<number | null>(null),
+            setActiveWorkspaceId,
+            getActiveWorkspaceId,
+          },
+        },
+        {
+          provide: BrandGuidelineService,
+          useValue: {
+            activeBrandGuidelineJob$: of(null),
+            clearActiveJob: jasmine.createSpy('clearActiveJob'),
+            clearCache: jasmine.createSpy('clearCache'),
+          },
+        },
+        {
+          provide: UserService,
+          useValue: {getUserDetails: () => ({id: '1', roles: []})},
+        },
+      ],
+      schemas: [CUSTOM_ELEMENTS_SCHEMA],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(WorkspaceSwitcherComponent);
+    localStorage.removeItem('activeWorkspaceId');
+  });
+
+  afterEach(() => {
+    localStorage.removeItem('activeWorkspaceId');
+  });
+
+  const loadOnceReady = () => {
+    fixture.detectChanges();
+    sessionReady$.next(true);
+  };
+
+  it('keeps an already active workspace over localStorage', () => {
+    getActiveWorkspaceId.and.returnValue(2);
+    localStorage.setItem('activeWorkspaceId', '3');
+
+    loadOnceReady();
+
+    expect(setActiveWorkspaceId).toHaveBeenCalledOnceWith(2);
+    expect(localStorage.getItem('activeWorkspaceId')).toBe('2');
+  });
+
+  it('still lets the URL query param beat the active workspace', () => {
+    getActiveWorkspaceId.and.returnValue(2);
+    queryParams['workspaceId'] = '3';
+
+    loadOnceReady();
+
+    expect(setActiveWorkspaceId).toHaveBeenCalledOnceWith(3);
+  });
+
+  it('falls back to the public workspace for an active id not in the list', () => {
+    getActiveWorkspaceId.and.returnValue(99);
+
+    loadOnceReady();
+
+    expect(setActiveWorkspaceId).toHaveBeenCalledOnceWith(1);
+  });
+
+  it('uses localStorage when nothing is active yet', () => {
+    localStorage.setItem('activeWorkspaceId', '3');
+
+    loadOnceReady();
+
+    expect(setActiveWorkspaceId).toHaveBeenCalledOnceWith(3);
+  });
+
+  it('persists a workspace activated elsewhere to localStorage', () => {
+    const active$ = TestBed.inject(WorkspaceStateService)
+      .activeWorkspaceId$ as BehaviorSubject<number | null>;
+    fixture.detectChanges();
+
+    active$.next(3);
+
+    expect(localStorage.getItem('activeWorkspaceId')).toBe('3');
   });
 });

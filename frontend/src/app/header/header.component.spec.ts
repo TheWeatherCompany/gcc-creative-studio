@@ -16,26 +16,31 @@
 
 import {ComponentFixture, TestBed} from '@angular/core/testing';
 import {NoopAnimationsModule} from '@angular/platform-browser/animations';
-import {provideRouter} from '@angular/router';
+import {provideRouter, Router} from '@angular/router';
 import {provideHttpClient} from '@angular/common/http';
 import {provideHttpClientTesting} from '@angular/common/http/testing';
 import {MatMenuModule} from '@angular/material/menu';
 import {MatButtonModule} from '@angular/material/button';
 import {MatIconModule} from '@angular/material/icon';
 import {MatTooltipModule} from '@angular/material/tooltip';
-import {CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
+import {Component, CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
 
 import {HeaderComponent} from './header.component';
 import {UserService} from '../common/services/user.service';
 import {AuthService} from '../common/services/auth.service';
+import {environment} from '../../environments/environment';
+
+@Component({template: '', standalone: false})
+class DummyComponent {}
 
 describe('HeaderComponent', () => {
   let component: HeaderComponent;
   let fixture: ComponentFixture<HeaderComponent>;
+  let router: Router;
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
-      declarations: [HeaderComponent],
+      declarations: [HeaderComponent, DummyComponent],
       imports: [
         NoopAnimationsModule,
         MatMenuModule,
@@ -46,7 +51,12 @@ describe('HeaderComponent', () => {
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
-        provideRouter([]),
+        provideRouter([
+          {path: 'gallery', component: DummyComponent},
+          {path: 'gallery/:id', component: DummyComponent},
+          {path: 'folders/:folderId', component: DummyComponent},
+          {path: 'video', component: DummyComponent},
+        ]),
         {
           provide: UserService,
           useValue: {
@@ -70,12 +80,17 @@ describe('HeaderComponent', () => {
       schemas: [CUSTOM_ELEMENTS_SCHEMA],
     }).compileComponents();
 
+    router = TestBed.inject(Router);
+  });
+
+  const create = () => {
     fixture = TestBed.createComponent(HeaderComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
-  });
+  };
 
   it('should create', () => {
+    create();
     expect(component).toBeTruthy();
   });
 
@@ -84,6 +99,7 @@ describe('HeaderComponent', () => {
   // lose and the icon is clipped to a sliver. This runs in real Chrome, so
   // the computed layout is what the user sees.
   it('sizes every nav FAB to its 24px icon slot', () => {
+    create();
     component.menuFixed = true;
     fixture.detectChanges();
 
@@ -97,5 +113,55 @@ describe('HeaderComponent', () => {
         .withContext(button.ariaLabel ?? '')
         .toEqual({width: 24, height: 24});
     }
+  });
+
+  describe('isGalleryActive', () => {
+    // isActive('/gallery', false) is a subset match, so a media detail page
+    // keeps the gallery highlighted too. The non-gallery route comes last so
+    // the table also proves the flag drops again on the way out.
+    const routes: Array<[string, boolean]> = [
+      ['/gallery', true],
+      ['/folders/123', true],
+      ['/gallery/42', true],
+      ['/video', false],
+    ];
+
+    it('highlights the gallery on its routes, on load and on navigation', async () => {
+      await router.navigateByUrl('/video');
+      create();
+      expect(component.isGalleryActive).toBeFalse();
+
+      for (const [url, active] of routes) {
+        await router.navigateByUrl(url);
+        expect(component.isGalleryActive)
+          .withContext(`navigated to ${url}`)
+          .toBe(active);
+        const loadedHere = TestBed.createComponent(HeaderComponent);
+        expect(loadedHere.componentInstance.isGalleryActive)
+          .withContext(`constructed on ${url}`)
+          .toBe(active);
+      }
+    });
+
+    it('stops following navigation once destroyed', async () => {
+      await router.navigateByUrl('/video');
+      create();
+
+      component.ngOnDestroy();
+      await router.navigateByUrl('/gallery');
+
+      expect(component.isGalleryActive).toBeFalse();
+    });
+  });
+
+  // Upstream deletes the environment import from this component; ours needs
+  // it for the avatar fallback, so taking that hunk breaks the build.
+  it('falls back to the default avatar when the user has no picture', () => {
+    create();
+    expect(component.defaultAvatarUrl).toBe(environment.defaultAvatarUrl);
+    const avatar: HTMLImageElement = fixture.nativeElement.querySelector(
+      'img[alt="User profile"]',
+    );
+    expect(avatar.getAttribute('src')).toBe(environment.defaultAvatarUrl);
   });
 });

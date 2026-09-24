@@ -18,15 +18,21 @@
   class="card-root"
   [class.selected]="isSelected"
   [class.any-selected]="anyItemSelected"
+  [class.is-dragging]="isDragging"
+  [attr.draggable]="!isSelectorMode"
+  (pointerdown)="onPointerDownOrigin($event)"
+  (dragstart)="onDragStart($event)"
+  (dragend)="onDragEnd()"
   (mouseenter)="onMouseEnter()"
   (mouseleave)="onMouseLeave()"
 >
   <a
-    [routerLink]="isSelectionMode || anyItemSelected ? null : getRoute()"
+    [routerLink]="(isSelectionMode || anyItemSelected || isDragging) ? null : getRoute()"
     [state]="{mediaItem: item}"
     (click)="onCardClick($event)"
     class="card-link"
     [class.selection-mode]="isSelectionMode"
+    draggable="false"
   >
     <ng-container *ngIf="item.mimeType?.startsWith('image/')">
       <img
@@ -37,6 +43,7 @@
         [alt]="getShortPrompt(item.prompt)"
         [class.active]="currentImageIndex === i"
         [class.inactive]="currentImageIndex !== i"
+        draggable="false"
         (load)="onMediaLoad(i)"
       />
       <!-- A "spacer" div that defines the aspect ratio of the container -->
@@ -51,6 +58,7 @@
           class="media-element active"
           [src]="videoUrl"
           [attr.aria-label]="getShortPrompt(item.prompt)"
+          draggable="false"
           muted
           playsinline
           loop
@@ -70,6 +78,7 @@
             [alt]="getShortPrompt(item.prompt)"
             [class.active]="currentImageIndex === i"
             [class.inactive]="currentImageIndex !== i"
+            draggable="false"
             (load)="onMediaLoad(i)"
           />
         </ng-container>
@@ -81,6 +90,7 @@
             [src]="posterUrl + '#t=0.1'"
             role="img"
             [attr.aria-label]="getShortPrompt(item.prompt)"
+            draggable="false"
             preload="metadata"
             muted
             playsinline
@@ -123,6 +133,7 @@
     <div
       class="selection-indicator"
       [class.selected]="isSelected"
+      draggable="false"
       (click)="toggleSelection($event)"
     >
       <mat-icon *ngIf="isSelected">check</mat-icon>
@@ -153,6 +164,7 @@
     type="button"
     class="favorite-btn"
     [class.is-favorite]="item.isFavorite"
+    draggable="false"
     (click)="toggleFavorite($event)"
     [disabled]="isFavoriteUpdating"
     [attr.aria-label]="
@@ -166,7 +178,11 @@
   <!-- Carousel Controls: Only show if there's more than one image -->
   <ng-container *ngIf="displayUrls && displayUrls.length > 1">
     <!-- Previous Button -->
-    <button (click)="prevImageItem($event)" class="carousel-control prev">
+    <button
+      (click)="prevImageItem($event)"
+      class="carousel-control prev"
+      draggable="false"
+    >
       <svg
         xmlns="http://www.w3.org/2000/svg"
         fill="none"
@@ -183,7 +199,11 @@
     </button>
 
     <!-- Next Button -->
-    <button (click)="nextImageItem($event)" class="carousel-control next">
+    <button
+      (click)="nextImageItem($event)"
+      class="carousel-control next"
+      draggable="false"
+    >
       <svg
         xmlns="http://www.w3.org/2000/svg"
         fill="none"
