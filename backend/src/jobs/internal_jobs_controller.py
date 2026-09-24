@@ -21,6 +21,7 @@ crash or a timeout produces a retry, which is exactly the OOM case.
 """
 
 import asyncio
+import inspect
 import logging
 from functools import partial
 from typing import Any
@@ -89,7 +90,11 @@ async def run_job(
         kwargs = await asyncio.to_thread(
             decode_call, fn, body.kwargs, partial(_load_staged, gcs)
         )
-    except Exception:  # UnknownJobError, a validation error, a missing blob
+        # The API and worker deploy separately. If their job signatures differ,
+        # calling fn would raise TypeError: a 500, a retry that fails the same
+        # way, and a row left PROCESSING until the sweep.
+        inspect.signature(fn).bind(**kwargs)
+    except Exception:  # UnknownJobError, bad arguments, a missing blob
         logger.exception("Rejected a job delivery.", extra=log_fields)
         await fail_processing_job(db, body.media_item_id, JOB_REJECTED_MESSAGE)
         return {"status": "rejected"}

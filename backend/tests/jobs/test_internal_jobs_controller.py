@@ -95,15 +95,20 @@ def test_a_row_that_is_no_longer_processing_is_skipped(client):
 
 @pytest.mark.parametrize(
     "setup",
-    ["unknown job", "undecodable arguments"],
+    ["unknown job", "undecodable arguments", "signature drift"],
 )
 def test_an_unreadable_delivery_fails_the_row_without_retrying(client, setup):
     http, gcs, _, fail, resolve = client
+    body = BODY
     if setup == "unknown job":
         resolve.side_effect = UnknownJobError("x")
-    else:
+    elif setup == "undecodable arguments":
         gcs.download_bytes_from_gcs.return_value = None
-    response = http.post("/internal/jobs/run", json=BODY)
+    else:
+        # The API and worker deploy separately, so after an upstream sync
+        # changes a job's parameters one may send what the other can't take.
+        body = {**BODY, "kwargs": {**BODY["kwargs"], "added_upstream": 1}}
+    response = http.post("/internal/jobs/run", json=body)
     assert response.status_code == 200
     assert response.json() == {"status": "rejected"}
     fail.assert_awaited_once()
