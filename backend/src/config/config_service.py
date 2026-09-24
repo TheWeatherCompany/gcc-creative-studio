@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 import google.auth
 from google.auth.exceptions import DefaultCredentialsError
@@ -70,6 +70,24 @@ class ConfigService(BaseSettings):
     # that, so this can be tuned for the production pool (12) without inverting
     # the invariant for local dev, which uses the defaults.
     GENERATION_MAX_PER_USER: int = 5
+
+    # --- Job Dispatch ---
+    # "in_process" runs generation jobs on this process's thread pool: the
+    # default, and what local dev and tests use. "cloud_tasks" enqueues each
+    # job to JOB_TASKS_QUEUE, which POSTs it to JOB_WORKER_URL.
+    JOB_DISPATCH_MODE: Literal["in_process", "cloud_tasks"] = "in_process"
+    # Full queue path: projects/<project>/locations/<region>/queues/<name>.
+    JOB_TASKS_QUEUE: str = ""
+    # Base URL of the service that runs jobs. Also the OIDC audience the
+    # internal job endpoints require.
+    JOB_WORKER_URL: str = ""
+    # Identity Cloud Tasks and Cloud Scheduler sign their OIDC tokens as. The
+    # internal job endpoints accept tokens from this service account only.
+    JOB_TASKS_INVOKER_SA: str = ""
+    # How long Cloud Tasks waits for one attempt. Keep it at or below the
+    # worker's Cloud Run request timeout, and keep 2 attempts of it inside
+    # STUCK_JOB_STALE_AFTER (src/common/job_policy.py).
+    JOB_DISPATCH_DEADLINE_SECONDS: int = 900
 
     # --- Okta ---
     # Phase 1 (no API Access Management): the org authorization server, e.g.
@@ -162,6 +180,12 @@ class ConfigService(BaseSettings):
             return "development"
         return str(v).strip()
 
+    @field_validator("JOB_WORKER_URL", mode="before")
+    @classmethod
+    def strip_worker_url_trailing_slash(cls, v: Any) -> Any:
+        """Normalizes the URL once so every OIDC audience check agrees."""
+        return v.rstrip("/") if isinstance(v, str) else v
+
     # <<< FIX 2: New validator to handle dependent default values >>>
     @model_validator(mode="after")
     def set_dependent_defaults(self) -> "ConfigService":
@@ -177,6 +201,25 @@ class ConfigService(BaseSettings):
         if not self.GENMEDIA_BUCKET:
             self.GENMEDIA_BUCKET = f"{self.PROJECT_ID}-assets"
 
+        return self
+
+    @model_validator(mode="after")
+    def require_job_queue_settings(self) -> "ConfigService":
+        """Fails fast rather than failing every job at enqueue time."""
+        if self.JOB_DISPATCH_MODE == "cloud_tasks":
+            missing = [
+                name
+                for name in (
+                    "JOB_TASKS_QUEUE",
+                    "JOB_WORKER_URL",
+                    "JOB_TASKS_INVOKER_SA",
+                )
+                if not getattr(self, name)
+            ]
+            if missing:
+                raise ValueError(
+                    "JOB_DISPATCH_MODE=cloud_tasks needs " + ", ".join(missing)
+                )
         return self
 
     @computed_field

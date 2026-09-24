@@ -35,16 +35,14 @@ from src.audios.audio_controller import router as audio_router
 from src.brand_guidelines.brand_guideline_controller import (
     router as brand_guideline_router,
 )
-from src.common.generation_executor import (
-    GenerationExecutor,
-    fail_inflight_jobs,
-)
+from src.common.generation_executor import fail_inflight_jobs
 from src.config.config_service import config_service
 from src.galleries.gallery_controller import router as gallery_router
 from src.generation_options.generation_options_controller import (
     router as generation_options_router,
 )
 from src.images.imagen_controller import router as imagen_router
+from src.jobs.dispatch import build_executor
 from src.media_templates.media_templates_controller import (
     router as media_template_router,
 )
@@ -139,9 +137,11 @@ async def lifespan(app: FastAPI):
     # Vertex Veo per-project/region online-prediction quota, not this pool:
     # raising it beyond ~4 requires confirmed quota headroom, otherwise the
     # extra workers simply contend for the same quota.
-    app.state.executor = GenerationExecutor(
-        max_workers=config_service.GENERATION_MAX_WORKERS
-    )
+    # That holds for the default in-process mode. With
+    # JOB_DISPATCH_MODE=cloud_tasks, generation jobs only enqueue here and run
+    # on the worker; the queue's max_concurrent_dispatches (Terraform) is the
+    # quota guard. Brand guidelines still run on this pool.
+    app.state.executor = build_executor()
 
     yield
 
