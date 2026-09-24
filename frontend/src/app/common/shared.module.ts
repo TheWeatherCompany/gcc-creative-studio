@@ -54,6 +54,12 @@ import {StudioDropdownComponent} from './components/studio-dropdown/studio-dropd
 import {StudioSearchFilterComponent} from './components/studio-search-filter/studio-search-filter.component';
 import {StudioDateRangeFilterComponent} from './components/studio-date-range-filter/studio-date-range-filter.component';
 import {TruncatePipe} from './pipes/truncate.pipe';
+import {FolderCardComponent} from './components/folder-card/folder-card.component';
+import {CreateFolderDialogComponent} from './components/create-folder-dialog/create-folder-dialog.component';
+import {MoveToFolderDialogComponent} from './components/move-to-folder-dialog/move-to-folder-dialog.component';
+import {CopyToFolderDialogComponent} from './components/copy-to-folder-dialog/copy-to-folder-dialog.component';
+import {FolderConflictDialogComponent} from './components/folder-conflict-dialog/folder-conflict-dialog.component';
+import {MatTabsModule} from '@angular/material/tabs';
 
 const DECLARATIONS = [
   CreateWorkspaceModalComponent,
@@ -73,6 +79,11 @@ const DECLARATIONS = [
   StudioDateRangeFilterComponent,
   TruncatePipe,
   TagsManagementDialogComponent,
+  FolderCardComponent,
+  CreateFolderDialogComponent,
+  MoveToFolderDialogComponent,
+  CopyToFolderDialogComponent,
+  FolderConflictDialogComponent,
 ];
 
 const MODULES = [
@@ -95,6 +106,7 @@ const MODULES = [
   MatProgressSpinnerModule,
   MatDatepickerModule,
   MatNativeDateModule,
+  MatTabsModule,
   RouterModule,
   MarkdownModule.forRoot(),
 ];
@@ -118,6 +130,7 @@ const EXPORTED_MODULES = [
   MatDatepickerModule,
   MatNativeDateModule,
   MatProgressSpinnerModule,
+  MatTabsModule,
   MarkdownModule,
 ];
 
