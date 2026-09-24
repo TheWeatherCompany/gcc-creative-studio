@@ -258,6 +258,11 @@ resource "google_cloud_tasks_queue" "generation" {
   name     = "cs-${var.environment}-generation"
   location = var.gcp_region
 
+  # A deleted queue's name can't be reused for about 7 days, so an apply that
+  # would destroy or replace this queue fails at the destroy step (the plan
+  # still shows it). To rename it on purpose, apply "DELETE" here first.
+  deletion_policy = "PREVENT"
+
   rate_limits {
     max_concurrent_dispatches = var.job_queue_max_concurrent_dispatches
     max_dispatches_per_second = 5

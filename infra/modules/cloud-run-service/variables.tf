@@ -151,5 +151,5 @@ variable "request_timeout" {
 variable "cpu_idle" {
   type        = bool
   default     = null
-  description = "True allocates CPU only during requests (request-based billing). Null sends nothing, which Cloud Run treats as false (always-on CPU) because the module sets resources.limits."
+  description = "True allocates CPU only during requests (request-based billing). Null sends nothing, which Cloud Run treats as false (always-on CPU) because the module sets resources.limits. The attribute is not computed, so with null a switch to request-based CPU made outside Terraform is reverted to always-on by the next apply."
 }
