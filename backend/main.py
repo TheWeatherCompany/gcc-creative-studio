@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 # Register SQLAlchemy event listeners
 from src.common import events  # noqa: F401
 
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from os import getenv
 
@@ -35,6 +34,10 @@ from src.admin.admin_controller import router as admin_router
 from src.audios.audio_controller import router as audio_router
 from src.brand_guidelines.brand_guideline_controller import (
     router as brand_guideline_router,
+)
+from src.common.generation_executor import (
+    GenerationExecutor,
+    fail_inflight_jobs,
 )
 from src.config.config_service import config_service
 from src.galleries.gallery_controller import router as gallery_router
@@ -136,7 +139,7 @@ async def lifespan(app: FastAPI):
     # Vertex Veo per-project/region online-prediction quota, not this pool:
     # raising it beyond ~4 requires confirmed quota headroom, otherwise the
     # extra workers simply contend for the same quota.
-    app.state.executor = ThreadPoolExecutor(
+    app.state.executor = GenerationExecutor(
         max_workers=config_service.GENERATION_MAX_WORKERS
     )
 
@@ -144,8 +147,14 @@ async def lifespan(app: FastAPI):
 
     logger.info("Application shutdown terminating")
 
+    # Fail this process's in-flight jobs first: shutdown(wait=True) blocks
+    # until running jobs return, and on Cloud Run SIGKILL usually lands before
+    # that. The shared engine is never disposed here, so it is still usable.
+    await fail_inflight_jobs(app.state.executor.inflight_job_ids())
+
     logger.info("Closing ThreadPoolExecutor...")
-    app.state.executor.shutdown(wait=True)
+    # Queued jobs were just marked failed, so don't start them.
+    app.state.executor.shutdown(wait=True, cancel_futures=True)
     # Your shutdown logic here, e.g., closing database connections
 
 

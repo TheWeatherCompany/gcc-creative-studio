@@ -22,7 +22,6 @@ import sys
 import time
 import wave
 from collections.abc import MutableSequence
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import vertexai
@@ -42,6 +41,7 @@ from src.common.base_dto import (
     GenerationModelEnum,
     MimeTypeEnum,
 )
+from src.common.generation_executor import GenerationExecutor
 from src.common.schema.genai_model_setup import GenAIModelSetup
 from src.common.schema.media_item_model import JobStatusEnum, MediaItemModel
 from src.common.storage_service import GcsService
@@ -388,7 +388,7 @@ class AudioService:
         self,
         request_dto: CreateAudioDto,
         user: UserModel,
-        executor: ThreadPoolExecutor,
+        executor: GenerationExecutor,
     ) -> MediaItemResponse:
 
         media_post_to_save = MediaItemModel(
@@ -410,7 +410,8 @@ class AudioService:
         )
         saved_item = await self.media_repo.create(media_post_to_save)
 
-        executor.submit(
+        executor.submit_job(
+            saved_item.id,
             _process_audio_in_background,
             saved_item.id,
             request_dto,

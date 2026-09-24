@@ -147,7 +147,7 @@ class TestVeoServiceMethods:
         assert response is not None
         assert response.id == 123
         mock_media_repo.create.assert_called_once()
-        mock_executor.submit.assert_called_once()
+        mock_executor.submit_job.assert_called_once()
 
     @pytest.mark.anyio
     async def test_start_video_concatenation_job_success(
@@ -198,7 +198,7 @@ class TestVeoServiceMethods:
         assert response is not None
         assert response.id == 456
         mock_media_repo.create.assert_called_once()
-        mock_executor.submit.assert_called_once()
+        mock_executor.submit_job.assert_called_once()
 
     @pytest.mark.anyio
     async def test_start_video_concatenation_job_invalid_mime_type(
@@ -313,7 +313,7 @@ class TestVeoServiceMethods:
         assert exc_info.value.status_code == 429
         # Nothing is created or submitted when the cap is hit.
         mock_media_repo.create.assert_not_called()
-        mock_executor.submit.assert_not_called()
+        mock_executor.submit_job.assert_not_called()
         # The cap is counted against the user's in-flight videos.
         mock_media_repo.count_active_generations.assert_awaited_once_with(
             user_id=sample_user.id,
@@ -353,7 +353,7 @@ class TestVeoServiceMethods:
 
         assert exc_info.value.status_code == 429
         mock_media_repo.create.assert_not_called()
-        mock_executor.submit.assert_not_called()
+        mock_executor.submit_job.assert_not_called()
 
 
 class TestBackgroundWorkers:

@@ -19,7 +19,6 @@ import os
 import shutil
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import Depends, HTTPException, status
 from google.cloud.logging import Client as LoggerClient
@@ -35,6 +34,7 @@ from src.common.base_dto import (
     MimeTypeEnum,
     ReferenceImageTypeEnum,
 )
+from src.common.generation_executor import GenerationExecutor
 from src.common.media_utils import concatenate_videos, generate_thumbnail
 from src.common.schema.genai_model_setup import GenAIModelSetup
 from src.common.schema.media_item_model import (
@@ -1350,7 +1350,7 @@ class VeoService:
         self,
         request_dto: CreateVeoDto,
         user: UserModel,
-        executor: ThreadPoolExecutor,
+        executor: GenerationExecutor,
     ) -> MediaItemResponse:
         """Immediately creates a placeholder MediaItem and starts the video generation
         in the background.
@@ -1499,7 +1499,8 @@ class VeoService:
         placeholder_item = await self.media_repo.create(placeholder_item)
 
         # 3. Submit background task
-        executor.submit(
+        executor.submit_job(
+            placeholder_item.id,
             _process_video_in_background,
             media_item_id=placeholder_item.id,
             request_dto=request_dto,
@@ -1530,7 +1531,7 @@ class VeoService:
         self,
         request_dto: ConcatenateVideosDto,
         user: UserModel,
-        executor: ThreadPoolExecutor,
+        executor: GenerationExecutor,
     ) -> MediaItemResponse:
         """Creates a placeholder for a video concatenation job and starts it in the background."""
         # Concatenation also consumes the shared generation pool, so it counts
@@ -1595,7 +1596,8 @@ class VeoService:
         placeholder_item = await self.media_repo.create(placeholder_item)
 
         # 3. Submit background task
-        executor.submit(
+        executor.submit_job(
+            placeholder_item.id,
             _process_video_concatenation_in_background,
             media_item_id=placeholder_item.id,
             request_dto=request_dto,
