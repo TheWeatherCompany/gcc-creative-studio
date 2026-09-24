@@ -143,6 +143,10 @@ export class WorkspaceSwitcherComponent implements OnInit {
           return;
         }
         handleErrorSnackbar(this.snackBar, error, 'Could not load workspaces');
+        // Settle on no workspace so the gallery can end in its empty state.
+        // Not setActiveWorkspace(null): that also forgets the saved workspace,
+        // and this failure may be transient.
+        this.workspaceStateService.setActiveWorkspaceId(null);
       },
     });
   }
@@ -180,6 +184,9 @@ export class WorkspaceSwitcherComponent implements OnInit {
     } else if (this.workspaces.length > 0) {
       // Fallback to the first workspace
       this.setActiveWorkspace(this.workspaces[0].id);
+    } else {
+      // Nothing to activate: settle on none, as for a failed load.
+      this.workspaceStateService.setActiveWorkspaceId(null);
     }
   }
 

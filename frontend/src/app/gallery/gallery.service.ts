@@ -78,7 +78,17 @@ export class GalleryService implements OnDestroy {
         tap(() => this.resetCache()),
         debounceTime(50),
         switchMap(([workspaceId, filters]) => {
-          if (!filters || !workspaceId) {
+          if (!filters) {
+            return of(null);
+          }
+          if (!workspaceId) {
+            // Wait for the workspace list. If it settled on no workspace
+            // (it failed to load or is empty), end in the empty state rather
+            // than a blank page with neither a spinner nor a message.
+            if (this.workspaceStateService.hasSettled()) {
+              this.isLoading$.next(false);
+              this.allImagesLoaded$.next(true);
+            }
             return of(null);
           }
           this.isLoading$.next(true);

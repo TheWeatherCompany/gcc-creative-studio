@@ -21,7 +21,6 @@ import {
   TestRequest,
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
-import {BehaviorSubject} from 'rxjs';
 
 import {GalleryService} from './gallery.service';
 import {GallerySearchDto} from '../common/models/search.model';
@@ -36,7 +35,7 @@ import {environment} from '../../environments/environment';
 describe('GalleryService infinite scroll', () => {
   let service: GalleryService;
   let httpMock: HttpTestingController;
-  let workspaceId$: BehaviorSubject<number | null>;
+  let workspaceState: WorkspaceStateService;
   let sentBodies: GallerySearchDto[];
   let shownWorkspaceIds: Set<number>;
   let allLoaded: boolean;
@@ -79,7 +78,6 @@ describe('GalleryService infinite scroll', () => {
   const pending = () => httpMock.match(searchUrl);
 
   beforeEach(() => {
-    workspaceId$ = new BehaviorSubject<number | null>(null);
     sentBodies = [];
     shownWorkspaceIds = new Set();
     TestBed.configureTestingModule({
@@ -87,16 +85,13 @@ describe('GalleryService infinite scroll', () => {
         GalleryService,
         provideHttpClient(),
         provideHttpClientTesting(),
-        {
-          provide: WorkspaceStateService,
-          useValue: {
-            activeWorkspaceId$: workspaceId$.asObservable(),
-            getActiveWorkspaceId: () => workspaceId$.value,
-          },
-        },
+        // The real service, never a synchronous of(): the workspace starts
+        // unknown (null, not settled) as it does in the app.
+        WorkspaceStateService,
       ],
     });
     httpMock = TestBed.inject(HttpTestingController);
+    workspaceState = TestBed.inject(WorkspaceStateService);
   });
 
   /**
@@ -128,7 +123,7 @@ describe('GalleryService infinite scroll', () => {
 
     // The workspace arrives; the sentinel is still visible and fires again
     // before the debounced pipeline has run.
-    workspaceId$.next(1);
+    workspaceState.setActiveWorkspaceId(1);
     service.loadGallery();
     tick(50);
     pending().forEach(req => answer(req));
@@ -152,7 +147,7 @@ describe('GalleryService infinite scroll', () => {
 
   it('discards a page requested under filters that have since changed', fakeAsync(() => {
     start();
-    workspaceId$.next(1);
+    workspaceState.setActiveWorkspaceId(1);
     service.setFilters(filters);
     tick(50);
     pending().forEach(req => answer(req));
@@ -183,7 +178,7 @@ describe('GalleryService infinite scroll', () => {
 
   it('does not fetch the new filters at the old offset before the reset', fakeAsync(() => {
     start();
-    workspaceId$.next(1);
+    workspaceState.setActiveWorkspaceId(1);
     service.setFilters(filters);
     tick(50);
     pending().forEach(req => answer(req));
@@ -202,11 +197,28 @@ describe('GalleryService infinite scroll', () => {
     expect(shownIds).toEqual(Array.from({length: 40}, (_, i) => 1001 + i));
   }));
 
+  // No workspace means no search. The gallery must still end somewhere
+  // visible, but only once the workspace list has settled, so that "No media
+  // items found" never flashes during a normal load.
+  it('shows the empty state once the workspace list settles on none', fakeAsync(() => {
+    start();
+    service.setFilters(filters);
+    tick(50);
+    expect(allLoaded).toBeFalse();
+
+    // The workspace list failed to load, or came back empty.
+    workspaceState.setActiveWorkspaceId(null);
+    tick(50);
+    expect(allLoaded).toBeTrue();
+    expect(service.isLoading$.value).toBeFalse();
+    expect(shownIds).toEqual([]);
+  }));
+
   // Without the guard, the old page's error marks the new search as fully
   // loaded, and it stops at 40 items with "You've reached the end".
   it('ignores a page that fails after the filters have changed', fakeAsync(() => {
     start();
-    workspaceId$.next(1);
+    workspaceState.setActiveWorkspaceId(1);
     service.setFilters(filters);
     tick(50);
     pending().forEach(req => answer(req));
