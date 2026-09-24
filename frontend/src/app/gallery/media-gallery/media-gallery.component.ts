@@ -567,7 +567,9 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     });
 
     if (
-      confirm(`Are you sure you want to delete ${itemsToDelete.length} items?`)
+      confirm(
+        `Are you sure you want to delete ${itemsToDelete.length} ${itemsToDelete.length === 1 ? 'item' : 'items'}?`,
+      )
     ) {
       this.isDeleting = true;
       const workspaceId =
@@ -615,7 +617,7 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     this.galleryService.bulkCopy(itemsToCopy, targetWorkspaceId).subscribe({
       next: result => {
         this.snackBar.open(
-          `${result.copied_count} items copied successfully`,
+          `${result.copied_count} ${result.copied_count === 1 ? 'item' : 'items'} copied successfully`,
           'Close',
           {duration: 3000},
         );

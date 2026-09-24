@@ -189,7 +189,7 @@
         *ngIf="selectedItems.size > 0"
         class="flex justify-end items-center gap-4 px-4 py-2 mt-2 w-full animate-fade-in"
       >
-        <span class="text-white/60 text-sm mr-auto">{{ selectedItems.size }} items selected</span>
+        <span class="text-white/60 text-sm mr-auto">{{ selectedItems.size }} {{ selectedItems.size === 1 ? 'item' : 'items' }} selected</span>
         
         <studio-button
           variant="primary"
