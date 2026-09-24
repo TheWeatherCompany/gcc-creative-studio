@@ -180,4 +180,27 @@ describe('GalleryService infinite scroll', () => {
     expect(shownIds.length).toBe(80);
     expect(allLoaded).toBeFalse();
   }));
+
+  // Without the guard, the old page's error marks the new search as fully
+  // loaded, and it stops at 40 items with "You've reached the end".
+  it('ignores a page that fails after the filters have changed', fakeAsync(() => {
+    start();
+    workspaceId$.next(1);
+    service.setFilters(filters);
+    tick(50);
+    pending().forEach(req => answer(req));
+
+    service.loadGallery();
+    const stalePage = httpMock.expectOne(searchUrl);
+    service.setFilters({...filters, query: 'sunset'});
+    tick(50);
+    const freshPage = httpMock.expectOne(searchUrl);
+
+    stalePage.flush(null, {status: 500, statusText: 'Server Error'});
+    answer(freshPage, 100, 1000);
+
+    expect(shownIds.length).toBe(40);
+    expect(allLoaded).toBeFalse();
+    expect(service.isLoading$.value).toBeFalse();
+  }));
 });
