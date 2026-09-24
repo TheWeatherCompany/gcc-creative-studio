@@ -43,6 +43,7 @@ from src.generation_options.generation_options_controller import (
 )
 from src.images.imagen_controller import router as imagen_router
 from src.jobs.dispatch import build_executor
+from src.jobs.internal_jobs_controller import router as internal_jobs_router
 from src.media_templates.media_templates_controller import (
     router as media_template_router,
 )
@@ -214,3 +215,4 @@ app.include_router(workflow_router)
 app.include_router(workflows_executor_router)
 app.include_router(workbench_router)
 app.include_router(folder_router)
+app.include_router(internal_jobs_router)
