@@ -25,7 +25,7 @@ from fastapi import Depends, HTTPException, status
 from google.cloud.logging import Client as LoggerClient
 from google.cloud.logging.handlers import CloudLoggingHandler
 from google.genai import Client, types
-from google.genai.interactions import VideoResponseFormatParam
+from google.genai.interactions import VideoContent, VideoResponseFormatParam
 import base64
 
 from src.auth.iam_signer_credentials_service import IamSignerCredentials
@@ -88,13 +88,61 @@ def _format_omni_prompt(
 
 
 class EmptyGenerationError(Exception):
-    """Veo reported an operation as done but returned no videos.
+    """The model reported success but returned no videos.
 
     Raised rather than returned so the worker's failure handler writes FAILED:
     a silent return leaves the row PROCESSING, invisible to the user and
     counted against their concurrency cap. Typed so it is distinguishable from
     genuine infrastructure errors in logs.
     """
+
+
+# Cap on how much of the model's text is quoted in a user-facing error.
+_OMNI_ERROR_TEXT_MAX_CHARS = 300
+
+
+def _pick_omni_video_part(contents: list, log: logging.Logger) -> VideoContent:
+    """Returns the first video part of a Gemini Omni model output.
+
+    The model can emit text alongside the video, in either order, so the video
+    is not reliably contents[0]. Text parts are logged so the model's words
+    are not lost, and are quoted back to the user if no video came with them.
+    """
+    texts = [part.text for part in contents if part.type == "text"]
+    for text in texts:
+        log.warning(f"Gemini Omni returned text: {text}")
+
+    for part in contents:
+        if part.type == "video" and (part.data or part.uri):
+            return part
+
+    text = " ".join(texts).strip()
+    if not text:
+        raise EmptyGenerationError("The model returned no video.")
+    if len(text) > _OMNI_ERROR_TEXT_MAX_CHARS:
+        text = text[:_OMNI_ERROR_TEXT_MAX_CHARS].rstrip() + "..."
+    raise EmptyGenerationError(f"The model returned no video: {text}")
+
+
+def _read_omni_video_bytes(
+    part: VideoContent, gcs_service: GcsService
+) -> bytes:
+    """Returns the raw bytes of an Omni video part, inline or by URI."""
+    if part.data:
+        return base64.b64decode(part.data)
+    # We never ask for delivery="uri", so inline data is the expected form.
+    # If the API sends a URI anyway, on Vertex it is a Cloud Storage object.
+    # Anything else (e.g. a Files API URL) we have no safe way to fetch.
+    if not part.uri.startswith("gs://"):
+        raise RuntimeError(
+            f"The model returned the video at an unsupported URI: {part.uri}"
+        )
+    video_bytes = gcs_service.download_bytes_from_gcs(part.uri)
+    if not video_bytes:
+        raise RuntimeError(
+            f"Could not download the generated video from {part.uri}."
+        )
+    return video_bytes
 
 
 def _mark_job_failed(
@@ -770,7 +818,7 @@ def _process_video_in_background(
                                 if interaction.steps:
                                     for step in interaction.steps:
                                         if step.type == "model_output":
-                                            contents.extend(step.content)
+                                            contents.extend(step.content or [])
                                             if (
                                                 hasattr(step, "signature")
                                                 and step.signature
@@ -785,13 +833,13 @@ def _process_video_in_background(
                                                     "signature"
                                                 )
 
-                                if not contents or not contents[0].data:
-                                    raise Exception(
-                                        f"Interactions call {i + 1} succeeded but returned no model output data."
-                                    )
-
-                                raw_video_bytes = base64.b64decode(
-                                    contents[0].data
+                                video_part = _pick_omni_video_part(
+                                    contents, worker_logger
+                                )
+                                raw_video_bytes = await asyncio.to_thread(
+                                    _read_omni_video_bytes,
+                                    video_part,
+                                    gcs_service,
                                 )
 
                                 # Write raw video bytes directly to local output path using index
