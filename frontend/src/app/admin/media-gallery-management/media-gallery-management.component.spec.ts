@@ -107,6 +107,12 @@ describe('MediaGalleryManagementComponent', () => {
     );
   }
 
+  // Material 20 paginator buttons use disabledInteractive: a disabled button
+  // stays focusable, so it reports aria-disabled rather than .disabled.
+  function isDisabled(button: HTMLButtonElement): boolean {
+    return button.getAttribute('aria-disabled') === 'true';
+  }
+
   function nextPageButton(): HTMLButtonElement | null {
     return fixture.nativeElement.querySelector(
       '.mat-mdc-paginator-navigation-next',
@@ -198,7 +204,7 @@ describe('MediaGalleryManagementComponent', () => {
 
   it('renders the first page with the previous-page button disabled', () => {
     expect(paginator()!.pageIndex).toBe(0);
-    expect(previousPageButton()!.disabled).toBeTrue();
+    expect(isDisabled(previousPageButton()!)).toBeTrue();
   });
 
   it('hides the paginator while a page is loading', () => {
@@ -217,7 +223,7 @@ describe('MediaGalleryManagementComponent', () => {
     expect(request.offset).toBe(10);
     expect(component.currentPageIndex).toBe(1);
     expect(paginator()!.pageIndex).toBe(1);
-    expect(previousPageButton()!.disabled).toBeFalse();
+    expect(isDisabled(previousPageButton()!)).toBeFalse();
     expect(rangeLabel()).toContain('11');
   });
 
@@ -244,7 +250,7 @@ describe('MediaGalleryManagementComponent', () => {
 
     expect(request.offset).toBe(0);
     expect(paginator()!.pageIndex).toBe(0);
-    expect(previousPageButton()!.disabled).toBeTrue();
+    expect(isDisabled(previousPageButton()!)).toBeTrue();
   });
 
   it('returns to the first page when the page size changes', async () => {

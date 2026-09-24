@@ -95,6 +95,12 @@ describe('TagsManagementComponent', () => {
     );
   }
 
+  // Material 20 paginator buttons use disabledInteractive: a disabled button
+  // stays focusable, so it reports aria-disabled rather than .disabled.
+  function isDisabled(button: HTMLButtonElement): boolean {
+    return button.getAttribute('aria-disabled') === 'true';
+  }
+
   function nextPageButton(): HTMLButtonElement | null {
     return fixture.nativeElement.querySelector(
       '.mat-mdc-paginator-navigation-next',
@@ -156,7 +162,7 @@ describe('TagsManagementComponent', () => {
 
   it('renders the first page with the previous-page button disabled', () => {
     expect(paginator()!.pageIndex).toBe(0);
-    expect(previousPageButton()!.disabled).toBeTrue();
+    expect(isDisabled(previousPageButton()!)).toBeTrue();
   });
 
   // The paginator is destroyed and rebuilt on every load, so without
@@ -168,7 +174,7 @@ describe('TagsManagementComponent', () => {
     expect(request.page).toBe(2);
     expect(component.currentPageIndex).toBe(1);
     expect(paginator()!.pageIndex).toBe(1);
-    expect(previousPageButton()!.disabled).toBeFalse();
+    expect(isDisabled(previousPageButton()!)).toBeFalse();
   });
 
   it('goes back a page when the previous-page button is clicked', async () => {
@@ -198,6 +204,6 @@ describe('TagsManagementComponent', () => {
     expect(request.page).toBe(1);
     expect(component.currentPageIndex).toBe(0);
     expect(paginator()!.pageIndex).toBe(0);
-    expect(previousPageButton()!.disabled).toBeTrue();
+    expect(isDisabled(previousPageButton()!)).toBeTrue();
   });
 });
