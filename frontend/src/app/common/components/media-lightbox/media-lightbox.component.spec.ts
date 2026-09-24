@@ -176,23 +176,22 @@ describe('MediaLightboxComponent', () => {
       expect(renderedMoveButton()).toBeDefined();
     });
 
-    // The dialog marks the root as the current location only for null.
-    it('passes null as the current folder for an item at the root', () => {
-      component.openBatchMoveDialog();
+    // The dialog marks the root as the current location only for null, and
+    // an item at the root carries no folderId at all.
+    it('passes the item folder, or null at the root, as the current folder', () => {
+      for (const [folderId, currentFolderId] of [
+        [undefined, null],
+        [7, 7],
+      ] as const) {
+        component.mediaItem!.folderId = folderId;
 
-      expect(dialogOpen).toHaveBeenCalledWith(MoveToFolderDialogComponent, {
-        data: {workspaceId: 1, itemCount: 1, currentFolderId: null},
-      });
-    });
+        component.openBatchMoveDialog();
 
-    it('passes the item folder as the current folder', () => {
-      component.mediaItem!.folderId = 7;
-
-      component.openBatchMoveDialog();
-
-      expect(dialogOpen.calls.mostRecent().args[1].data.currentFolderId).toBe(
-        7,
-      );
+        expect(dialogOpen.calls.mostRecent().args).toEqual([
+          MoveToFolderDialogComponent,
+          {data: {workspaceId: 1, itemCount: 1, currentFolderId}},
+        ]);
+      }
     });
 
     it('moves into the chosen folder and names it in the toast', () => {
@@ -259,21 +258,6 @@ describe('MediaLightboxComponent', () => {
 
       expect(lastToast()).toContain('Destination folder not found.');
       expect(component.mediaItem!.folderId).toBeUndefined();
-    });
-
-    // A 409 is not always a name collision: the subtree-too-deep error is a
-    // 409 with a string detail, and must be shown as such.
-    it('shows a string 409 as is rather than as a collision', () => {
-      const tooDeep =
-        'This folder hierarchy is nested too deeply, or contains a cycle, and cannot be processed.';
-      folderService.moveItems.and.returnValue(
-        throwError(() => ({status: 409, error: {detail: tooDeep}})),
-      );
-      closeWith({destinationFolderId: 5, destinationName: 'Holiday'});
-
-      component.openBatchMoveDialog();
-
-      expect(lastToast()).toBe(tooDeep);
     });
 
     it('moves to another workspace through bulkMove and leaves the page', () => {

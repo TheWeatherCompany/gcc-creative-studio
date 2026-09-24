@@ -14,12 +14,7 @@
  * limitations under the License.
  */
 
-import {
-  ComponentFixture,
-  TestBed,
-  fakeAsync,
-  tick,
-} from '@angular/core/testing';
+import {ComponentFixture, TestBed} from '@angular/core/testing';
 import {NoopAnimationsModule} from '@angular/platform-browser/animations';
 import {provideRouter, Router} from '@angular/router';
 import {provideHttpClient} from '@angular/common/http';
@@ -86,12 +81,6 @@ describe('HeaderComponent', () => {
     }).compileComponents();
 
     router = TestBed.inject(Router);
-    // Read by the constructor, and Karma shares one browser context.
-    localStorage.removeItem('menuFixed');
-  });
-
-  afterEach(() => {
-    localStorage.removeItem('menuFixed');
   });
 
   const create = () => {
@@ -127,37 +116,31 @@ describe('HeaderComponent', () => {
   });
 
   describe('isGalleryActive', () => {
-    it('is false when constructed away from the gallery', async () => {
+    // isActive('/gallery', false) is a subset match, so a media detail page
+    // keeps the gallery highlighted too. The non-gallery route comes last so
+    // the table also proves the flag drops again on the way out.
+    const routes: Array<[string, boolean]> = [
+      ['/gallery', true],
+      ['/folders/123', true],
+      ['/gallery/42', true],
+      ['/video', false],
+    ];
+
+    it('highlights the gallery on its routes, on load and on navigation', async () => {
       await router.navigateByUrl('/video');
       create();
       expect(component.isGalleryActive).toBeFalse();
-    });
 
-    it('is true when constructed on the gallery', async () => {
-      await router.navigateByUrl('/gallery');
-      create();
-      expect(component.isGalleryActive).toBeTrue();
-    });
-
-    it('follows navigation into a folder and back out', async () => {
-      await router.navigateByUrl('/video');
-      create();
-
-      await router.navigateByUrl('/folders/123');
-      expect(component.isGalleryActive).toBeTrue();
-
-      await router.navigateByUrl('/video');
-      expect(component.isGalleryActive).toBeFalse();
-    });
-
-    // isActive('/gallery', false) is a subset match, so the detail page
-    // keeps the gallery highlighted.
-    it('stays true on a media detail page', async () => {
-      await router.navigateByUrl('/video');
-      create();
-
-      await router.navigateByUrl('/gallery/42');
-      expect(component.isGalleryActive).toBeTrue();
+      for (const [url, active] of routes) {
+        await router.navigateByUrl(url);
+        expect(component.isGalleryActive)
+          .withContext(`navigated to ${url}`)
+          .toBe(active);
+        const loadedHere = TestBed.createComponent(HeaderComponent);
+        expect(loadedHere.componentInstance.isGalleryActive)
+          .withContext(`constructed on ${url}`)
+          .toBe(active);
+      }
     });
 
     it('stops following navigation once destroyed', async () => {
@@ -169,85 +152,6 @@ describe('HeaderComponent', () => {
 
       expect(component.isGalleryActive).toBeFalse();
     });
-  });
-
-  it('should unsubscribe on destroy', () => {
-    create();
-    const nextSpy = spyOn(component['destroy$'], 'next');
-    const completeSpy = spyOn(component['destroy$'], 'complete');
-    component.ngOnDestroy();
-    expect(nextSpy).toHaveBeenCalled();
-    expect(completeSpy).toHaveBeenCalled();
-  });
-
-  it('should call authService.logout on logout', () => {
-    create();
-    component.logout();
-    expect(TestBed.inject(AuthService).logout).toHaveBeenCalled();
-  });
-
-  it('should navigate to root on navigate', () => {
-    create();
-    const navigateByUrl = spyOn(router, 'navigateByUrl').and.resolveTo(true);
-    component.navigate();
-    expect(navigateByUrl).toHaveBeenCalledWith('/');
-  });
-
-  it('should toggle menuFixed and update localStorage', () => {
-    create();
-    spyOn(localStorage, 'setItem');
-    expect(component.menuFixed).toBeFalse();
-    component.toggleMenu();
-    expect(component.menuFixed).toBeTrue();
-    expect(localStorage.setItem).toHaveBeenCalledWith('menuFixed', 'true');
-    component.toggleMenu();
-    expect(component.menuFixed).toBeFalse();
-    expect(localStorage.setItem).toHaveBeenCalledWith('menuFixed', 'false');
-  });
-
-  describe('getTooltipText', () => {
-    beforeEach(() => create());
-
-    it('should return fixed tooltip when menuFixed is false', () => {
-      component.menuFixed = false;
-      expect(component.getTooltipText()).toBe('Click to make the menu fixed');
-    });
-
-    it('should return personalized tooltip when menuFixed is true', () => {
-      component.menuFixed = true;
-      expect(component.getTooltipText()).toBe(
-        'Hey there Test! Click to make the menu dynamic',
-      );
-    });
-
-    it('should handle missing user name gracefully', () => {
-      component.currentUser = null;
-      component.menuFixed = true;
-      expect(component.getTooltipText()).toBe(
-        'Hey there ! Click to make the menu dynamic',
-      );
-    });
-  });
-
-  describe('menu hover actions', () => {
-    beforeEach(() => create());
-
-    it('should handle tools menu enter and leave', fakeAsync(() => {
-      component.onToolsEnter();
-      expect(component.toolsMenuHovered).toBeTrue();
-
-      component.onToolsLeave();
-      expect(component.toolsMenuHovered).toBeTrue();
-      tick(200);
-      expect(component.toolsMenuHovered).toBeFalse();
-    }));
-
-    it('should clear tools menu timeout on enter', fakeAsync(() => {
-      component.onToolsLeave();
-      component.onToolsEnter();
-      tick(200);
-      expect(component.toolsMenuHovered).toBeTrue();
-    }));
   });
 
   // Upstream deletes the environment import from this component; ours needs

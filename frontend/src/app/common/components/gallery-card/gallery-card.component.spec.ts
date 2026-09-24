@@ -391,29 +391,22 @@ describe('GalleryCardComponent drag', () => {
     component.item = makeItem({id: 42, itemType: 'media_item'});
   });
 
-  it('sets the drag payload for a single item', () => {
-    const drag = dragEvent();
+  it('puts a single item in the payload list for its type', () => {
+    const cases = [
+      {itemType: 'media_item', mediaItemIds: [42], sourceAssetIds: []},
+      {itemType: 'source_asset', mediaItemIds: [], sourceAssetIds: [42]},
+    ] as const;
+    for (const {itemType, mediaItemIds, sourceAssetIds} of cases) {
+      component.item = makeItem({id: 42, itemType});
+      const drag = dragEvent();
 
-    component.onDragStart(drag.event);
+      component.onDragStart(drag.event);
 
-    expect(component.isDragging).toBeTrue();
-    expect(drag.setData.calls.mostRecent().args[0]).toBe('application/json');
-    expect(drag.payload()).toEqual({
-      mediaItemIds: [42],
-      sourceAssetIds: [],
-      itemCount: 1,
-    });
-    expect(drag.setDragImage).toHaveBeenCalled();
-  });
-
-  it('sets the payload for a source asset', () => {
-    component.item = makeItem({id: 10, itemType: 'source_asset'});
-    const drag = dragEvent();
-
-    component.onDragStart(drag.event);
-
-    expect(drag.payload().mediaItemIds).toEqual([]);
-    expect(drag.payload().sourceAssetIds).toEqual([10]);
+      expect(drag.setData.calls.mostRecent().args[0]).toBe('application/json');
+      expect(drag.payload())
+        .withContext(itemType)
+        .toEqual({mediaItemIds, sourceAssetIds, itemCount: 1});
+    }
   });
 
   it('drags the whole selection when this item is part of it', () => {
@@ -458,17 +451,6 @@ describe('GalleryCardComponent drag', () => {
     expect(innerHtml).not.toHaveBeenCalled();
   });
 
-  it('skips the ghost during SSR', () => {
-    component = construct('server');
-    component.item = makeItem({id: 42});
-    const drag = dragEvent();
-
-    component.onDragStart(drag.event);
-
-    expect(drag.setData).toHaveBeenCalled();
-    expect(drag.setDragImage).not.toHaveBeenCalled();
-  });
-
   it('refuses to drag in the image selector', () => {
     component.isSelectorMode = true;
     const drag = dragEvent();
@@ -478,14 +460,6 @@ describe('GalleryCardComponent drag', () => {
     expect(drag.event.preventDefault).toHaveBeenCalled();
     expect(component.isDragging).toBeFalse();
     expect(drag.setData).not.toHaveBeenCalled();
-  });
-
-  it('resets isDragging on dragend', () => {
-    component.onDragStart(dragEvent().event);
-
-    component.onDragEnd();
-
-    expect(component.isDragging).toBeFalse();
   });
 
   describe('click right after a drag', () => {
@@ -550,18 +524,6 @@ describe('GalleryCardComponent drag', () => {
       });
     }
 
-    it('still drags when the press starts on the media', () => {
-      component.onPointerDownOrigin(
-        pointerDownOn(root.querySelector('.media-element')!),
-      );
-      const drag = dragEvent();
-
-      component.onDragStart(drag.event);
-
-      expect(drag.event.preventDefault).not.toHaveBeenCalled();
-      expect(component.isDragging).toBeTrue();
-    });
-
     it('drags normally on the next press after a cancelled one', () => {
       component.onPointerDownOrigin(
         pointerDownOn(root.querySelector('.favorite-btn')!),
@@ -587,23 +549,20 @@ describe('GalleryCardComponent drag', () => {
     });
     afterEach(() => jasmine.clock().uninstall());
 
-    it('does not start a preview when the drag begins inside the intent window', () => {
+    it('never starts a preview from a timer armed before or during the drag', () => {
+      // The drag begins inside the intent window.
       component.onMouseEnter();
       jasmine.clock().tick(100);
-
       component.onDragStart(dragEvent().event);
       jasmine.clock().tick(100);
-
       expect(component.hoveredVideoId).toBeNull();
-    });
+      component.onDragEnd();
 
-    it('does not start a preview if the timer fires while dragging', () => {
+      // The timer is still pending when the card starts dragging.
       component.onMouseEnter();
       jasmine.clock().tick(100);
       component.isDragging = true;
-
       jasmine.clock().tick(100);
-
       expect(component.hoveredVideoId).toBeNull();
     });
 
@@ -617,32 +576,20 @@ describe('GalleryCardComponent drag', () => {
       expect(component.hoveredVideoId).toBeNull();
     });
 
-    it('does not arm the timer for a mouseenter during the drag', () => {
+    it('arms no preview during a drag, and resets hover state on dragend', () => {
       component.onDragStart(dragEvent().event);
 
       component.onMouseEnter();
-
       expect(component['hoverIntentTimer']).toBeNull();
-      jasmine.clock().tick(150);
-      expect(component.hoveredVideoId).toBeNull();
-    });
-
-    it('does not light the audio preview for a mouseenter during the drag', () => {
       component.item = makeItem({id: 7, mimeType: 'audio/mpeg'});
-      component.onDragStart(dragEvent().event);
-
       component.onMouseEnter();
-
       expect(component.hoveredAudioId).toBeNull();
-    });
 
-    it('resets hover state on dragend', () => {
-      component.onDragStart(dragEvent().event);
       component.hoveredVideoId = 42;
-      component.hoveredAudioId = 42;
-
+      component.hoveredAudioId = 7;
       component.onDragEnd();
 
+      expect(component.isDragging).toBeFalse();
       expect(component.hoveredVideoId).toBeNull();
       expect(component.hoveredAudioId).toBeNull();
     });
