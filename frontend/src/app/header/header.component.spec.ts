@@ -20,6 +20,7 @@ import {provideRouter} from '@angular/router';
 import {provideHttpClient} from '@angular/common/http';
 import {provideHttpClientTesting} from '@angular/common/http/testing';
 import {MatMenuModule} from '@angular/material/menu';
+import {MatButtonModule} from '@angular/material/button';
 import {MatIconModule} from '@angular/material/icon';
 import {MatTooltipModule} from '@angular/material/tooltip';
 import {CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
@@ -38,6 +39,7 @@ describe('HeaderComponent', () => {
       imports: [
         NoopAnimationsModule,
         MatMenuModule,
+        MatButtonModule,
         MatIconModule,
         MatTooltipModule,
       ],
@@ -75,5 +77,25 @@ describe('HeaderComponent', () => {
 
   it('should create', () => {
     expect(component).toBeTruthy();
+  });
+
+  // Each nav icon sits in a 24px overflow-hidden slot. Material's FAB
+  // stylesheet (56px) loads after Tailwind's, so plain w-6/h-6
+  // lose and the icon is clipped to a sliver. This runs in real Chrome, so
+  // the computed layout is what the user sees.
+  it('sizes every nav FAB to its 24px icon slot', () => {
+    component.menuFixed = true;
+    fixture.detectChanges();
+
+    const buttons: HTMLElement[] = Array.from(
+      fixture.nativeElement.querySelectorAll('.menu-items button[matFab]'),
+    );
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const button of buttons) {
+      const {width, height} = button.getBoundingClientRect();
+      expect({width, height})
+        .withContext(button.ariaLabel ?? '')
+        .toEqual({width: 24, height: 24});
+    }
   });
 });
