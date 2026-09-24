@@ -123,3 +123,33 @@ variable "db_secret_id" {
 }
 variable "db_name" { type = string }
 variable "db_user" { type = string }
+
+variable "allow_unauthenticated" {
+  type        = bool
+  default     = true
+  description = "Grant roles/run.invoker to allUsers. The backend needs this (Firebase proxies without credentials); the worker must not have it."
+}
+
+variable "ingress" {
+  type        = string
+  default     = "INGRESS_TRAFFIC_ALL"
+  description = "Cloud Run ingress setting."
+}
+
+variable "max_instance_request_concurrency" {
+  type        = number
+  default     = null
+  description = "Requests per instance. Null leaves the service's current value alone."
+}
+
+variable "request_timeout" {
+  type        = string
+  default     = null
+  description = "Per-request timeout, e.g. \"900s\". Null leaves the current value alone."
+}
+
+variable "cpu_idle" {
+  type        = bool
+  default     = null
+  description = "True allocates CPU only during requests (request-based billing). Null sends nothing, which Cloud Run treats as false (always-on CPU) because the module sets resources.limits."
+}
