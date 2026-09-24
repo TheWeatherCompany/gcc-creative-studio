@@ -34,6 +34,11 @@ logger = logging.getLogger(__name__)
 # Building this only opens a requests.Session; no network I/O at import.
 _transport = google_requests.Request()
 
+# google-auth rejects a token whose iat is ahead of this instance's clock, so
+# an instance a moment behind Google's would 401 a fresh token, and that
+# spends the job's one Cloud Tasks retry. The same margin is allowed past exp.
+CLOCK_SKEW_SECONDS = 10
+
 
 async def verify_task_token(
     authorization: str | None = Header(default=None),
@@ -56,7 +61,11 @@ async def verify_task_token(
 
     try:
         claims = await asyncio.to_thread(
-            id_token.verify_oauth2_token, token, _transport, audience
+            id_token.verify_oauth2_token,
+            token,
+            _transport,
+            audience,
+            clock_skew_in_seconds=CLOCK_SKEW_SECONDS,
         )
     except google_auth_exceptions.TransportError as e:
         # Google's signing certs could not be fetched. Not the caller's fault,
