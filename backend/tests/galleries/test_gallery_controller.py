@@ -22,6 +22,11 @@ from fastapi.testclient import TestClient
 
 from src.auth.auth_guard import get_current_user
 from src.common.dto.pagination_response_dto import PaginationResponseDto
+from src.galleries.dto.bulk_move_dto import (
+    BulkMoveFailureDto,
+    BulkMoveFailureReason,
+    BulkMoveResultDto,
+)
 from src.galleries.gallery_controller import router
 from src.galleries.gallery_service import GalleryService
 from src.users.user_model import UserModel, UserRoleEnum
@@ -56,6 +61,8 @@ def fixture_mock_service():
     service.bulk_delete = AsyncMock()
     service.restore_item = AsyncMock()
     service.bulk_download = AsyncMock()
+    service.bulk_copy = AsyncMock()
+    service.bulk_move = AsyncMock()
     return service
 
 
@@ -140,3 +147,107 @@ def test_bulk_download_items_success(client, mock_service):
     payload = {"items": [{"id": 1, "type": "media_item"}], "workspace_id": 1}
     response = client.post("/api/gallery/bulk-download", json=payload)
     assert response.status_code == 200
+
+
+def test_bulk_copy_items_success(client, mock_service):
+    mock_service.bulk_copy.return_value = {"copied_count": 1}
+    payload = {
+        "items": [{"id": 1, "type": "media_item"}],
+        "target_workspace_id": 2,
+    }
+    response = client.post("/api/gallery/bulk-copy", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {"copied_count": 1}
+    mock_service.bulk_copy.assert_called_once()
+
+
+def test_bulk_copy_folders_success(client, mock_service):
+    mock_service.bulk_copy.return_value = {"copied_count": 1}
+    payload = {
+        "items": [{"id": 10, "type": "folder"}],
+        "target_workspace_id": 2,
+    }
+    response = client.post("/api/gallery/bulk-copy", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {"copied_count": 1}
+    mock_service.bulk_copy.assert_called_once()
+
+
+def test_bulk_move_items_success(client, mock_service):
+    mock_service.bulk_move.return_value = {
+        "moved_count": 1,
+        "moved": [{"id": 1, "type": "media_item"}],
+        "failed": [],
+    }
+    payload = {
+        "items": [{"id": 1, "type": "media_item"}],
+        "target_workspace_id": 2,
+    }
+    response = client.post("/api/gallery/bulk-move", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {
+        "moved_count": 1,
+        "moved": [{"id": 1, "type": "media_item"}],
+        "failed": [],
+    }
+    mock_service.bulk_move.assert_called_once()
+
+
+def test_bulk_move_folders_success(client, mock_service):
+    mock_service.bulk_move.return_value = {
+        "moved_count": 1,
+        "moved": [{"id": 10, "type": "folder"}],
+        "failed": [],
+    }
+    payload = {
+        "items": [{"id": 10, "type": "folder"}],
+        "target_workspace_id": 2,
+    }
+    response = client.post("/api/gallery/bulk-move", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {
+        "moved_count": 1,
+        "moved": [{"id": 10, "type": "folder"}],
+        "failed": [],
+    }
+    mock_service.bulk_move.assert_called_once()
+
+
+def test_bulk_move_serializes_failures_with_upstream_casing(
+    client, mock_service
+):
+    mock_service.bulk_move.return_value = {
+        "moved_count": 6,
+        "moved": [BulkMoveResultDto(id=10, type="folder")],
+        "failed": [
+            BulkMoveFailureDto(
+                id=1,
+                type="media_item",
+                reason=BulkMoveFailureReason.NOT_FOUND,
+            )
+        ],
+    }
+    payload = {
+        "items": [
+            {"id": 10, "type": "folder"},
+            {"id": 1, "type": "media_item"},
+        ],
+        "target_workspace_id": 2,
+    }
+    response = client.post("/api/gallery/bulk-move", json=payload)
+    assert response.status_code == 200
+    # moved_count stays snake_case: upstream's frontend reads it.
+    assert response.json() == {
+        "moved_count": 6,
+        "moved": [{"id": 10, "type": "folder"}],
+        "failed": [{"id": 1, "type": "media_item", "reason": "NOT_FOUND"}],
+    }
+
+
+def test_bulk_move_declares_response_model_in_openapi(client):
+    schema = client.app.openapi()
+    ok = schema["paths"]["/api/gallery/bulk-move"]["post"]["responses"]["200"]
+    ref = ok["content"]["application/json"]["schema"]["$ref"]
+    assert ref.endswith("/BulkMoveResponseDto")
+    reason = schema["components"]["schemas"]["BulkMoveFailureReason"]
+    assert set(reason["enum"]) == {r.value for r in BulkMoveFailureReason}
