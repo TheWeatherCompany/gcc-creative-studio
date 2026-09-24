@@ -41,7 +41,16 @@ import {
 import {AssignTagsDialogComponent} from '../assign-tags-dialog/assign-tags-dialog.component';
 import {TagsService} from '../../services/tags.service';
 import {WorkspaceStateService} from '../../../services/workspace/workspace-state.service';
-import {GalleryService} from '../../../gallery/gallery.service';
+import {
+  BULK_MOVE_FAILURE_TEXT,
+  GalleryService,
+} from '../../../gallery/gallery.service';
+import {
+  MoveToFolderDialogComponent,
+  MoveToFolderDialogData,
+  MoveToFolderDialogResult,
+} from '../move-to-folder-dialog/move-to-folder-dialog.component';
+import {FolderService, folderErrorMessage} from '../../services/folder.service';
 
 @Component({
   selector: 'app-media-lightbox',
@@ -58,6 +67,7 @@ export class MediaLightboxComponent
   @Input() showShareButton = true;
   @Input() showDownloadButton = true;
   @Input() showDeleteButton = false;
+  @Input() showMoveButton = false;
 
   get isImage(): boolean {
     return this.mediaItem?.mimeType?.startsWith('image/') ?? false;
@@ -127,6 +137,7 @@ export class MediaLightboxComponent
     private tagsService: TagsService,
     private workspaceStateService: WorkspaceStateService,
     private galleryService: GalleryService,
+    private folderService: FolderService,
   ) {}
 
   isFavoriteUpdating = false;
@@ -277,6 +288,140 @@ export class MediaLightboxComponent
 
   toggleShareMenu(): void {
     this.isShareMenuOpen = !this.isShareMenuOpen;
+  }
+
+  openBatchMoveDialog(): void {
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    if (!workspaceId || !this.mediaItem) return;
+
+    const data: MoveToFolderDialogData = {
+      workspaceId,
+      itemCount: 1,
+      // The dialog marks the root as the current location only for null, and
+      // an item at the root carries no folderId at all.
+      currentFolderId: this.mediaItem.folderId ?? null,
+    };
+    const dialogRef = this.dialog.open(MoveToFolderDialogComponent, {data});
+
+    dialogRef
+      .afterClosed()
+      .subscribe((result: MoveToFolderDialogResult | undefined) => {
+        if (!result) return;
+        if (result.destinationWorkspaceId !== undefined) {
+          this.executeMoveToWorkspace(
+            result.destinationWorkspaceId,
+            result.destinationName,
+          );
+        } else if (result.destinationFolderId !== undefined) {
+          this.executeMove(
+            workspaceId,
+            result.destinationFolderId,
+            result.destinationName,
+          );
+        }
+      });
+  }
+
+  private get moveItemType(): string {
+    return (this.mediaItem as Partial<GalleryItem>)?.itemType || 'media_item';
+  }
+
+  private executeMove(
+    workspaceId: number,
+    destinationFolderId: number | null,
+    destinationName: string,
+  ): void {
+    if (
+      !this.mediaItem ||
+      (this.mediaItem.folderId ?? null) === destinationFolderId
+    )
+      return;
+
+    const item = this.mediaItem;
+    const assetType = this.moveItemType;
+
+    this.folderService
+      .moveItems({
+        workspaceId,
+        mediaItemIds: assetType === 'media_item' ? [item.id] : [],
+        sourceAssetIds: assetType === 'source_asset' ? [item.id] : [],
+        folderIds: [],
+        destinationFolderId,
+      })
+      .subscribe({
+        next: res => {
+          // The backend skips, without an error, an item that another change
+          // already moved out of this workspace or deleted.
+          if (res.total_moved === 0) {
+            this.snackBar.open(
+              'Item was not moved; it may have been moved or deleted',
+              'Close',
+              {duration: 4000},
+            );
+            return;
+          }
+          this.snackBar.open(`Moved to "${destinationName}"`, 'Close', {
+            duration: 3000,
+          });
+          item.folderId = destinationFolderId ?? undefined;
+        },
+        error: err => {
+          console.error('Error moving item from the lightbox:', err);
+          this.snackBar.open(
+            folderErrorMessage(err, 'Failed to move item'),
+            'Close',
+            {duration: 5000},
+          );
+        },
+      });
+  }
+
+  private executeMoveToWorkspace(
+    targetWorkspaceId: number,
+    destinationName: string,
+  ): void {
+    if (!this.mediaItem) return;
+
+    this.galleryService
+      .bulkMove(
+        [{id: this.mediaItem.id, type: this.moveItemType}],
+        targetWorkspaceId,
+      )
+      .subscribe({
+        next: res => {
+          // A 200 can still carry a failure: the item is then listed in
+          // failed[] with a reason, not in moved[].
+          const failure = res.failed[0];
+          if (failure || res.moved.length === 0) {
+            const reason = failure
+              ? (BULK_MOVE_FAILURE_TEXT[failure.reason] ?? failure.reason)
+              : 'it was not moved';
+            this.snackBar.open(
+              `Could not move to "${destinationName}": ${reason}`,
+              'Close',
+              {duration: 5000},
+            );
+            return;
+          }
+          this.snackBar.open(`Moved to "${destinationName}"`, 'Close', {
+            duration: 3000,
+          });
+          // The item now lives in another workspace, so this page no longer
+          // belongs to the active one.
+          void this.router.navigate(['/gallery']);
+        },
+        error: err => {
+          console.error(
+            'Error moving item to a workspace from the lightbox:',
+            err,
+          );
+          this.snackBar.open(
+            folderErrorMessage(err, 'Failed to move item'),
+            'Close',
+            {duration: 5000},
+          );
+        },
+      });
   }
 
   get currentImageUrl(): string {

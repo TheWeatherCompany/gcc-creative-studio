@@ -36,6 +36,7 @@ import {MediaItem} from '../../models/media-item.model';
 import {TagModel} from '../../services/tags.service';
 import {GalleryService} from '../../../gallery/gallery.service';
 import {handleErrorSnackbar} from '../../../utils/handleMessageSnackbar';
+import {GalleryDragPayload} from '../../models/folder.model';
 
 @Component({
   selector: 'app-gallery-card',
@@ -61,8 +62,10 @@ export class GalleryCardComponent implements OnDestroy {
   }
   @Input() item!: GalleryItem;
   @Input() isSelectionMode = false;
+  @Input() isSelectorMode = false;
   @Input() isSelected = false;
   @Input() anyItemSelected = false;
+  @Input() selectedItems: Set<string> = new Set();
   @Input() filteredTags: string[] = [];
 
   @Output() mediaItemSelected = new EventEmitter<MediaItemSelection>();
@@ -73,6 +76,15 @@ export class GalleryCardComponent implements OnDestroy {
     selectedIndex: number;
   }>();
 
+  isDragging = false;
+  private wasDragged = false;
+  /**
+   * Set on every pointerdown: true when the press began on one of the card's
+   * own controls. The browser starts a drag from the draggable card root with
+   * the root as the event target, so dragstart alone cannot tell where it
+   * began.
+   */
+  private dragBlocked = false;
   currentImageIndex = 0;
   loadedMedia: Record<number, boolean> = {};
   hoveredVideoId: number | null = null;
@@ -227,7 +239,18 @@ export class GalleryCardComponent implements OnDestroy {
     }
   }
 
+  onPointerDownOrigin(event: PointerEvent): void {
+    const target = event.target as Element | null;
+    this.dragBlocked = !!target?.closest?.(
+      '.favorite-btn, .selection-indicator, .carousel-control',
+    );
+  }
+
   onMouseEnter() {
+    // A drag carried over this card is not a hover.
+    if (this.isDragging) {
+      return;
+    }
     // Audio only animates an icon, so there is no load to defer.
     if (this.item.mimeType?.startsWith('audio/')) {
       this.hoveredAudioId = this.item.id;
@@ -243,13 +266,19 @@ export class GalleryCardComponent implements OnDestroy {
         return;
       }
       this.hoverIntentTimer = setTimeout(() => {
-        this.hoveredVideoId = this.item.id;
+        if (!this.isDragging) {
+          this.hoveredVideoId = this.item.id;
+        }
         this.hoverIntentTimer = null;
       }, GalleryCardComponent.HOVER_INTENT_MS);
     }
   }
 
   onMouseLeave() {
+    this.stopHoverPreview();
+  }
+
+  private stopHoverPreview(): void {
     this.clearHoverIntent();
     this.hoveredVideoId = null;
     this.hoveredAudioId = null;
@@ -322,7 +351,111 @@ export class GalleryCardComponent implements OnDestroy {
       : ['/gallery', this.item.id];
   }
 
+  onDragStart(event: DragEvent): void {
+    // A press on the heart, the selection tick or a carousel arrow would
+    // otherwise drag the whole card; cancelling leaves its click intact.
+    if (this.isSelectorMode || this.dragBlocked) {
+      event.preventDefault();
+      return;
+    }
+    event.stopPropagation();
+
+    this.isDragging = true;
+    // The intent timer may still be pending, and mouseleave is not dispatched
+    // during an HTML5 drag, so stop the preview here rather than let it start
+    // or keep playing under the drag source.
+    this.stopHoverPreview();
+
+    // Determine if this item or multi-selected items are being dragged
+    let mediaItemIds: number[] = [];
+    let sourceAssetIds: number[] = [];
+    let itemCount = 1;
+
+    const currentKey = `${this.item.itemType}:${this.item.id}`;
+    if (
+      this.isSelected &&
+      this.selectedItems &&
+      this.selectedItems.size > 0 &&
+      this.selectedItems.has(currentKey)
+    ) {
+      const selected = Array.from(this.selectedItems);
+      mediaItemIds = selected
+        .filter(id => id.startsWith('media_item:'))
+        .map(id => parseInt(id.split(':')[1], 10));
+      sourceAssetIds = selected
+        .filter(id => id.startsWith('source_asset:'))
+        .map(id => parseInt(id.split(':')[1], 10));
+      itemCount = this.selectedItems.size;
+    } else {
+      if (this.item.itemType === 'media_item') {
+        mediaItemIds = [this.item.id];
+      } else if (this.item.itemType === 'source_asset') {
+        sourceAssetIds = [this.item.id];
+      }
+      itemCount = 1;
+    }
+
+    const payload: GalleryDragPayload = {
+      mediaItemIds,
+      sourceAssetIds,
+      itemCount,
+    };
+
+    if (event.dataTransfer) {
+      event.dataTransfer.setData('application/json', JSON.stringify(payload));
+      event.dataTransfer.effectAllowed = 'move';
+
+      if (isPlatformBrowser(this.platformId)) {
+        const ghost = document.createElement('div');
+        ghost.style.position = 'absolute';
+        ghost.style.top = '-9999px';
+        ghost.style.left = '-9999px';
+        ghost.style.padding = '6px 14px';
+        ghost.style.borderRadius = '20px';
+        ghost.style.background = 'rgba(30, 31, 32, 0.95)';
+        ghost.style.backdropFilter = 'blur(10px)';
+        ghost.style.border = '1px solid #8ab4f8';
+        ghost.style.color = '#ffffff';
+        ghost.style.fontSize = '12px';
+        ghost.style.fontWeight = '600';
+        ghost.style.display = 'flex';
+        ghost.style.alignItems = 'center';
+        ghost.style.gap = '6px';
+        ghost.style.boxShadow = '0 6px 20px rgba(0, 0, 0, 0.4)';
+        ghost.style.zIndex = '99999';
+        // textContent, never innerHTML, so no markup is parsed from a
+        // string here; folder-card builds its ghost the same way.
+        const label = document.createElement('span');
+        label.textContent = `📁 Moving ${itemCount} ${itemCount === 1 ? 'item' : 'items'}`;
+        ghost.appendChild(label);
+        document.body.appendChild(ghost);
+        event.dataTransfer.setDragImage(ghost, 20, 20);
+        setTimeout(() => {
+          if (ghost.parentNode) {
+            ghost.parentNode.removeChild(ghost);
+          }
+        }, 0);
+      }
+    }
+  }
+
+  onDragEnd(): void {
+    this.isDragging = false;
+    this.wasDragged = true;
+    setTimeout(() => {
+      this.wasDragged = false;
+    }, 150);
+    // The pointer may have been released over another card entirely.
+    this.stopHoverPreview();
+  }
+
   onCardClick(event: MouseEvent): void {
+    if (this.wasDragged) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     if (this.isSelectionMode || this.anyItemSelected) {
       event.preventDefault();
       event.stopPropagation();

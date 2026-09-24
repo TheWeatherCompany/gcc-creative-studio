@@ -24,6 +24,7 @@ import {of} from 'rxjs';
 
 import {GalleryService} from './gallery.service';
 import {GalleryItem} from '../common/models/gallery-item.model';
+import {BulkMoveResponse} from '../common/models/folder.model';
 import {WorkspaceStateService} from '../services/workspace/workspace-state.service';
 import {environment} from '../../environments/environment';
 
@@ -226,5 +227,155 @@ describe('GalleryService list mapping favorite state', () => {
       true,
       false,
     ]);
+  });
+});
+
+/**
+ * Same two casings as the favorite state above, and the same failure mode if
+ * one is missed: every item reads as sitting at the root, so the move dialog
+ * marks the wrong current folder and a move to the real one is not skipped.
+ */
+describe('GalleryService list mapping folderId', () => {
+  let service: GalleryService;
+  let httpMock: HttpTestingController;
+
+  const searchUrl = `${environment.backendURL}/gallery/search`;
+
+  const listRow = (overrides: Record<string, unknown>) => ({
+    id: 11,
+    workspaceId: 1,
+    itemType: 'media_item',
+    createdAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  });
+
+  const fetchList = (rows: Array<Record<string, unknown>>): GalleryItem[] => {
+    let items: GalleryItem[] = [];
+    service.images$.subscribe(value => (items = value));
+    service.loadGallery();
+    httpMock
+      .expectOne(searchUrl)
+      .flush({data: rows, count: rows.length, page: 1, totalPages: 1});
+    return items;
+  };
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [
+        GalleryService,
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: WorkspaceStateService,
+          useValue: {
+            activeWorkspaceId$: of(1),
+            getActiveWorkspaceId: () => 1,
+          },
+        },
+      ],
+    });
+    service = TestBed.inject(GalleryService);
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    httpMock.verify();
+  });
+
+  it('reads a camelCase folderId, a snake_case folder_id, and neither', () => {
+    const items = fetchList([
+      listRow({id: 1, folderId: 5}),
+      listRow({id: 2, folder_id: 5}),
+      listRow({id: 3}),
+      listRow({id: 4, folderId: null}),
+    ]);
+
+    expect(items.map(item => item.folderId)).toEqual([
+      5,
+      5,
+      undefined,
+      undefined,
+    ]);
+  });
+});
+
+describe('GalleryService bulk copy and move', () => {
+  let service: GalleryService;
+  let httpMock: HttpTestingController;
+
+  const copyUrl = `${environment.backendURL}/gallery/bulk-copy`;
+  const moveUrl = `${environment.backendURL}/gallery/bulk-move`;
+  const items = [
+    {id: 1, type: 'media_item'},
+    {id: 2, type: 'folder'},
+  ];
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [
+        GalleryService,
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: WorkspaceStateService,
+          useValue: {
+            activeWorkspaceId$: of(1),
+            getActiveWorkspaceId: () => 1,
+          },
+        },
+      ],
+    });
+    service = TestBed.inject(GalleryService);
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    httpMock.verify();
+  });
+
+  it('sends conflict_strategy on a copy only when one is given', () => {
+    service.bulkCopy(items, 9).subscribe();
+    const plain = httpMock.expectOne(copyUrl);
+    expect(plain.request.body).toEqual({items, target_workspace_id: 9});
+    plain.flush({copied_count: 2});
+
+    service.bulkCopy(items, 9, 'keep_both').subscribe();
+    const withStrategy = httpMock.expectOne(copyUrl);
+    expect(withStrategy.request.body).toEqual({
+      items,
+      target_workspace_id: 9,
+      conflict_strategy: 'keep_both',
+    });
+    withStrategy.flush({copied_count: 2});
+  });
+
+  it('posts a move and sends conflict_strategy only when one is given', () => {
+    service.bulkMove(items, 9).subscribe();
+    const plain = httpMock.expectOne(moveUrl);
+    expect(plain.request.method).toBe('POST');
+    expect(plain.request.body).toEqual({items, target_workspace_id: 9});
+    plain.flush({moved_count: 0, moved: [], failed: []});
+
+    service.bulkMove(items, 9, 'merge').subscribe();
+    const withStrategy = httpMock.expectOne(moveUrl);
+    expect(withStrategy.request.body.conflict_strategy).toBe('merge');
+    withStrategy.flush({moved_count: 0, moved: [], failed: []});
+  });
+
+  // A partial move answers 200. If the response were narrowed to
+  // moved_count, a caller could not tell it from a full success.
+  it('hands a partial failure to the caller untouched', () => {
+    const body: BulkMoveResponse = {
+      moved_count: 4,
+      moved: [{id: 2, type: 'folder'}],
+      failed: [{id: 1, type: 'media_item', reason: 'NOT_FOUND'}],
+    };
+    let received: BulkMoveResponse | undefined;
+    service.bulkMove(items, 9).subscribe(res => (received = res));
+
+    httpMock.expectOne(moveUrl).flush(body);
+
+    expect(received).toEqual(body);
+    expect(received!.failed[0].reason).toBe('NOT_FOUND');
   });
 });

@@ -14,7 +14,12 @@
  * limitations under the License.
  */
 
-import {ComponentFixture, TestBed} from '@angular/core/testing';
+import {
+  ComponentFixture,
+  TestBed,
+  fakeAsync,
+  tick,
+} from '@angular/core/testing';
 import {CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
 import {provideRouter, RouterModule} from '@angular/router';
 import {CommonModule} from '@angular/common';
@@ -320,5 +325,404 @@ describe('GalleryCardComponent (template)', () => {
     const videos = fixture.nativeElement.querySelectorAll('video');
     expect(videos.length).toBe(1);
     expect(videos[0].getAttribute('src')).toBe('https://example.com/b.mp4');
+  });
+
+  // PR #28 removed upstream's inline oncanplay/onloadedmetadata handlers,
+  // which a strict CSP blocks. The folders port touches this markup again.
+  it('renders no inline media event handlers on any video branch', () => {
+    component.item = makeItem({presignedThumbnailUrls: []});
+    fixture.detectChanges();
+    const poster: HTMLVideoElement =
+      fixture.nativeElement.querySelector('video');
+    expect(poster.hasAttribute('oncanplay')).toBeFalse();
+    expect(poster.hasAttribute('onloadedmetadata')).toBeFalse();
+
+    component.hoveredVideoId = component.item.id;
+    fixture.detectChanges();
+    const clip: HTMLVideoElement = fixture.nativeElement.querySelector('video');
+    expect(clip.hasAttribute('oncanplay')).toBeFalse();
+    expect(clip.hasAttribute('onloadedmetadata')).toBeFalse();
+  });
+
+  it('makes the card draggable except in the image selector', () => {
+    component.item = makeItem();
+    fixture.detectChanges();
+    const root: HTMLElement = fixture.nativeElement.querySelector('.card-root');
+    expect(root.getAttribute('draggable')).toBe('true');
+
+    fixture.componentRef.setInput('isSelectorMode', true);
+    fixture.detectChanges();
+    expect(root.getAttribute('draggable')).toBe('false');
+  });
+});
+
+const dragEvent = () => {
+  const setData = jasmine.createSpy('setData');
+  const setDragImage = jasmine.createSpy('setDragImage');
+  const event = {
+    preventDefault: jasmine.createSpy('preventDefault'),
+    stopPropagation: jasmine.createSpy('stopPropagation'),
+    dataTransfer: {setData, setDragImage, effectAllowed: ''},
+  } as unknown as DragEvent;
+  const payload = () =>
+    JSON.parse(setData.calls.mostRecent().args[1] as string);
+  return {event, setData, setDragImage, payload};
+};
+
+/** A pointerdown whose target is `el`, as the template would deliver it. */
+const pointerDownOn = (el: Element) =>
+  ({target: el}) as unknown as PointerEvent;
+
+describe('GalleryCardComponent drag', () => {
+  let component: GalleryCardComponent;
+
+  const construct = (platformId: 'browser' | 'server' = 'browser') =>
+    new GalleryCardComponent(
+      {} as any, // Router
+      {getUserDetails: () => ({roles: []})} as any, // UserService
+      {} as any, // MatDialog
+      {} as any, // GalleryService
+      {} as any, // MatSnackBar
+      platformId,
+    );
+
+  beforeEach(() => {
+    component = construct('browser');
+    component.item = makeItem({id: 42, itemType: 'media_item'});
+  });
+
+  it('sets the drag payload for a single item', () => {
+    const drag = dragEvent();
+
+    component.onDragStart(drag.event);
+
+    expect(component.isDragging).toBeTrue();
+    expect(drag.setData.calls.mostRecent().args[0]).toBe('application/json');
+    expect(drag.payload()).toEqual({
+      mediaItemIds: [42],
+      sourceAssetIds: [],
+      itemCount: 1,
+    });
+    expect(drag.setDragImage).toHaveBeenCalled();
+  });
+
+  it('sets the payload for a source asset', () => {
+    component.item = makeItem({id: 10, itemType: 'source_asset'});
+    const drag = dragEvent();
+
+    component.onDragStart(drag.event);
+
+    expect(drag.payload().mediaItemIds).toEqual([]);
+    expect(drag.payload().sourceAssetIds).toEqual([10]);
+  });
+
+  it('drags the whole selection when this item is part of it', () => {
+    component.isSelected = true;
+    component.selectedItems = new Set([
+      'media_item:42',
+      'media_item:43',
+      'source_asset:10',
+    ]);
+    const drag = dragEvent();
+
+    component.onDragStart(drag.event);
+
+    expect(drag.payload().mediaItemIds).toEqual([42, 43]);
+    expect(drag.payload().sourceAssetIds).toEqual([10]);
+    expect(drag.payload().itemCount).toBe(3);
+  });
+
+  it('drags only this item when it is not in the selection', () => {
+    component.isSelected = false;
+    component.selectedItems = new Set(['media_item:43']);
+    const drag = dragEvent();
+
+    component.onDragStart(drag.event);
+
+    expect(drag.payload().mediaItemIds).toEqual([42]);
+    expect(drag.payload().itemCount).toBe(1);
+  });
+
+  it('builds the drag ghost with textContent, never innerHTML', () => {
+    const innerHtml = spyOnProperty(
+      Element.prototype,
+      'innerHTML',
+      'set',
+    ).and.callThrough();
+    const drag = dragEvent();
+
+    component.onDragStart(drag.event);
+
+    const ghost = drag.setDragImage.calls.mostRecent().args[0] as HTMLElement;
+    expect(ghost.textContent).toContain('Moving 1 item');
+    expect(innerHtml).not.toHaveBeenCalled();
+  });
+
+  it('skips the ghost during SSR', () => {
+    component = construct('server');
+    component.item = makeItem({id: 42});
+    const drag = dragEvent();
+
+    component.onDragStart(drag.event);
+
+    expect(drag.setData).toHaveBeenCalled();
+    expect(drag.setDragImage).not.toHaveBeenCalled();
+  });
+
+  it('refuses to drag in the image selector', () => {
+    component.isSelectorMode = true;
+    const drag = dragEvent();
+
+    component.onDragStart(drag.event);
+
+    expect(drag.event.preventDefault).toHaveBeenCalled();
+    expect(component.isDragging).toBeFalse();
+    expect(drag.setData).not.toHaveBeenCalled();
+  });
+
+  it('resets isDragging on dragend', () => {
+    component.onDragStart(dragEvent().event);
+
+    component.onDragEnd();
+
+    expect(component.isDragging).toBeFalse();
+  });
+
+  describe('click right after a drag', () => {
+    beforeEach(() => jasmine.clock().install());
+    afterEach(() => jasmine.clock().uninstall());
+
+    it('swallows the click that ends a drag, then allows clicks again', () => {
+      component.anyItemSelected = true;
+      const toggled = spyOn(component.selectionToggled, 'emit');
+      component.onDragStart(dragEvent().event);
+      component.onDragEnd();
+
+      const first = new MouseEvent('click', {cancelable: true});
+      component.onCardClick(first);
+      expect(first.defaultPrevented).toBeTrue();
+      expect(toggled).not.toHaveBeenCalled();
+
+      jasmine.clock().tick(150);
+      component.onCardClick(new MouseEvent('click', {cancelable: true}));
+      expect(toggled).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // The heart, the selection tick and the carousel arrows sit inside the
+  // draggable card root, and dragstart fires on the root with the root as
+  // its target, so only the pointerdown knows where the press began.
+  describe('presses that start on a card control', () => {
+    let root: HTMLElement;
+
+    const child = (parent: Element, tag: string, className = '') => {
+      const node = document.createElement(tag);
+      node.className = className;
+      parent.appendChild(node);
+      return node;
+    };
+
+    beforeEach(() => {
+      root = document.createElement('div');
+      root.className = 'card-root';
+      child(child(root, 'button', 'favorite-btn'), 'mat-icon');
+      child(root, 'div', 'selection-indicator');
+      child(child(root, 'button', 'carousel-control next'), 'svg');
+      child(root, 'img', 'media-element');
+    });
+
+    for (const selector of [
+      '.favorite-btn mat-icon',
+      '.selection-indicator',
+      '.carousel-control svg',
+    ]) {
+      it(`cancels a drag that starts on ${selector}`, () => {
+        component.onPointerDownOrigin(
+          pointerDownOn(root.querySelector(selector)!),
+        );
+        const drag = dragEvent();
+
+        component.onDragStart(drag.event);
+
+        expect(drag.event.preventDefault).toHaveBeenCalled();
+        expect(component.isDragging).toBeFalse();
+        expect(drag.setData).not.toHaveBeenCalled();
+      });
+    }
+
+    it('still drags when the press starts on the media', () => {
+      component.onPointerDownOrigin(
+        pointerDownOn(root.querySelector('.media-element')!),
+      );
+      const drag = dragEvent();
+
+      component.onDragStart(drag.event);
+
+      expect(drag.event.preventDefault).not.toHaveBeenCalled();
+      expect(component.isDragging).toBeTrue();
+    });
+
+    it('drags normally on the next press after a cancelled one', () => {
+      component.onPointerDownOrigin(
+        pointerDownOn(root.querySelector('.favorite-btn')!),
+      );
+      component.onDragStart(dragEvent().event);
+
+      component.onPointerDownOrigin(
+        pointerDownOn(root.querySelector('.media-element')!),
+      );
+      component.onDragStart(dragEvent().event);
+
+      expect(component.isDragging).toBeTrue();
+    });
+  });
+
+  // The hover-intent timer is armed on mouseenter. A drag that begins inside
+  // the 150 ms window used to let it fire mid-drag and swap the thumbnail for
+  // a playing clip under the drag source; mouseleave never came to stop it.
+  describe('hover preview during a drag', () => {
+    beforeEach(() => {
+      jasmine.clock().install();
+      component.item = makeItem({id: 42, mimeType: 'video/mp4'});
+    });
+    afterEach(() => jasmine.clock().uninstall());
+
+    it('does not start a preview when the drag begins inside the intent window', () => {
+      component.onMouseEnter();
+      jasmine.clock().tick(100);
+
+      component.onDragStart(dragEvent().event);
+      jasmine.clock().tick(100);
+
+      expect(component.hoveredVideoId).toBeNull();
+    });
+
+    it('does not start a preview if the timer fires while dragging', () => {
+      component.onMouseEnter();
+      jasmine.clock().tick(100);
+      component.isDragging = true;
+
+      jasmine.clock().tick(100);
+
+      expect(component.hoveredVideoId).toBeNull();
+    });
+
+    it('clears an active preview on dragstart', () => {
+      component.onMouseEnter();
+      jasmine.clock().tick(150);
+      expect(component.hoveredVideoId).toBe(42);
+
+      component.onDragStart(dragEvent().event);
+
+      expect(component.hoveredVideoId).toBeNull();
+    });
+
+    it('does not arm the timer for a mouseenter during the drag', () => {
+      component.onDragStart(dragEvent().event);
+
+      component.onMouseEnter();
+
+      expect(component['hoverIntentTimer']).toBeNull();
+      jasmine.clock().tick(150);
+      expect(component.hoveredVideoId).toBeNull();
+    });
+
+    it('does not light the audio preview for a mouseenter during the drag', () => {
+      component.item = makeItem({id: 7, mimeType: 'audio/mpeg'});
+      component.onDragStart(dragEvent().event);
+
+      component.onMouseEnter();
+
+      expect(component.hoveredAudioId).toBeNull();
+    });
+
+    it('resets hover state on dragend', () => {
+      component.onDragStart(dragEvent().event);
+      component.hoveredVideoId = 42;
+      component.hoveredAudioId = 42;
+
+      component.onDragEnd();
+
+      expect(component.hoveredVideoId).toBeNull();
+      expect(component.hoveredAudioId).toBeNull();
+    });
+  });
+});
+
+/**
+ * The heart fix end to end through the real template: the pointerdown and the
+ * dragstart are dispatched on the rendered elements, so the (pointerdown) and
+ * (dragstart) bindings on .card-root are exercised, not just the handlers.
+ */
+describe('GalleryCardComponent drag (template)', () => {
+  let fixture: ComponentFixture<GalleryCardComponent>;
+  let component: GalleryCardComponent;
+  let galleryService: jasmine.SpyObj<Pick<GalleryService, 'favorite'>>;
+
+  beforeEach(async () => {
+    galleryService = jasmine.createSpyObj('GalleryService', ['favorite']);
+    galleryService.favorite.and.returnValue(of(true));
+
+    await TestBed.configureTestingModule({
+      declarations: [GalleryCardComponent],
+      imports: [
+        CommonModule,
+        RouterModule,
+        MatDialogModule,
+        MatSnackBarModule,
+        NoopAnimationsModule,
+      ],
+      providers: [
+        provideRouter([]),
+        {provide: GalleryService, useValue: galleryService},
+        {provide: UserService, useValue: {getUserDetails: () => null}},
+      ],
+      schemas: [CUSTOM_ELEMENTS_SCHEMA],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(GalleryCardComponent);
+    component = fixture.componentInstance;
+    component.item = makeItem({
+      id: 42,
+      mimeType: 'image/png',
+      presignedUrls: ['https://example.com/a.png'],
+      isFavorite: false,
+    });
+    fixture.detectChanges();
+  });
+
+  const el = (selector: string): HTMLElement =>
+    fixture.nativeElement.querySelector(selector);
+
+  const startDrag = (): DragEvent => {
+    const event = new DragEvent('dragstart', {bubbles: true, cancelable: true});
+    el('.card-root').dispatchEvent(event);
+    return event;
+  };
+
+  it('cancels a drag pressed on the heart and the heart still toggles', fakeAsync(() => {
+    el('.favorite-btn').dispatchEvent(
+      new PointerEvent('pointerdown', {bubbles: true}),
+    );
+
+    const event = startDrag();
+
+    expect(event.defaultPrevented).toBeTrue();
+    expect(component.isDragging).toBeFalse();
+
+    el('.favorite-btn').click();
+    tick();
+    expect(galleryService.favorite).toHaveBeenCalledWith(42);
+  }));
+
+  it('starts a drag pressed on the media', () => {
+    el('img.media-element').dispatchEvent(
+      new PointerEvent('pointerdown', {bubbles: true}),
+    );
+
+    const event = startDrag();
+
+    expect(event.defaultPrevented).toBeFalse();
+    expect(component.isDragging).toBeTrue();
   });
 });

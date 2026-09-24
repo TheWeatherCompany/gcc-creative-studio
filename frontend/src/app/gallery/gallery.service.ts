@@ -41,7 +41,20 @@ import {
   GalleryFiltersState,
   GallerySearchDto,
 } from '../common/models/search.model';
+import {
+  BulkMoveFailureReason,
+  BulkMoveResponse,
+  ConflictStrategy,
+} from '../common/models/folder.model';
 import {WorkspaceStateService} from '../services/workspace/workspace-state.service';
+
+/** User-facing text for each reason a bulk-move item can come back failed. */
+export const BULK_MOVE_FAILURE_TEXT: Record<BulkMoveFailureReason, string> = {
+  NOT_FOUND: 'no longer exists',
+  ALREADY_IN_TARGET: 'already in that workspace',
+  UNSUPPORTED_TYPE: 'cannot be moved',
+  MOVE_FAILED: 'failed on the server',
+};
 
 @Injectable({
   providedIn: 'root',
@@ -299,6 +312,9 @@ export class GalleryService implements OnDestroy {
       id: item.id,
       tags: item.tags,
       workspaceId: item.workspaceId,
+      // Both casings, for the same reason as isFavorite below. A root item
+      // arrives as null, which GalleryItem types as absent.
+      folderId: item.folderId ?? item.folder_id ?? undefined,
       userId: item.userId,
       createdAt: item.createdAt,
       itemType: item.itemType || 'media_item',
@@ -459,12 +475,40 @@ export class GalleryService implements OnDestroy {
   bulkCopy(
     items: {id: number; type: string}[],
     targetWorkspaceId: number,
+    conflictStrategy?: ConflictStrategy | null,
   ): Observable<{copied_count: number}> {
     const url = `${environment.backendURL}/gallery/bulk-copy`;
-    return this.http.post<{copied_count: number}>(url, {
+    const body: Record<string, unknown> = {
       items,
       target_workspace_id: targetWorkspaceId,
-    });
+    };
+    if (conflictStrategy) {
+      body['conflict_strategy'] = conflictStrategy;
+    }
+    return this.http.post<{copied_count: number}>(url, body);
+  }
+
+  /**
+   * Moves items to another workspace. The response is passed through as is:
+   * a partial move still answers 200, and only `failed` says which requested
+   * items stayed behind and why, so callers must read it rather than treat
+   * any success as "everything moved". `moved_count` counts rows (a folder
+   * counts everything it carried); use `moved.length` for requested items.
+   */
+  bulkMove(
+    items: {id: number; type: string}[],
+    targetWorkspaceId: number,
+    conflictStrategy?: ConflictStrategy | null,
+  ): Observable<BulkMoveResponse> {
+    const url = `${environment.backendURL}/gallery/bulk-move`;
+    const body: Record<string, unknown> = {
+      items,
+      target_workspace_id: targetWorkspaceId,
+    };
+    if (conflictStrategy) {
+      body['conflict_strategy'] = conflictStrategy;
+    }
+    return this.http.post<BulkMoveResponse>(url, body);
   }
 
   restoreMediaItem(id: number, itemType: string): Observable<any> {
