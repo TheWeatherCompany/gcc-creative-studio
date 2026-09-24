@@ -40,6 +40,11 @@
   overflow: hidden;
   position: relative;
   min-height: 50vh; // Ensure it doesn't collapse
+  // A video's aspect-ratio class transfers the min-height above into a
+  // minimum width (50vh * 16/9 for aspect-video). On a tall window that is
+  // wider than the column, so without this cap the video covers the details
+  // panel beside it.
+  max-width: 100%;
 
   &.zoomable {
     cursor: zoom-in;
