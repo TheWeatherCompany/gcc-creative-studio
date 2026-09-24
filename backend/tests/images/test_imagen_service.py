@@ -151,7 +151,7 @@ class TestImagenServiceMethods:
         # Assert
         assert response.id == 456
         mock_media_repo.create.assert_called_once()
-        mock_executor.submit.assert_called_once()
+        mock_executor.submit_job.assert_called_once()
 
     @pytest.mark.anyio
     async def test_upscale_image_success(self, imagen_service):
@@ -270,7 +270,7 @@ class TestImagenServiceMethods:
 
         assert response.id == 789
         mock_media_repo.create.assert_called_once()
-        mock_executor.submit.assert_called_once()
+        mock_executor.submit_job.assert_called_once()
 
     @pytest.mark.anyio
     async def test_start_image_generation_job_rejected_at_cap(
@@ -296,7 +296,7 @@ class TestImagenServiceMethods:
         assert exc_info.value.status_code == 429
         # Nothing is created or submitted when the cap is hit.
         mock_media_repo.create.assert_not_called()
-        mock_executor.submit.assert_not_called()
+        mock_executor.submit_job.assert_not_called()
         # The cap is counted against the user's in-flight images only, so a
         # video generation cannot consume an image slot.
         mock_media_repo.count_active_generations.assert_awaited_once_with(
@@ -330,7 +330,7 @@ class TestImagenServiceMethods:
 
         assert exc_info.value.status_code == 429
         mock_media_repo.create.assert_not_called()
-        mock_executor.submit.assert_not_called()
+        mock_executor.submit_job.assert_not_called()
 
     @pytest.mark.anyio
     async def test_start_upload_upscale_job_rejected_at_cap(
@@ -358,7 +358,7 @@ class TestImagenServiceMethods:
 
         assert exc_info.value.status_code == 429
         mock_media_repo.create.assert_not_called()
-        mock_executor.submit.assert_not_called()
+        mock_executor.submit_job.assert_not_called()
 
     @pytest.mark.anyio
     async def test_list_active_image_generations(
@@ -520,7 +520,7 @@ class TestImagenServiceMethods:
 
         assert response.id == 222
         mock_media_repo.create.assert_called_once()
-        mock_executor.submit.assert_called_once()
+        mock_executor.submit_job.assert_called_once()
 
     @pytest.mark.anyio
     async def test_get_media_item_with_presigned_urls_success(

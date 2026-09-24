@@ -104,7 +104,7 @@ class TestAudioServiceMethods:
         assert response is not None
         assert response.id == 123
         mock_media_repo.create.assert_called_once()
-        mock_executor.submit.assert_called_once()
+        mock_executor.submit_job.assert_called_once()
 
 
 class TestBackgroundWorkers:

@@ -21,7 +21,6 @@ import random
 import sys
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import Depends, HTTPException, status
 from google.cloud.logging import Client as LoggerClient
@@ -38,6 +37,7 @@ from src.common.base_dto import (
     GenerationModelEnum,
     MimeTypeEnum,
 )
+from src.common.generation_executor import GenerationExecutor
 from src.common.media_utils import generate_image_thumbnail_from_gcs
 from src.common.schema.genai_model_setup import GenAIModelSetup
 from src.common.schema.media_item_model import (
@@ -1394,7 +1394,7 @@ class ImagenService:
     async def start_upload_upscale_job(
         self,
         user: UserModel,
-        executor: ThreadPoolExecutor,
+        executor: GenerationExecutor,
         workspace_id: int,
         gcs_uri: str,
         mime_type: str,
@@ -1414,7 +1414,7 @@ class ImagenService:
 
         Args:
             user: The current user.
-            executor: ThreadPoolExecutor for background tasks.
+            executor: GenerationExecutor for background tasks.
             workspace_id: The ID of the workspace.
             gcs_uri: The GCS URI of the image if it's already in GCS.
             mime_type: The MIME type of the image.
@@ -1529,7 +1529,8 @@ class ImagenService:
         media_item_id = created_item.id
 
         # 3. Submit to Executor
-        executor.submit(
+        executor.submit_job(
+            media_item_id,
             _process_upload_upscale_in_background,
             media_item_id=media_item_id,
             workspace_id=workspace_id,
@@ -1570,7 +1571,7 @@ class ImagenService:
         self,
         request_dto: CreateImagenDto,
         user: UserModel,
-        executor: ThreadPoolExecutor,
+        executor: GenerationExecutor,
     ) -> MediaItemResponse:
         """Immediately creates a placeholder MediaItem and starts the image
         generation in the background.
@@ -1603,7 +1604,8 @@ class ImagenService:
         placeholder_item = await self.media_repo.create(placeholder_item)
 
         # Submit the long-running function to the process pool
-        executor.submit(
+        executor.submit_job(
+            placeholder_item.id,
             _process_image_in_background,
             media_item_id=placeholder_item.id,
             request_dto=request_dto,
@@ -1631,7 +1633,7 @@ class ImagenService:
         self,
         request_dto: VtoDto,
         user: UserModel,
-        executor: ThreadPoolExecutor,
+        executor: GenerationExecutor,
     ) -> MediaItemResponse:
         """Immediately creates a placeholder MediaItem and starts the VTO
         generation in the background.
@@ -1663,7 +1665,8 @@ class ImagenService:
         created_item = await self.media_repo.create(placeholder_item)
 
         # 4. Submit the long-running function to the process pool
-        executor.submit(
+        executor.submit_job(
+            created_item.id,
             _process_vto_in_background,
             media_item_id=created_item.id,
             request_dto=request_dto,
