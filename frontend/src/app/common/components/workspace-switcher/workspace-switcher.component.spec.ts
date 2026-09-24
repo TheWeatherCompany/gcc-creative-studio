@@ -26,7 +26,7 @@ import {MatSnackBarModule} from '@angular/material/snack-bar';
 import {MatTooltipModule} from '@angular/material/tooltip';
 import {NoopAnimationsModule} from '@angular/platform-browser/animations';
 import {provideRouter} from '@angular/router';
-import {BehaviorSubject, Subject, of} from 'rxjs';
+import {BehaviorSubject, Subject, of, throwError} from 'rxjs';
 
 import {WorkspaceSwitcherComponent} from './workspace-switcher.component';
 import {AuthService} from '../../services/auth.service';
@@ -184,5 +184,28 @@ describe('WorkspaceSwitcherComponent session readiness gate', () => {
     sessionReady$.next(true);
 
     expect(getWorkspaces).toHaveBeenCalledTimes(1);
+  });
+
+  // The gallery waits for the active workspace. If the list fails to load or
+  // is empty, the switcher must still settle on none, or the gallery stays
+  // blank with neither a spinner nor "No media items found".
+  it('settles on no workspace when the list fails to load', () => {
+    getWorkspaces.and.returnValue(throwError(() => ({status: 500})));
+    fixture.detectChanges();
+    sessionReady$.next(true);
+
+    expect(
+      TestBed.inject(WorkspaceStateService).setActiveWorkspaceId,
+    ).toHaveBeenCalledOnceWith(null);
+  });
+
+  it('settles on no workspace when the list is empty', () => {
+    getWorkspaces.and.returnValue(of([]));
+    fixture.detectChanges();
+    sessionReady$.next(true);
+
+    expect(
+      TestBed.inject(WorkspaceStateService).setActiveWorkspaceId,
+    ).toHaveBeenCalledOnceWith(null);
   });
 });

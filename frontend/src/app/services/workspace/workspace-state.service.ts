@@ -26,9 +26,18 @@ export class WorkspaceStateService {
   >(null);
   public readonly activeWorkspaceId$: Observable<number | null> =
     this.activeWorkspaceIdSubject.asObservable();
+  // The id is null both while the workspace list is loading and after it
+  // failed or came back empty. This tells the two apart: it turns true on the
+  // first explicit choice, including a choice of none.
+  private settled = false;
 
   setActiveWorkspaceId(workspaceId: number | null) {
+    this.settled = true;
     this.activeWorkspaceIdSubject.next(workspaceId);
+  }
+
+  hasSettled(): boolean {
+    return this.settled;
   }
 
   getActiveWorkspaceId(): number | null {

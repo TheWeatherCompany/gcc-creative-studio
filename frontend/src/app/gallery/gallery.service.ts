@@ -29,6 +29,7 @@ import {
   shareReplay,
   switchMap,
   map,
+  tap,
 } from 'rxjs/operators';
 import {environment} from '../../environments/environment';
 import {MediaItem} from '../common/models/media-item.model';
@@ -52,6 +53,10 @@ export class GalleryService implements OnDestroy {
   private currentPage = 0;
   private pageSize = 40;
   private allFetchedImages: GalleryItem[] = [];
+  // Bumped by resetCache(). A response is applied only if no reset happened
+  // after its request went out, so a page from an old workspace or filter set
+  // can never advance the page counter or land in the grid.
+  private loadGeneration = 0;
   private filters$ = new BehaviorSubject<GallerySearchDto | null>(null);
   private uiFiltersState: GalleryFiltersState | null = null;
   private dataLoadingSubscription: Subscription;
@@ -65,32 +70,48 @@ export class GalleryService implements OnDestroy {
       this.filters$,
     ])
       .pipe(
+        // Reset the paging as soon as the workspace or filters change, not
+        // when the debounce fires. A new search empties the grid, so the
+        // sentinel can call loadGallery() inside the debounce window; with the
+        // page back at 0, its page-1 gate turns that call away instead of
+        // fetching the new filters at the old offset.
+        tap(() => this.resetCache()),
         debounceTime(50),
         switchMap(([workspaceId, filters]) => {
           if (!filters) {
             return of(null);
           }
+          if (!workspaceId) {
+            // Wait for the workspace list. If it settled on no workspace
+            // (it failed to load or is empty), end in the empty state rather
+            // than a blank page with neither a spinner nor a message.
+            if (this.workspaceStateService.hasSettled()) {
+              this.isLoading$.next(false);
+              this.allImagesLoaded$.next(true);
+            }
+            return of(null);
+          }
           this.isLoading$.next(true);
           this.resetCache();
+          const generation = this.loadGeneration;
 
           const body: GallerySearchDto = {
             ...filters,
-            workspaceId: workspaceId || undefined,
+            workspaceId,
           };
 
           return this.fetchImages(body).pipe(
+            map(response => ({response, generation})),
             catchError(err => {
-              console.error('Failed to fetch gallery images', err);
-              this.isLoading$.next(false);
-              this.allImagesLoaded$.next(true);
+              this.handleFetchError(err, generation);
               return of(null);
             }),
           );
         }),
       )
-      .subscribe(response => {
-        if (response) {
-          this.processFetchResponse(response);
+      .subscribe(result => {
+        if (result) {
+          this.processFetchResponse(result.response, result.generation);
         }
       });
   }
@@ -124,26 +145,39 @@ export class GalleryService implements OnDestroy {
       return;
     }
 
+    // Once filters are set, the workspace/filters pipeline owns the first
+    // page. The scroll sentinel is visible on an empty grid, so without this
+    // it would race the debounced pipeline for page 1. An explicit reset is
+    // a deliberate reload, so it may fetch page 1 itself.
+    if (!reset && this.filters$.value && this.currentPage === 0) {
+      return;
+    }
+
+    // Never search without a workspace: the backend then returns every
+    // workspace's items to an admin, and a 400 to anyone else.
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    if (!workspaceId) {
+      return;
+    }
+
     const body: GallerySearchDto = {
       ...this.filters$.value,
-      workspaceId:
-        this.workspaceStateService.getActiveWorkspaceId() || undefined,
+      workspaceId,
       offset: this.currentPage * this.pageSize,
       limit: this.pageSize,
     };
 
+    const generation = this.loadGeneration;
     this.fetchImages(body)
       .pipe(
         catchError(err => {
-          console.error('Failed to fetch gallery images', err);
-          this.isLoading$.next(false);
-          this.allImagesLoaded$.next(true);
+          this.handleFetchError(err, generation);
           return of(null);
         }),
       )
       .subscribe(response => {
         if (response) {
-          this.processFetchResponse(response, true);
+          this.processFetchResponse(response, generation, true);
         }
       });
   }
@@ -160,17 +194,33 @@ export class GalleryService implements OnDestroy {
   }
 
   private resetCache() {
+    this.loadGeneration++;
     this.allFetchedImages = [];
     this.currentPage = 0;
     this.allImagesLoaded$.next(false);
     this.imagesCache$.next([]);
   }
 
+  private handleFetchError(err: unknown, generation: number) {
+    if (generation !== this.loadGeneration) {
+      return;
+    }
+    console.error('Failed to fetch gallery images', err);
+    this.isLoading$.next(false);
+    this.allImagesLoaded$.next(true);
+  }
+
   private processFetchResponse(
     response: PaginatedGalleryResponse,
+    generation: number,
     append = false,
   ) {
-    this.currentPage++;
+    if (generation !== this.loadGeneration) {
+      return;
+    }
+    // Follow the page the backend says it served (1-based) rather than
+    // counting responses, so the next offset is always the page after it.
+    this.currentPage = response.page;
     this.allFetchedImages = append
       ? [...this.allFetchedImages, ...this.mapUnifiedResponse(response.data)]
       : this.mapUnifiedResponse(response.data);
