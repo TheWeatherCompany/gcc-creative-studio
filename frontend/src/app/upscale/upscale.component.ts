@@ -29,6 +29,7 @@ import {GalleryService} from '../gallery/gallery.service';
 import {AssetTypeEnum} from '../admin/source-assets-management/source-asset.model';
 import {MediaItem, JobStatus} from '../common/models/media-item.model';
 import {handleErrorSnackbar} from '../utils/handleMessageSnackbar';
+import {downloadMedia} from '../utils/download-media';
 import {MatIconRegistry} from '@angular/material/icon';
 import {DomSanitizer, SafeResourceUrl} from '@angular/platform-browser';
 
@@ -245,27 +246,21 @@ export class UpscaleComponent implements OnInit, OnDestroy {
 
   async downloadUpscaled(): Promise<void> {
     if (!this.assetPair.upscaled) return;
-    const imageUrl = this.assetPair.upscaled.url;
 
     try {
-      const response = await fetch(imageUrl);
-      const blob = await response.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
-
-      const link = document.createElement('a');
-      link.href = blobUrl;
-      link.download = `upscaled-image-${Date.now()}.png`;
-
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(blobUrl);
-    } catch (error) {
-      console.error(
-        'Download failed. Falling back to default link behavior.',
-        error,
+      await downloadMedia(
+        this.assetPair.upscaled.url,
+        `upscaled-image-${this.completedJobId ?? Date.now()}`,
       );
-      window.open(imageUrl, '_blank');
+    } catch (err) {
+      handleErrorSnackbar(
+        this._snackBar,
+        {
+          message: 'Could not download the upscaled image. Please try again.',
+          cause: err,
+        },
+        'Download',
+      );
     }
   }
 

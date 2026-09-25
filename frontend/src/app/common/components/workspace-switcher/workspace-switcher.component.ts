@@ -42,6 +42,12 @@ import {
   InviteUserData,
   InviteUserModalComponent,
 } from '../invite-user-modal/invite-user-modal.component';
+import {
+  WORKSPACE_PICKER_TITLE_ID,
+  WorkspacePickerDialogComponent,
+  WorkspacePickerDialogData,
+  WorkspacePickerResult,
+} from '../workspace-picker-dialog/workspace-picker-dialog.component';
 
 @Component({
   selector: 'app-workspace-switcher',
@@ -219,6 +225,36 @@ export class WorkspaceSwitcherComponent implements OnInit {
     }
   }
 
+  openWorkspacePicker(): void {
+    const dialogRef = this.dialog.open<
+      WorkspacePickerDialogComponent,
+      WorkspacePickerDialogData,
+      WorkspacePickerResult
+    >(WorkspacePickerDialogComponent, {
+      maxWidth: '92vw',
+      ariaLabelledBy: WORKSPACE_PICKER_TITLE_ID,
+      data: {
+        workspaces: this.workspaces,
+        activeWorkspaceId: this.activeWorkspaceId,
+        canInvite: this.canInvite,
+        canAccessBrandGuidelines: this.canAccessBrandGuidelines,
+        brandGuidelineJob$: this.brandGuidelineService.activeBrandGuidelineJob$,
+      },
+    });
+
+    dialogRef.afterClosed().subscribe(result => {
+      if (result?.action === 'select') {
+        this.setActiveWorkspace(result.workspaceId);
+      } else if (result?.action === 'create') {
+        this.openCreateWorkspaceDialog();
+      } else if (result?.action === 'invite') {
+        this.openInviteDialog();
+      } else if (result?.action === 'brandGuidelines') {
+        this.openBrandGuidelinesDialog();
+      }
+    });
+  }
+
   openCreateWorkspaceDialog(): void {
     const dialogRef = this.dialog.open(CreateWorkspaceModalComponent, {
       width: '300px',
@@ -278,8 +314,8 @@ export class WorkspaceSwitcherComponent implements OnInit {
     return isAdmin || isOwner;
   }
 
-  openInviteDialog(event: MouseEvent): void {
-    event.stopPropagation();
+  openInviteDialog(event?: MouseEvent): void {
+    event?.stopPropagation();
     if (!this.activeWorkspace) return;
 
     const dialogRef = this.dialog.open<
@@ -310,8 +346,8 @@ export class WorkspaceSwitcherComponent implements OnInit {
     });
   }
 
-  openBrandGuidelinesDialog(event: MouseEvent): void {
-    event.stopPropagation();
+  openBrandGuidelinesDialog(event?: MouseEvent): void {
+    event?.stopPropagation();
     if (!this.activeWorkspaceId) return;
     const workspaceId = this.activeWorkspaceId;
 
@@ -402,15 +438,5 @@ export class WorkspaceSwitcherComponent implements OnInit {
             });
         }
       });
-  }
-
-  openFeedbackForm(event: MouseEvent): void {
-    event.stopPropagation();
-    if (this.isBrowser) {
-      window.open(
-        'https://docs.google.com/forms/d/e/1FAIpQLSceWvu7G354h-dTbOGvNGEraEjcUAgPE300WNY5qr-WJbh3Eg/viewform',
-        '_blank',
-      );
-    }
   }
 }

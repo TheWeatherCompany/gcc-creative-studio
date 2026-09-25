@@ -128,6 +128,15 @@ export class HeaderComponent implements OnDestroy {
     return this.sanitizer.bypassSecurityTrustResourceUrl(url);
   }
 
+  openFeedbackForm() {
+    if (this.isBrowser) {
+      window.open(
+        'https://docs.google.com/forms/d/e/1FAIpQLSceWvu7G354h-dTbOGvNGEraEjcUAgPE300WNY5qr-WJbh3Eg/viewform',
+        '_blank',
+      );
+    }
+  }
+
   logout() {
     void this.authService.logout();
   }
