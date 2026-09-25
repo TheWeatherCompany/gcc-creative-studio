@@ -51,6 +51,10 @@ import {
   MoveToFolderDialogResult,
 } from '../move-to-folder-dialog/move-to-folder-dialog.component';
 import {FolderService, folderErrorMessage} from '../../services/folder.service';
+import {
+  DownloadLinkExpiredError,
+  downloadMedia,
+} from '../../../utils/download-media';
 
 @Component({
   selector: 'app-media-lightbox',
@@ -428,25 +432,38 @@ export class MediaLightboxComponent
     return this.selectedUrl || '';
   }
 
-  openInNewTab(): void {
+  async download(): Promise<void> {
     if (!this.selectedUrl || this.isDownloading) {
       return;
     }
 
     this.isDownloading = true;
+    const count = this.mediaItem?.presignedUrls?.length ?? 0;
+    const baseName = [
+      'creative-studio',
+      this.mediaItem?.id,
+      count > 1 ? this.selectedIndex + 1 : undefined,
+    ]
+      .filter(part => part !== undefined && part !== null)
+      .join('-');
 
-    const link = document.createElement('a');
-    link.href = this.selectedUrl;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    setTimeout(() => {
+    try {
+      await downloadMedia(this.selectedUrl, baseName, this.mediaItem?.mimeType);
+    } catch (err) {
+      handleErrorSnackbar(
+        this.snackBar,
+        {
+          message:
+            err instanceof DownloadLinkExpiredError
+              ? 'This download link has expired. Reload the page to download the file.'
+              : 'Could not download the file. Please try again.',
+          cause: err,
+        },
+        'Download',
+      );
+    } finally {
       this.isDownloading = false;
-    }, 200);
+    }
   }
 
   shareTo(
