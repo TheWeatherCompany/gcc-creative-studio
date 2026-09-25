@@ -29,6 +29,7 @@ import {
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
 import {MatDialog} from '@angular/material/dialog';
+import {MatMenuModule} from '@angular/material/menu';
 import {MatSnackBar} from '@angular/material/snack-bar';
 import {Router, provideRouter} from '@angular/router';
 import {of} from 'rxjs';
@@ -37,7 +38,10 @@ import {AppInjector, setAppInjector} from '../../app-injector';
 import {GallerySearchDto} from '../../common/models/search.model';
 import {NotificationService} from '../../common/services/notification.service';
 import {WorkspaceStateService} from '../../services/workspace/workspace-state.service';
-import {GenerationsFeedComponent} from './generations-feed.component';
+import {
+  ACTIVE_JOBS_POLL_MS,
+  GenerationsFeedComponent,
+} from './generations-feed.component';
 
 /**
  * Stands in for IntersectionObserver so a test decides when the scroll
@@ -68,6 +72,22 @@ class FakeIntersectionObserver {
 
 const searchUrl = `${environment.backendURL}/gallery/search`;
 const itemUrl = (id: number) => `${environment.backendURL}/gallery/item/${id}`;
+const activeImagesUrl = `${environment.backendURL}/images/active`;
+const activeVideosUrl = `${environment.backendURL}/videos/active`;
+
+/** An in-flight job the way /images/active and /videos/active return it. */
+function activeJob(id: number, mimeType = 'image/png') {
+  return {
+    id,
+    status: 'processing',
+    createdAt: '2026-09-25T10:00:00',
+    mimeType,
+    model: 'gemini-3.1-flash-image',
+    originalPrompt: `still generating ${id}`,
+    gcsUris: [],
+    presignedUrls: [],
+  };
+}
 
 interface RowSpec {
   id: number;
@@ -117,8 +137,12 @@ describe('GenerationsFeedComponent', () => {
   let notifications: jasmine.SpyObj<NotificationService>;
   let previousInjector: Injector;
   let originalIntersectionObserver: typeof IntersectionObserver;
+  let visibility: DocumentVisibilityState;
 
   beforeEach(() => {
+    visibility = 'visible';
+    spyOnProperty(document, 'visibilityState').and.callFake(() => visibility);
+
     FakeIntersectionObserver.instances = [];
     originalIntersectionObserver = window.IntersectionObserver;
     window.IntersectionObserver =
@@ -129,6 +153,7 @@ describe('GenerationsFeedComponent', () => {
     setAppInjector({get: () => notifications} as unknown as Injector);
 
     TestBed.configureTestingModule({
+      imports: [MatMenuModule],
       declarations: [GenerationsFeedComponent],
       providers: [
         provideHttpClient(),
@@ -188,6 +213,37 @@ describe('GenerationsFeedComponent', () => {
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
     });
   }
+
+  /**
+   * Ends a test: closes the feed, so its active-jobs poll does not outlive
+   * the fakeAsync zone, and drops any poll the test left unanswered.
+   */
+  function closeFeed() {
+    fixture.destroy();
+    httpMock.match(activeImagesUrl);
+    httpMock.match(activeVideosUrl);
+  }
+
+  function answerActive(images: object[], videos: object[]) {
+    httpMock.expectOne(activeImagesUrl).flush(images);
+    httpMock.expectOne(activeVideosUrl).flush(videos);
+  }
+
+  const pollRequests = () =>
+    httpMock.match(
+      req => req.url === activeImagesUrl || req.url === activeVideosUrl,
+    ).length;
+
+  function setVisibility(state: DocumentVisibilityState) {
+    visibility = state;
+    document.dispatchEvent(new Event('visibilitychange'));
+  }
+
+  const inFlight = () =>
+    el()
+      .querySelector('[data-testid="feed-inflight"]')
+      ?.textContent?.replace(/\s+/g, ' ')
+      .trim() ?? null;
 
   /** Creates the feed in workspace 1 and returns the first search request. */
   function start(): TestRequest {
@@ -266,6 +322,7 @@ describe('GenerationsFeedComponent', () => {
         meta: 'Created Sep 20, 2026, 3:30 PM Nano Banana 2 · 9:16',
       },
     ]);
+    closeFeed();
   }));
 
   it('opens the lightbox at the output that was clicked', fakeAsync(() => {
@@ -283,6 +340,7 @@ describe('GenerationsFeedComponent', () => {
     };
     expect(lightbox.mediaItem.id).toBe(7);
     expect(lightbox.initialIndex).toBe(2);
+    closeFeed();
   }));
 
   describe('Reuse', () => {
@@ -371,6 +429,7 @@ describe('GenerationsFeedComponent', () => {
         expect(navigate).toHaveBeenCalledOnceWith(commands, {
           state: {remixState},
         });
+        closeFeed();
       }));
     }
   });
@@ -419,6 +478,7 @@ describe('GenerationsFeedComponent', () => {
         undefined,
         jasmine.anything(),
       );
+      closeFeed();
     }));
   });
 
@@ -439,6 +499,7 @@ describe('GenerationsFeedComponent', () => {
     sentinelObserver().enter(sentinel());
     httpMock.expectNone(searchUrl);
     expect(el().textContent).toContain("You've reached your first generation");
+    closeFeed();
   }));
 
   it('starts a search from the first page, replacing the rows already shown', fakeAsync(() => {
@@ -460,6 +521,7 @@ describe('GenerationsFeedComponent', () => {
     fixture.detectChanges();
 
     expect(rowIds()).toEqual([42, 41]);
+    closeFeed();
   }));
 
   // The service re-emits every page it has fetched each time it appends the
@@ -487,5 +549,146 @@ describe('GenerationsFeedComponent', () => {
 
     expect(rowIds().length).toBe(49);
     expect(rowIds()).not.toContain(48);
+    closeFeed();
   }));
+
+  describe('in-flight generations', () => {
+    it('counts the image and video jobs together, and hides the count once none are left', fakeAsync(() => {
+      answerSearch(start(), 3);
+      answerActive(
+        [activeJob(101), activeJob(102)],
+        [activeJob(103, 'video/mp4')],
+      );
+      fixture.detectChanges();
+      expect(inFlight()).toBe('3 generating');
+
+      tick(ACTIVE_JOBS_POLL_MS);
+      answerActive([], []);
+      // Jobs finishing refreshes the top of the feed; see below.
+      answerSearch(httpMock.expectOne(searchUrl), 3);
+      fixture.detectChanges();
+      expect(inFlight()).toBeNull();
+      closeFeed();
+    }));
+
+    it('polls only while the tab is visible, and stops when the feed closes', fakeAsync(() => {
+      answerSearch(start(), 1);
+      answerActive([], []);
+
+      setVisibility('hidden');
+      tick(ACTIVE_JOBS_POLL_MS * 3);
+      expect(pollRequests()).toBe(0);
+
+      // Straight away on coming back, not a full interval later.
+      setVisibility('visible');
+      tick();
+      answerActive([], []);
+      answerSearch(httpMock.expectOne(searchUrl), 1);
+
+      fixture.destroy();
+      tick(ACTIVE_JOBS_POLL_MS * 3);
+      expect(pollRequests()).toBe(0);
+    }));
+
+    it('puts a finished job at the top without dropping the pages already loaded', fakeAsync(() => {
+      answerSearch(start(), 90);
+      answerActive([activeJob(91)], []);
+      sentinelObserver().enter(sentinel());
+      answerSearch(httpMock.expectOne(searchUrl), 90);
+      fixture.detectChanges();
+      const loaded = Array.from({length: 80}, (_, i) => 90 - i);
+      expect(rowIds()).toEqual(loaded);
+
+      tick(ACTIVE_JOBS_POLL_MS);
+      answerActive([], []);
+      const refresh = httpMock.expectOne(searchUrl);
+      expect(refresh.request.body).toEqual(
+        jasmine.objectContaining({
+          workspaceId: 1,
+          status: 'completed',
+          offset: 0,
+          limit: 40,
+        }),
+      );
+      answerSearch(refresh, 91);
+      fixture.detectChanges();
+      expect(rowIds()).toEqual([91, ...loaded]);
+
+      // The new row pushed every other one down a place, so the next page
+      // re-sends the last row already shown. It still shows once.
+      sentinelObserver().enter(sentinel());
+      const next = httpMock.expectOne(searchUrl);
+      expect((next.request.body as GallerySearchDto).offset).toBe(80);
+      answerSearch(next, 91);
+      fixture.detectChanges();
+      expect(rowIds()).toEqual(Array.from({length: 91}, (_, i) => 91 - i));
+      closeFeed();
+    }));
+
+    it('drops a refresh that was still loading when a new search started', fakeAsync(() => {
+      answerSearch(start(), 90);
+      answerActive([activeJob(91)], []);
+      tick(ACTIVE_JOBS_POLL_MS);
+      answerActive([], []);
+      const refresh = httpMock.expectOne(searchUrl);
+
+      const component = fixture.componentInstance;
+      component.query = 'sunset';
+      component.search();
+      tick(50);
+      const searched = httpMock.expectOne(
+        req => req.url === searchUrl && req.body.query === 'sunset',
+      );
+      answerSearch(searched, 2, [{id: 42}, {id: 41}]);
+      // Unfiltered rows from before the search must not land on top of it.
+      if (!refresh.cancelled) answerSearch(refresh, 91);
+      fixture.detectChanges();
+
+      expect(rowIds()).toEqual([42, 41]);
+      closeFeed();
+    }));
+
+    // The feed's own tab is hidden while the user generates in another one,
+    // so the job can start and finish between two polls here.
+    it('brings in a row that finished while the tab was hidden', fakeAsync(() => {
+      answerSearch(start(), 5);
+      answerActive([], []);
+
+      setVisibility('hidden');
+      tick(ACTIVE_JOBS_POLL_MS * 6);
+      setVisibility('visible');
+      tick();
+      answerActive([], []);
+      answerSearch(httpMock.expectOne(searchUrl), 6);
+      fixture.detectChanges();
+
+      expect(rowIds()).toEqual([6, 5, 4, 3, 2, 1]);
+      closeFeed();
+    }));
+
+    it('keeps the feed in order when a row loaded earlier has since gone', fakeAsync(() => {
+      answerSearch(start(), 90);
+      answerActive([activeJob(91)], []);
+      sentinelObserver().enter(sentinel());
+      answerSearch(httpMock.expectOne(searchUrl), 90);
+
+      // A teammate deleted row 88 in the meantime, so the refreshed first
+      // page runs one row further down than it would have.
+      tick(ACTIVE_JOBS_POLL_MS);
+      answerActive([], []);
+      const newest = Array.from({length: 41}, (_, i) => 91 - i).filter(
+        id => id !== 88,
+      );
+      answerSearch(
+        httpMock.expectOne(searchUrl),
+        90,
+        newest.map(id => ({id})),
+      );
+      fixture.detectChanges();
+
+      const older = Array.from({length: 40}, (_, i) => 50 - i);
+      expect(rowIds()).toEqual([...newest, ...older]);
+      closeFeed();
+    }));
+  });
 });

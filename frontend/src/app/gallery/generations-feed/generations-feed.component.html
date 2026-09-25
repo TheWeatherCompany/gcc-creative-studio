@@ -26,6 +26,31 @@
         (search)="search()"
       ></studio-search-filter>
     </div>
+    @if (inFlight.length) {
+      <button
+        type="button"
+        class="feed-inflight"
+        data-testid="feed-inflight"
+        matTooltip="Your queued and running generations, in every workspace"
+        [matMenuTriggerFor]="inFlightMenu"
+      >
+        <mat-progress-spinner mode="indeterminate" [diameter]="16" [strokeWidth]="2"></mat-progress-spinner>
+        <span>{{ inFlight.length }} generating</span>
+      </button>
+      <mat-menu #inFlightMenu="matMenu" xPosition="before">
+        @for (job of inFlight; track job.id) {
+          <div class="feed-inflight-job" data-testid="feed-inflight-job">
+            <mat-icon>{{ job.isVideo ? 'movie' : 'image' }}</mat-icon>
+            <div class="min-w-0">
+              <p class="truncate" [title]="job.prompt">{{ job.prompt || 'No prompt' }}</p>
+              @if (job.model) {
+                <p class="text-xs text-neutral-400 truncate">{{ job.model }}</p>
+              }
+            </div>
+          </div>
+        }
+      </mat-menu>
+    }
     <studio-button
       variant="primary"
       size="small"

@@ -145,6 +145,17 @@ export class SearchService {
     });
   }
 
+  /**
+   * The caller's in-flight image generations (VTO and upscale included),
+   * fetched without tracking them: nothing starts polling, and nothing
+   * announces them when they finish.
+   */
+  listActiveImageJobs(): Observable<MediaItem[]> {
+    return this.http.get<MediaItem[]>(
+      `${environment.backendURL}/images/active`,
+    );
+  }
+
   /** Removes a single image job from the active list and stops its polling. */
   removeImageJob(mediaId: number): void {
     this.imageJobs.remove(mediaId);
@@ -211,6 +222,16 @@ export class SearchService {
         console.error('Could not restore in-flight video generations', err);
       },
     });
+  }
+
+  /**
+   * The caller's in-flight video generations, fetched without tracking them.
+   * See listActiveImageJobs.
+   */
+  listActiveVideoJobs(): Observable<MediaItem[]> {
+    return this.http.get<MediaItem[]>(
+      `${environment.backendURL}/videos/active`,
+    );
   }
 
   /**

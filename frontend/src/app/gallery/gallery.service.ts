@@ -206,6 +206,18 @@ export class GalleryService implements OnDestroy {
       .pipe(shareReplay(1));
   }
 
+  /**
+   * Runs one search and returns its rows, leaving the paging and the loading
+   * state alone: for re-reading the newest rows without disturbing the pages
+   * already loaded.
+   */
+  searchOnce(body: GallerySearchDto): Observable<GalleryItem[]> {
+    const galleryUrl = `${environment.backendURL}/gallery/search`;
+    return this.http
+      .post<PaginatedGalleryResponse>(galleryUrl, body)
+      .pipe(map(response => this.mapUnifiedResponse(response.data)));
+  }
+
   private resetCache() {
     this.loadGeneration++;
     this.allFetchedImages = [];
