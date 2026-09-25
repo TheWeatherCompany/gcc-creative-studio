@@ -30,6 +30,64 @@
     </button>
   </div>
 
+  @if (activeWorkspace) {
+    <div class="current-bar">
+      <div class="current-label">
+        <span class="current-caption">Current workspace</span>
+        <span class="current-name" [title]="activeWorkspace.name">{{
+          activeWorkspace.name
+        }}</span>
+      </div>
+      <div class="current-actions">
+        <span
+          [matTooltip]="
+            data.canInvite
+              ? ''
+              : 'Only the owner or an admin can invite people to a private workspace'
+          "
+        >
+          <button
+            type="button"
+            class="action-button invite-action"
+            [disabled]="!data.canInvite"
+            (click)="invite()"
+          >
+            <mat-icon>person_add</mat-icon>
+            <span>Invite people</span>
+          </button>
+        </span>
+        <span
+          [matTooltip]="
+            data.canAccessBrandGuidelines
+              ? ''
+              : 'Only the owner or an admin can manage brand guidelines here'
+          "
+        >
+          <button
+            type="button"
+            class="action-button guidelines-action"
+            [disabled]="
+              !data.canAccessBrandGuidelines || (guidelineProcessing$ | async)
+            "
+            (click)="openBrandGuidelines()"
+          >
+            @if (guidelineProcessing$ | async) {
+              <mat-progress-spinner
+                class="guideline-spinner"
+                mode="indeterminate"
+                [diameter]="18"
+              ></mat-progress-spinner>
+              <span>Processing guidelines</span>
+            } @else {
+              <mat-icon>style</mat-icon>
+              <span>Brand guidelines</span>
+            }
+          </button>
+        </span>
+      </div>
+    </div>
+  }
+
   @if (showFilter) {
     <div class="filter-box">
       <mat-icon class="filter-icon">search</mat-icon>

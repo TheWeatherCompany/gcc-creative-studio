@@ -115,6 +115,25 @@ describe('HeaderComponent', () => {
     }
   });
 
+  // Feedback moved out of the workspace dropdown; the nav rail is now its
+  // only entry point.
+  it('opens the feedback form in a new tab from the nav rail', () => {
+    const open = spyOn(window, 'open').and.returnValue(null);
+    create();
+    component.menuFixed = true;
+    fixture.detectChanges();
+
+    const feedback = fixture.nativeElement.querySelector(
+      '.menu-items [matTooltip="Feedback"]',
+    ) as HTMLElement;
+    feedback.click();
+
+    expect(open).toHaveBeenCalledOnceWith(
+      jasmine.stringMatching(/^https:\/\/docs\.google\.com\/forms\//),
+      '_blank',
+    );
+  });
+
   describe('isGalleryActive', () => {
     // isActive('/gallery', false) is a subset match, so a media detail page
     // keeps the gallery highlighted too. The non-gallery route comes last so

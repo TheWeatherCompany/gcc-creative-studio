@@ -15,7 +15,7 @@
  */
 
 import {Component, Inject} from '@angular/core';
-import {DatePipe} from '@angular/common';
+import {AsyncPipe, DatePipe} from '@angular/common';
 import {FormsModule} from '@angular/forms';
 import {
   MAT_DIALOG_DATA,
@@ -23,17 +23,29 @@ import {
   MatDialogRef,
 } from '@angular/material/dialog';
 import {MatIconModule} from '@angular/material/icon';
+import {MatProgressSpinnerModule} from '@angular/material/progress-spinner';
 import {MatTooltipModule} from '@angular/material/tooltip';
+import {Observable, map, of} from 'rxjs';
+import {BrandGuidelineModel} from '../../models/brand-guideline.model';
+import {JobStatus} from '../../models/media-item.model';
 import {Workspace, WorkspaceScope} from '../../models/workspace.model';
 
 export interface WorkspacePickerDialogData {
   workspaces: Workspace[];
   activeWorkspaceId: number | null;
+  /** Whether the current user may invite people to the active workspace. */
+  canInvite: boolean;
+  /** Whether the current user may open the active workspace's guidelines. */
+  canAccessBrandGuidelines: boolean;
+  /** The brand guideline upload in flight, if any, to show its spinner. */
+  brandGuidelineJob$?: Observable<BrandGuidelineModel | null>;
 }
 
 export type WorkspacePickerResult =
   | {action: 'select'; workspaceId: number}
-  | {action: 'create'};
+  | {action: 'create'}
+  | {action: 'invite'}
+  | {action: 'brandGuidelines'};
 
 /** Above this many workspaces the picker offers a filter-by-name box. */
 export const WORKSPACE_FILTER_THRESHOLD = 6;
@@ -63,10 +75,12 @@ export function orderWorkspaces(workspaces: Workspace[]): Workspace[] {
   styleUrls: ['./workspace-picker-dialog.component.scss'],
   standalone: true,
   imports: [
+    AsyncPipe,
     DatePipe,
     FormsModule,
     MatDialogModule,
     MatIconModule,
+    MatProgressSpinnerModule,
     MatTooltipModule,
   ],
 })
@@ -74,6 +88,9 @@ export class WorkspacePickerDialogComponent {
   readonly WorkspaceScope = WorkspaceScope;
   readonly ordered: Workspace[];
   readonly showFilter: boolean;
+  readonly activeWorkspace: Workspace | null;
+  /** True while a brand guideline upload is being processed. */
+  readonly guidelineProcessing$: Observable<boolean>;
   filterText = '';
 
   constructor(
@@ -85,6 +102,11 @@ export class WorkspacePickerDialogComponent {
   ) {
     this.ordered = orderWorkspaces(data.workspaces);
     this.showFilter = this.ordered.length > WORKSPACE_FILTER_THRESHOLD;
+    this.activeWorkspace =
+      data.workspaces.find(w => w.id === data.activeWorkspaceId) ?? null;
+    this.guidelineProcessing$ = (data.brandGuidelineJob$ ?? of(null)).pipe(
+      map(job => job?.status === JobStatus.PROCESSING),
+    );
   }
 
   get visible(): Workspace[] {
@@ -108,6 +130,14 @@ export class WorkspacePickerDialogComponent {
 
   create(): void {
     this.dialogRef.close({action: 'create'});
+  }
+
+  invite(): void {
+    this.dialogRef.close({action: 'invite'});
+  }
+
+  openBrandGuidelines(): void {
+    this.dialogRef.close({action: 'brandGuidelines'});
   }
 
   initials(workspace: Workspace): string {

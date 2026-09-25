@@ -28,7 +28,7 @@ import {MatDialog, MatDialogModule} from '@angular/material/dialog';
 import {MatFormFieldModule} from '@angular/material/form-field';
 import {MatIconModule} from '@angular/material/icon';
 import {MatInputModule} from '@angular/material/input';
-import {MatMenuModule} from '@angular/material/menu';
+import {MatSelectModule} from '@angular/material/select';
 import {MatSnackBarModule} from '@angular/material/snack-bar';
 import {MatTooltipModule} from '@angular/material/tooltip';
 import {NoopAnimationsModule} from '@angular/platform-browser/animations';
@@ -37,6 +37,10 @@ import {BehaviorSubject, of} from 'rxjs';
 
 import {WorkspaceSwitcherComponent} from '../workspace-switcher/workspace-switcher.component';
 import {CreateWorkspaceModalComponent} from '../create-workspace-modal/create-workspace-modal.component';
+import {InviteUserModalComponent} from '../invite-user-modal/invite-user-modal.component';
+import {BrandGuidelineDialogComponent} from '../brand-guideline-dialog/brand-guideline-dialog.component';
+import {BrandGuidelineModel} from '../../models/brand-guideline.model';
+import {JobStatus} from '../../models/media-item.model';
 import {AuthService} from '../../services/auth.service';
 import {UserService} from '../../services/user.service';
 import {BrandGuidelineService} from '../../services/brand-guideline/brand-guideline.service';
@@ -53,6 +57,7 @@ describe('Workspace picker', () => {
   let fixture: ComponentFixture<WorkspaceSwitcherComponent>;
   let overlay: HTMLElement;
   let workspaces: Workspace[];
+  let guidelineJob$: BehaviorSubject<BrandGuidelineModel | null>;
 
   const workspace = (
     id: number,
@@ -84,10 +89,16 @@ describe('Workspace picker', () => {
 
   beforeEach(async () => {
     workspaces = fewWorkspaces();
+    guidelineJob$ = new BehaviorSubject<BrandGuidelineModel | null>(null);
     localStorage.removeItem('activeWorkspaceId');
 
     await TestBed.configureTestingModule({
-      declarations: [WorkspaceSwitcherComponent, CreateWorkspaceModalComponent],
+      declarations: [
+        WorkspaceSwitcherComponent,
+        CreateWorkspaceModalComponent,
+        InviteUserModalComponent,
+        BrandGuidelineDialogComponent,
+      ],
       imports: [
         CommonModule,
         NoopAnimationsModule,
@@ -96,7 +107,7 @@ describe('Workspace picker', () => {
         MatFormFieldModule,
         MatIconModule,
         MatInputModule,
-        MatMenuModule,
+        MatSelectModule,
         MatSnackBarModule,
         MatTooltipModule,
       ],
@@ -113,9 +124,10 @@ describe('Workspace picker', () => {
         {
           provide: BrandGuidelineService,
           useValue: {
-            activeBrandGuidelineJob$: of(null),
+            activeBrandGuidelineJob$: guidelineJob$,
             clearActiveJob: () => {},
             clearCache: () => {},
+            getBrandGuidelineForWorkspace: () => of(null),
           },
         },
         {
@@ -237,5 +249,60 @@ describe('Workspace picker', () => {
     expect(cardNames()).toEqual(['Hurricane Promo', 'Spring Promo']);
     // Creating a workspace stays one click away while filtering.
     expect(overlay.querySelector('.create-card')).not.toBeNull();
+  }));
+
+  const clickIn = (selector: string) => {
+    (overlay.querySelector(selector) as HTMLElement).click();
+    settle();
+  };
+
+  // Invite and Brand guidelines used to sit in the dropdown; the picker's
+  // current-workspace bar is now the only way to reach them.
+  it('opens the invite modal for the current workspace from the picker', fakeAsync(() => {
+    localStorage.setItem('activeWorkspaceId', '4');
+    openPicker();
+
+    clickIn('.invite-action');
+
+    expect(overlay.querySelector('app-workspace-picker-dialog')).toBeNull();
+    const invite = overlay.querySelector('app-invite-user-modal');
+    expect(invite).not.toBeNull();
+    expect(invite!.textContent).toContain('Invite to Winter Spot');
+  }));
+
+  it('does not offer invites on the public workspace', fakeAsync(() => {
+    localStorage.setItem('activeWorkspaceId', '1');
+    openPicker();
+
+    const invite = overlay.querySelector('.invite-action') as HTMLButtonElement;
+    expect(invite.disabled).toBeTrue();
+  }));
+
+  it('opens brand guidelines for the current workspace from the picker', fakeAsync(() => {
+    localStorage.setItem('activeWorkspaceId', '4');
+    openPicker();
+
+    clickIn('.guidelines-action');
+
+    expect(overlay.querySelector('app-workspace-picker-dialog')).toBeNull();
+    expect(overlay.querySelector('app-brand-guideline-dialog')).not.toBeNull();
+  }));
+
+  it('shows a processing guideline upload and blocks a second one', fakeAsync(() => {
+    localStorage.setItem('activeWorkspaceId', '4');
+    guidelineJob$.next({status: JobStatus.PROCESSING} as BrandGuidelineModel);
+    openPicker();
+
+    // Visible on the pill even with the picker closed, as the menu spinner was.
+    expect(
+      fixture.nativeElement.querySelector(
+        '.workspace-container mat-progress-spinner',
+      ),
+    ).not.toBeNull();
+    const button = overlay.querySelector(
+      '.guidelines-action',
+    ) as HTMLButtonElement;
+    expect(button.disabled).toBeTrue();
+    expect(button.querySelector('mat-progress-spinner')).not.toBeNull();
   }));
 });

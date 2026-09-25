@@ -234,6 +234,9 @@ export class WorkspaceSwitcherComponent implements OnInit {
       data: {
         workspaces: this.workspaces,
         activeWorkspaceId: this.activeWorkspaceId,
+        canInvite: this.canInvite,
+        canAccessBrandGuidelines: this.canAccessBrandGuidelines,
+        brandGuidelineJob$: this.brandGuidelineService.activeBrandGuidelineJob$,
       },
     });
 
@@ -242,6 +245,10 @@ export class WorkspaceSwitcherComponent implements OnInit {
         this.setActiveWorkspace(result.workspaceId);
       } else if (result?.action === 'create') {
         this.openCreateWorkspaceDialog();
+      } else if (result?.action === 'invite') {
+        this.openInviteDialog();
+      } else if (result?.action === 'brandGuidelines') {
+        this.openBrandGuidelinesDialog();
       }
     });
   }
@@ -305,8 +312,8 @@ export class WorkspaceSwitcherComponent implements OnInit {
     return isAdmin || isOwner;
   }
 
-  openInviteDialog(event: MouseEvent): void {
-    event.stopPropagation();
+  openInviteDialog(event?: MouseEvent): void {
+    event?.stopPropagation();
     if (!this.activeWorkspace) return;
 
     const dialogRef = this.dialog.open<
@@ -337,8 +344,8 @@ export class WorkspaceSwitcherComponent implements OnInit {
     });
   }
 
-  openBrandGuidelinesDialog(event: MouseEvent): void {
-    event.stopPropagation();
+  openBrandGuidelinesDialog(event?: MouseEvent): void {
+    event?.stopPropagation();
     if (!this.activeWorkspaceId) return;
     const workspaceId = this.activeWorkspaceId;
 
@@ -429,15 +436,5 @@ export class WorkspaceSwitcherComponent implements OnInit {
             });
         }
       });
-  }
-
-  openFeedbackForm(event: MouseEvent): void {
-    event.stopPropagation();
-    if (this.isBrowser) {
-      window.open(
-        'https://docs.google.com/forms/d/e/1FAIpQLSceWvu7G354h-dTbOGvNGEraEjcUAgPE300WNY5qr-WJbh3Eg/viewform',
-        '_blank',
-      );
-    }
   }
 }
