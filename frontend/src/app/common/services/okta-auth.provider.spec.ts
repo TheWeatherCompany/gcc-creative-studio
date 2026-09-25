@@ -29,22 +29,25 @@ describe('oktaAuthFactory', () => {
     expect(oktaAuthFactory('server', injector)).toBeNull();
   });
 
-  // Okta emits the `groups` claim only for a request that asks for the
-  // `groups` scope. Drop it and the ID token still verifies and still names
-  // the user, so login succeeds and every subsequent request is refused with
-  // a 403 listing groups the user already belongs to. Nothing fails at the
-  // point of the mistake, which is why this is pinned here.
-  it('requests the groups scope the backend maps to roles', () => {
+  // A custom authorization server defines no `groups` scope, and rejects a
+  // request for any scope it does not define with invalid_scope. Asking for
+  // it does not merely fail to produce the claim, it fails the token request
+  // and nobody can log in at all. The claim comes from the authorization
+  // server's own `groups` claim instead, emitted unconditionally into the
+  // access token. This is pinned because the phase 1 org-server setup did
+  // need the scope, so re-adding it looks like a fix.
+  it('does not request a groups scope the custom auth server rejects', () => {
     const issuer = environment.okta.issuer;
     const clientId = environment.okta.clientId;
-    environment.okta.issuer = 'https://your-org.okta.com';
+    environment.okta.issuer = 'https://your-org.okta.com/oauth2/example';
     environment.okta.clientId = '0oaTestClientId123';
 
     try {
       const auth = oktaAuthFactory('browser', injector);
 
-      expect(auth!.options.scopes).toContain('groups');
+      expect(auth!.options.scopes).not.toContain('groups');
       expect(auth!.options.scopes).toContain('openid');
+      expect(auth!.options.scopes).toContain('offline_access');
     } finally {
       environment.okta.issuer = issuer;
       environment.okta.clientId = clientId;

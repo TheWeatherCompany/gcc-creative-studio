@@ -47,17 +47,21 @@ export const environment = {
     // so the same value works for localhost and every deployed host.
     redirectUri: '/login/callback',
     postLogoutRedirectUri: '/login',
-    // `groups` is load-bearing, not decorative. The Okta app emits the
-    // `groups` claim only when this scope is requested, and the backend maps
-    // that claim to application roles. Without it the ID token still verifies
-    // and still identifies the user, so login appears to succeed and then
-    // every request is refused with a 403 naming groups the user is already
-    // in. Removing it breaks authorization for the whole tenant at once.
-    scopes: ['openid', 'profile', 'email', 'offline_access', 'groups'],
+    // No `groups` scope, on purpose, and do not add one back. Phase 1 needed
+    // it because the org authorization server released the app's OIDC group
+    // filter only to a request that asked for it. A custom authorization
+    // server defines no `groups` scope, and asking one for a scope it does
+    // not define is rejected as invalid_scope: the whole token request fails
+    // and nobody can log in, which is louder but worse than a missing claim.
+    // The claim now comes from the authorization server's own `groups` claim,
+    // emitted into the access token unconditionally (condition "Any scope").
+    scopes: ['openid', 'profile', 'email', 'offline_access'],
     pkce: true,
-    // Phase 1 sends the ID token, because Okta API Access Management is not
-    // yet active in the tenant. Phase 2 flips this to 'access' once a custom
-    // authorization server exists. That is the only frontend change required.
-    tokenForApi: 'id' as 'id' | 'access',
+    // The access token from the custom authorization server. It carries
+    // `aud: api://creative-studio` and the `groups` claim the backend maps to
+    // roles; the phase 1 org-server ID token carried the SPA client ID as its
+    // audience and no longer validates. This moves with `issuer`, never
+    // independently: either alone is a tenant-wide outage.
+    tokenForApi: 'access' as 'id' | 'access',
   },
 };

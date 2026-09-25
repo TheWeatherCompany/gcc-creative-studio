@@ -14,11 +14,11 @@
 """Okta JWT verification.
 
 Deliberately token-agnostic: this module validates whatever RS256 JWT
-arrives against the configured issuer and audience. Phase 1 sends the ID
-token because Okta API Access Management is not yet active in the tenant;
-phase 2 sends an audience-scoped access token from a custom authorization
-server. Both are verified by the exact same code, so the switch is a change
-to OKTA_ISSUER / OKTA_AUDIENCE and nothing else.
+arrives against the configured issuer and audience. That is an
+audience-scoped access token from a custom authorization server, or an ID
+token from an org authorization server where API Access Management is
+unavailable. Both are verified by the exact same code, so moving between
+them is a change to OKTA_ISSUER / OKTA_AUDIENCE and nothing else.
 
 No /introspect call is made. Introspection would add a network round trip
 to every single API request, and signature plus iss/aud/exp checks are
