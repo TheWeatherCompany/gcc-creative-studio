@@ -17,11 +17,16 @@
   <ng-container *ngIf="activeWorkspace">
     <div
       class="workspace-container bg-gradient-to-b from-zinc-500/50 to-neutral-700/20 rounded-[48px] shadow-[2px_2px_12px_0px_rgba(0,0,0,0.10)] outline outline-1 outline-offset-[-1px] outline-stone-300/80 backdrop-blur-[10px] z-[1000]"
-      [matMenuTriggerFor]="workspaceMenu"
+      role="button"
+      tabindex="0"
+      aria-haspopup="dialog"
+      (click)="openWorkspacePicker()"
+      (keydown.enter)="openWorkspacePicker()"
+      (keydown.space)="$event.preventDefault(); openWorkspacePicker()"
       [matTooltip]="
         'You are on a ' +
         activeWorkspace.scope +
-        ' workspace. Click to switch workspaces!'
+        ' workspace. Click to switch workspaces, invite people or open brand guidelines.'
       "
     >
       <mat-icon>{{
@@ -30,73 +35,17 @@
       <span class="workspace-name">{{
         activeWorkspace.name || 'Undefined'
       }}</span>
+      <mat-progress-spinner
+        *ngIf="
+          (brandGuidelineService.activeBrandGuidelineJob$ | async)?.status ===
+          JobStatus.PROCESSING
+        "
+        class="guideline-spinner"
+        mode="indeterminate"
+        [diameter]="16"
+        aria-label="Processing brand guidelines"
+      ></mat-progress-spinner>
       <mat-icon>unfold_more</mat-icon>
     </div>
-
-    <mat-menu #workspaceMenu="matMenu" xPosition="after">
-      <button
-        mat-menu-item
-        *ngFor="let workspace of workspaces"
-        (click)="setActiveWorkspace(workspace.id)"
-      >
-        <mat-icon
-          [style.visibility]="
-            activeWorkspaceId === workspace.id ? 'visible' : 'hidden'
-          "
-          >check</mat-icon
-        >
-        <mat-icon>{{
-          workspace.scope === WorkspaceScope.PUBLIC ? 'public' : 'lock'
-        }}</mat-icon>
-        <span>{{ workspace.name }}</span>
-      </button>
-      <mat-divider></mat-divider>
-      <button mat-menu-item (click)="openCreateWorkspaceDialog()">
-        <mat-icon>add</mat-icon>
-        <span>Create New Private Workspace</span>
-      </button>
-      <button
-        mat-menu-item
-        (click)="openInviteDialog($event)"
-        [disabled]="!canInvite"
-        matTooltipPosition="right"
-        matTooltip="You can invite users in your Private Workspaces!"
-      >
-        <mat-icon>person_add</mat-icon>
-        <span>Invite Users</span>
-      </button>
-      <button
-        mat-menu-item
-        [disabled]="
-          !canAccessBrandGuidelines ||
-          (brandGuidelineService.activeBrandGuidelineJob$ | async)?.status ===
-            JobStatus.PROCESSING
-        "
-        (click)="openBrandGuidelinesDialog($event)"
-      >
-        <ng-container
-          *ngIf="brandGuidelineService.activeBrandGuidelineJob$ | async as job"
-        >
-          <mat-progress-spinner
-            *ngIf="job.status === JobStatus.PROCESSING"
-            mode="indeterminate"
-            [diameter]="20"
-            class="inline-block mr-2"
-          ></mat-progress-spinner>
-          <mat-icon *ngIf="job.status !== JobStatus.PROCESSING">style</mat-icon>
-        </ng-container>
-        <mat-icon
-          *ngIf="!(brandGuidelineService.activeBrandGuidelineJob$ | async)"
-          >style</mat-icon
-        >
-        <span>Brand Guidelines</span>
-      </button>
-
-      <mat-divider></mat-divider>
-      <button mat-menu-item (click)="openFeedbackForm($event)">
-        <mat-icon>feedback</mat-icon>
-        <span>Feedback</span>
-      </button>
-    </mat-menu>
   </ng-container>
 </div>
