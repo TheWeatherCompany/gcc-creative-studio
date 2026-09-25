@@ -43,6 +43,14 @@ export interface ModelCapability {
    * Imagen does not expose it, and Gemini Omni rejects it outright.
    */
   supportsTemperature?: boolean;
+  /** Most outputs one prompt may ask for. Absent means MAX_OUTPUTS. */
+  maxOutputs?: number;
+  /**
+   * Accepts a reference video or audio in Ingredients to Video. Only Gemini
+   * Omni does: the backend's Veo path accepts both fields but never sends
+   * them to Veo.
+   */
+  supportsReferenceMedia?: boolean;
 }
 
 export interface GenerationModelConfig {
@@ -66,6 +74,30 @@ export const OMNI_MODEL_VALUES: readonly string[] = [
 
 export function isOmniModelValue(value?: string | null): boolean {
   return !!value && OMNI_MODEL_VALUES.includes(value);
+}
+
+/** The backend accepts 1 to 4 outputs per request (number_of_media). */
+export const MAX_OUTPUTS = 4;
+
+/**
+ * Takes per prompt until the user picks more. One by product decision: extra
+ * takes cost extra tokens, so the user opts in.
+ */
+export const DEFAULT_OUTPUTS = 1;
+
+export function maxOutputsFor(
+  model: GenerationModelConfig | undefined,
+): number {
+  return model?.capabilities?.maxOutputs ?? MAX_OUTPUTS;
+}
+
+/** The count a request should carry: the user's choice, within the model's limit. */
+export function clampOutputs(
+  requested: number | null | undefined,
+  model: GenerationModelConfig | undefined,
+): number {
+  const wanted = Math.floor(Number(requested)) || DEFAULT_OUTPUTS;
+  return Math.max(1, Math.min(wanted, maxOutputsFor(model)));
 }
 
 export const MODEL_CONFIGS: GenerationModelConfig[] = [
@@ -320,6 +352,10 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       supportedResolutions: [],
       supportedDurations: [4, 6, 8, 10],
       supportsAudio: true,
+      // The backend makes a single Omni interaction per job, whatever the
+      // requested count (num_outputs = 1 in veo_service).
+      maxOutputs: 1,
+      supportsReferenceMedia: true,
     },
   },
   {
@@ -346,11 +382,10 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
     type: 'VIDEO',
     icon: 'volume_up',
     capabilities: {
-      supportedModes: [
-        'Text to Video',
-        'Ingredients to Video',
-        'Frames to Video',
-      ],
+      // Vertex lists reference images as not supported on Veo 3.1 Lite, so
+      // the video page moves Ingredients to Video to a model that takes them.
+      // maxReferenceImages stays at 3 so the add slot opens before the switch.
+      supportedModes: ['Text to Video', 'Frames to Video'],
       maxReferenceImages: 3,
       supportedAspectRatios: ['16:9', '9:16'],
       supportedResolutions: ['1K', '2K'],
@@ -364,11 +399,10 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
     type: 'VIDEO',
     icon: 'volume_up',
     capabilities: {
-      supportedModes: [
-        'Text to Video',
-        'Ingredients to Video',
-        'Frames to Video',
-      ],
+      // Vertex lists reference images as not supported on Veo 3.1 Lite, so
+      // the video page moves Ingredients to Video to a model that takes them.
+      // maxReferenceImages stays at 3 so the add slot opens before the switch.
+      supportedModes: ['Text to Video', 'Frames to Video'],
       maxReferenceImages: 3,
       supportedAspectRatios: ['16:9', '9:16'],
       supportedResolutions: ['1K', '2K'],
