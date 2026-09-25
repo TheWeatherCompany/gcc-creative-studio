@@ -14,10 +14,15 @@
  limitations under the License.
 -->
 <div class="top-left-container fixed z-[101]">
-  <ng-container *ngIf="activeWorkspace">
+  <div *ngIf="activeWorkspace" class="flex items-center gap-2">
     <div
       class="workspace-container bg-gradient-to-b from-zinc-500/50 to-neutral-700/20 rounded-[48px] shadow-[2px_2px_12px_0px_rgba(0,0,0,0.10)] outline outline-1 outline-offset-[-1px] outline-stone-300/80 backdrop-blur-[10px] z-[1000]"
-      [matMenuTriggerFor]="workspaceMenu"
+      role="button"
+      tabindex="0"
+      aria-haspopup="dialog"
+      (click)="openWorkspacePicker()"
+      (keydown.enter)="openWorkspacePicker()"
+      (keydown.space)="$event.preventDefault(); openWorkspacePicker()"
       [matTooltip]="
         'You are on a ' +
         activeWorkspace.scope +
@@ -32,29 +37,17 @@
       }}</span>
       <mat-icon>unfold_more</mat-icon>
     </div>
+    <button
+      type="button"
+      class="workspace-actions-button workspace-container bg-gradient-to-b from-zinc-500/50 to-neutral-700/20 outline outline-1 outline-offset-[-1px] outline-stone-300/80 backdrop-blur-[10px]"
+      aria-label="Workspace actions"
+      matTooltip="Workspace actions"
+      [matMenuTriggerFor]="workspaceMenu"
+    >
+      <mat-icon>more_vert</mat-icon>
+    </button>
 
     <mat-menu #workspaceMenu="matMenu" xPosition="after">
-      <button
-        mat-menu-item
-        *ngFor="let workspace of workspaces"
-        (click)="setActiveWorkspace(workspace.id)"
-      >
-        <mat-icon
-          [style.visibility]="
-            activeWorkspaceId === workspace.id ? 'visible' : 'hidden'
-          "
-          >check</mat-icon
-        >
-        <mat-icon>{{
-          workspace.scope === WorkspaceScope.PUBLIC ? 'public' : 'lock'
-        }}</mat-icon>
-        <span>{{ workspace.name }}</span>
-      </button>
-      <mat-divider></mat-divider>
-      <button mat-menu-item (click)="openCreateWorkspaceDialog()">
-        <mat-icon>add</mat-icon>
-        <span>Create New Private Workspace</span>
-      </button>
       <button
         mat-menu-item
         (click)="openInviteDialog($event)"
@@ -98,5 +91,5 @@
         <span>Feedback</span>
       </button>
     </mat-menu>
-  </ng-container>
+  </div>
 </div>

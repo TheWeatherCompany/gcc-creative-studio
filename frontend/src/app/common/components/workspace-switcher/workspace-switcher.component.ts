@@ -42,6 +42,11 @@ import {
   InviteUserData,
   InviteUserModalComponent,
 } from '../invite-user-modal/invite-user-modal.component';
+import {
+  WorkspacePickerDialogComponent,
+  WorkspacePickerDialogData,
+  WorkspacePickerResult,
+} from '../workspace-picker-dialog/workspace-picker-dialog.component';
 
 @Component({
   selector: 'app-workspace-switcher',
@@ -217,6 +222,28 @@ export class WorkspaceSwitcherComponent implements OnInit {
         localStorage.removeItem('activeWorkspaceId');
       }
     }
+  }
+
+  openWorkspacePicker(): void {
+    const dialogRef = this.dialog.open<
+      WorkspacePickerDialogComponent,
+      WorkspacePickerDialogData,
+      WorkspacePickerResult
+    >(WorkspacePickerDialogComponent, {
+      maxWidth: '92vw',
+      data: {
+        workspaces: this.workspaces,
+        activeWorkspaceId: this.activeWorkspaceId,
+      },
+    });
+
+    dialogRef.afterClosed().subscribe(result => {
+      if (result?.action === 'select') {
+        this.setActiveWorkspace(result.workspaceId);
+      } else if (result?.action === 'create') {
+        this.openCreateWorkspaceDialog();
+      }
+    });
   }
 
   openCreateWorkspaceDialog(): void {
