@@ -211,6 +211,34 @@ describe('VideoComponent', () => {
       expect(component.modelNotice?.text).toContain(omni.viewValue);
     });
 
+    // Vertex rejects reference images on Veo 3.1 Lite, but the backend queues
+    // the job, so it only failed later in the worker.
+    it('should move off Veo 3.1 Lite when a reference image is added', () => {
+      const lite = model('veo-3.1-lite-generate-001');
+      component.selectModel(lite);
+      attach('image');
+
+      expect(component.searchRequest.generationModel).not.toBe(lite.value);
+      expect(component.modelNotice?.blocking).toBeFalse();
+      expect(component.modelNotice?.text).toContain(lite.viewValue);
+      submit();
+      const sent = startVeoGeneration.calls.mostRecent().args[0];
+      expect(sent.generationModel).not.toBe(lite.value);
+      expect(sent.referenceImages?.length).toBe(1);
+    });
+
+    // Omni has no resolution picker, so a 4K pick carried over from Veo was
+    // sent as is and the backend rejected it, despite the 720p notice.
+    it('should send 1K after a switch to Omni from a 4K Veo pick', () => {
+      component.onResolutionChanged('4K');
+      attach('video');
+      submit();
+
+      const sent = startVeoGeneration.calls.mostRecent().args[0];
+      expect(sent.generationModel).toBe(omni.value);
+      expect(sent.resolution).toBe('1K');
+    });
+
     // Veo's backend path accepts a reference video but never sends it, so the
     // user would get a generation that silently ignored their reference.
     it('should block, not switch, when the picked model cannot take the reference', () => {

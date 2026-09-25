@@ -379,11 +379,10 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
     type: 'VIDEO',
     icon: 'volume_up',
     capabilities: {
-      supportedModes: [
-        'Text to Video',
-        'Ingredients to Video',
-        'Frames to Video',
-      ],
+      // Vertex lists reference images as not supported on Veo 3.1 Lite, so
+      // the video page moves Ingredients to Video to a model that takes them.
+      // maxReferenceImages stays at 3 so the add slot opens before the switch.
+      supportedModes: ['Text to Video', 'Frames to Video'],
       maxReferenceImages: 3,
       supportedAspectRatios: ['16:9', '9:16'],
       supportedResolutions: ['1K', '2K'],
@@ -397,11 +396,10 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
     type: 'VIDEO',
     icon: 'volume_up',
     capabilities: {
-      supportedModes: [
-        'Text to Video',
-        'Ingredients to Video',
-        'Frames to Video',
-      ],
+      // Vertex lists reference images as not supported on Veo 3.1 Lite, so
+      // the video page moves Ingredients to Video to a model that takes them.
+      // maxReferenceImages stays at 3 so the add slot opens before the switch.
+      supportedModes: ['Text to Video', 'Frames to Video'],
       maxReferenceImages: 3,
       supportedAspectRatios: ['16:9', '9:16'],
       supportedResolutions: ['1K', '2K'],

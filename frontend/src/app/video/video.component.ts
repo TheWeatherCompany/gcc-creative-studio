@@ -435,6 +435,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
     }
 
     this.applyOutputsLimit();
+    this.applyResolutionLimit();
 
     this.aspectRatioOptions.forEach(opt => {
       opt.disabled = !supportedRatios.includes(opt.value);
@@ -513,6 +514,21 @@ export class VideoComponent implements OnInit, AfterViewInit {
       this.preferredOutputs,
       this.currentModelConfig(),
     );
+  }
+
+  /**
+   * Drops a resolution the current model can't render. Omni has no picker and
+   * renders at 1K only, so a 2K or 4K pick carried over from Veo would be
+   * rejected by the backend.
+   */
+  private applyResolutionLimit(): void {
+    const config = this.currentModelConfig();
+    if (!config) return;
+    const supported = config.capabilities.supportedResolutions;
+    const resolution = this.searchRequest.resolution;
+    if (!resolution || !supported.includes(resolution)) {
+      this.searchRequest.resolution = supported[0] ?? '1K';
+    }
   }
 
   /**
@@ -834,6 +850,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
 
     // Some paths (remix, templates) set the model directly, so clamp here too.
     this.applyOutputsLimit();
+    this.applyResolutionLimit();
     const payload: VeoRequest = {
       ...this.searchRequest,
       startImageAssetId:
