@@ -63,7 +63,7 @@ describe('HomeComponent', () => {
     resolution: '1K',
     style: null,
     colorAndTone: null,
-    preferredOutputs: 4,
+    numberOfMedia: 1,
     composition: null,
     useBrandGuidelines: false,
     enhancePrompt: false,
@@ -152,7 +152,7 @@ describe('HomeComponent', () => {
       prompt: '',
       generationModel: 'gemini-3.1-flash-lite-image',
       aspectRatio: '1:1',
-      numberOfMedia: 4,
+      numberOfMedia: 1,
       style: null,
       lighting: null,
       colorAndTone: null,
@@ -440,10 +440,6 @@ describe('HomeComponent', () => {
   });
 
   describe('takes per prompt', () => {
-    const nanoBanana2 = MODEL_CONFIGS.find(
-      m => m.value === 'gemini-3.1-flash-image',
-    )!;
-
     /** The count sent, after checking it is the one the x-chip showed. */
     function submittedCount(): number | undefined {
       const shown = component.searchRequest.numberOfMedia;
@@ -457,38 +453,11 @@ describe('HomeComponent', () => {
       return sent;
     }
 
-    it('should send four takes by default', () => {
-      expect(submittedCount()).toBe(4);
-    });
-
-    // 4 x 4K in one job is what OOM-killed the backend on 2026-09-24, so 4K
-    // is held to two takes. The picked count must come back at lower sizes.
-    it('should clamp the picked count at 4K and restore it below', () => {
-      component.selectModel(nanoBanana2);
-      const cases: ['1K' | '2K' | '4K', number, number][] = [
-        ['1K', 4, 4],
-        ['4K', 4, 2],
-        ['2K', 4, 4],
-        ['4K', 1, 1],
-        ['1K', 3, 3],
-      ];
-      for (const [resolution, picked, expected] of cases) {
-        component.selectNumberOfImages(picked);
-        component.onResolutionChanged(resolution);
-        expect(submittedCount())
-          .withContext(`${picked} at ${resolution}`)
-          .toBe(expected);
-      }
-    });
-
-    it('should persist the picked count, not the clamped one', () => {
-      component.selectModel(nanoBanana2);
+    // Extra takes cost extra tokens, so the user opts in to them.
+    it('should send one take until the user picks more', () => {
+      expect(submittedCount()).toBe(1);
       component.selectNumberOfImages(4);
-      component.onResolutionChanged('4K');
-      expect(
-        mockImageStateService.updateState.calls.mostRecent().args[0]
-          .preferredOutputs,
-      ).toBe(4);
+      expect(submittedCount()).toBe(4);
     });
   });
 

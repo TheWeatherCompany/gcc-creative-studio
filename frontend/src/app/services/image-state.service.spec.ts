@@ -48,23 +48,7 @@ describe('ImageStateService', () => {
     expect(state.prompt).toBe('');
     expect(state.aspectRatio).toBe('1:1');
     expect(state.model).toBe('gemini-3.1-flash-lite-image');
-    expect(state.preferredOutputs).toBe(4);
-  });
-
-  // numberOfMedia was persisted on every settings change, so nearly every
-  // returning user has a stored 1 that is the old default, not a choice.
-  it('should give returning users the multiple-takes default, but keep a picked count', () => {
-    const cases: [object, number][] = [
-      [{numberOfMedia: 1}, 4],
-      [{numberOfMedia: 1, preferredOutputs: 2}, 2],
-    ];
-    for (const [saved, expected] of cases) {
-      localStorage.setItem('image_state', JSON.stringify(saved));
-      const fresh = new ImageStateService();
-      expect(fresh.getState().preferredOutputs)
-        .withContext(JSON.stringify(saved))
-        .toBe(expected);
-    }
+    expect(state.numberOfMedia).toBe(1);
   });
 
   it('should load initial state from localStorage if present', () => {

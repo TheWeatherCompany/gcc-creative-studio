@@ -45,11 +45,6 @@ export interface ModelCapability {
   supportsTemperature?: boolean;
   /** Most outputs one prompt may ask for. Absent means MAX_OUTPUTS. */
   maxOutputs?: number;
-  /**
-   * A lower ceiling at a given resolution, when the model allows more at
-   * smaller sizes. See GEMINI_IMAGE_4K_MAX_OUTPUTS.
-   */
-  maxOutputsByResolution?: Partial<Record<'1K' | '2K' | '4K', number>>;
 }
 
 export interface GenerationModelConfig {
@@ -79,42 +74,24 @@ export function isOmniModelValue(value?: string | null): boolean {
 export const MAX_OUTPUTS = 4;
 
 /**
- * Takes per prompt before the user picks a count. Several takes per prompt is
- * the Google Flow habit the creative team relies on to pick the best result.
- * Video is lower because every take is a full Veo render at Veo prices.
+ * Takes per prompt until the user picks more. One by product decision: extra
+ * takes cost extra tokens, so the user opts in.
  */
-export const DEFAULT_IMAGE_OUTPUTS = 4;
-export const DEFAULT_VIDEO_OUTPUTS = 2;
-
-/**
- * Gemini image models return each image inline in the response, and the
- * backend fans the takes out in parallel on the API host, so every take in a
- * job is held in memory at once. A 4K PNG is about 19 MB, and 4 x 4K per job
- * is what OOM-killed cstudio-be on 2026-09-24. Lift this once generation runs
- * off the API host (Cloud Tasks worker).
- */
-const GEMINI_IMAGE_4K_MAX_OUTPUTS = 2;
+export const DEFAULT_OUTPUTS = 1;
 
 export function maxOutputsFor(
   model: GenerationModelConfig | undefined,
-  resolution?: string | null,
 ): number {
-  const capabilities = model?.capabilities;
-  const modelMax = capabilities?.maxOutputs ?? MAX_OUTPUTS;
-  const resolutionMax =
-    capabilities?.maxOutputsByResolution?.[resolution as '1K' | '2K' | '4K'] ??
-    modelMax;
-  return Math.min(modelMax, resolutionMax);
+  return model?.capabilities?.maxOutputs ?? MAX_OUTPUTS;
 }
 
-/** The count a request should carry: the user's choice, within the model's limits. */
+/** The count a request should carry: the user's choice, within the model's limit. */
 export function clampOutputs(
   requested: number | null | undefined,
   model: GenerationModelConfig | undefined,
-  resolution?: string | null,
 ): number {
-  const wanted = Math.floor(Number(requested)) || 1;
-  return Math.max(1, Math.min(wanted, maxOutputsFor(model, resolution)));
+  const wanted = Math.floor(Number(requested)) || DEFAULT_OUTPUTS;
+  return Math.max(1, Math.min(wanted, maxOutputsFor(model)));
 }
 
 export const MODEL_CONFIGS: GenerationModelConfig[] = [
@@ -149,7 +126,6 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       supportsTemperature: true,
       supportsGoogleSearch: true,
       supportsVideoReference: true,
-      maxOutputsByResolution: {'4K': GEMINI_IMAGE_4K_MAX_OUTPUTS},
     },
   },
   {
@@ -210,7 +186,6 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       supportsTemperature: true,
       supportsGoogleSearch: true,
       supportsVideoReference: true,
-      maxOutputsByResolution: {'4K': GEMINI_IMAGE_4K_MAX_OUTPUTS},
     },
   },
   {
@@ -237,7 +212,6 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       supportedResolutions: ['1K', '2K', '4K'],
       supportedDurations: [],
       supportsVideoReference: true,
-      maxOutputsByResolution: {'4K': GEMINI_IMAGE_4K_MAX_OUTPUTS},
       supportsTemperature: true,
     },
   },

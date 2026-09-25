@@ -140,22 +140,40 @@ describe('VideoComponent', () => {
       return sent;
     }
 
-    // The default model is Omni, which makes one take per job. The two-take
-    // default has to survive it, or a new user never sees it on Veo.
-    it('should send one take on Omni and the two-take default on Veo', () => {
-      expect(submittedCount()).toBe(1);
+    it('should send one take until the user picks more', () => {
       component.selectModel(veo);
-      expect(submittedCount()).toBe(2);
+      expect(submittedCount()).toBe(1);
     });
 
+    // Omni makes one take per job. Passing through it used to overwrite the
+    // user's pick with 1, both on screen and in the saved settings.
     it('should keep a picked count through a switch to Omni and back', () => {
       component.selectModel(veo);
       component.selectNumberOfVideos(4);
       expect(submittedCount()).toBe(4);
       component.selectModel(omni);
       expect(submittedCount()).toBe(1);
+      expect(
+        (
+          TestBed.inject(VideoStateService).updateState as jasmine.Spy
+        ).calls.mostRecent().args[0].numberOfMedia,
+      )
+        .withContext('saved count')
+        .toBe(4);
       component.selectModel(veo);
       expect(submittedCount()).toBe(4);
+    });
+
+    // A template sets its model directly, after its count. The x-chip showed
+    // x4 on Omni until the count was re-clamped for the template's model.
+    it('should clamp a template count to the template model', () => {
+      component.selectModel(veo);
+      component.templateParams = {
+        numMedia: 4,
+        model: 'gemini-omni-1.1-flash-preview',
+      };
+      component['applyTemplateParameters']();
+      expect(submittedCount()).toBe(1);
     });
   });
 });

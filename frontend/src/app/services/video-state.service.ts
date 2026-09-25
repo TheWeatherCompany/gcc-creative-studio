@@ -22,10 +22,7 @@ import {
   ReferenceVideo,
   ReferenceAudio,
 } from '../common/models/search.model';
-import {
-  DEFAULT_VIDEO_OUTPUTS,
-  MODEL_CONFIGS,
-} from '../common/config/model-config';
+import {DEFAULT_OUTPUTS, MODEL_CONFIGS} from '../common/config/model-config';
 
 const STORAGE_KEY = 'video_state';
 
@@ -37,8 +34,7 @@ interface VideoState {
   style: string | null;
   colorAndTone: string | null;
   lighting: string | null;
-  /** See ImageState.preferredOutputs. */
-  preferredOutputs: number;
+  numberOfMedia: number;
   durationSeconds: number;
   composition: string | null;
   generateAudio: boolean;
@@ -69,7 +65,7 @@ export class VideoStateService {
       style: null,
       colorAndTone: null,
       lighting: null,
-      preferredOutputs: DEFAULT_VIDEO_OUTPUTS,
+      numberOfMedia: DEFAULT_OUTPUTS,
       durationSeconds: 8,
       composition: null,
       generateAudio: true,
@@ -91,6 +87,8 @@ export class VideoStateService {
           const parsed = JSON.parse(saved);
           if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
             let loadedModel = parsed.model ?? this.initialState.model;
+            let loadedNumMedia =
+              parsed.numberOfMedia ?? this.initialState.numberOfMedia;
 
             const isValidVideoModel = MODEL_CONFIGS.some(
               m => m.type === 'VIDEO' && m.value === loadedModel,
@@ -98,16 +96,14 @@ export class VideoStateService {
 
             if (!isValidVideoModel) {
               loadedModel = this.initialState.model;
+              loadedNumMedia = this.initialState.numberOfMedia;
             }
 
-            // See ImageStateService: a stored numberOfMedia is usually the old
-            // default of 1, not a choice, so it is dropped.
-            const rest = {...parsed};
-            delete rest.numberOfMedia;
             savedState = {
               ...this.initialState,
-              ...rest,
+              ...parsed,
               model: loadedModel,
+              numberOfMedia: loadedNumMedia,
               referenceVideo: null,
               referenceAudio: null,
               referenceImages: [],

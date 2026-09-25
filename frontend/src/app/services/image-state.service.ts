@@ -16,10 +16,7 @@
 
 import {Injectable} from '@angular/core';
 import {BehaviorSubject, Observable} from 'rxjs';
-import {
-  DEFAULT_IMAGE_OUTPUTS,
-  MODEL_CONFIGS,
-} from '../common/config/model-config';
+import {DEFAULT_OUTPUTS, MODEL_CONFIGS} from '../common/config/model-config';
 
 const STORAGE_KEY = 'image_state';
 
@@ -34,11 +31,7 @@ export interface ImageState {
   resolution: string;
   style: string | null;
   colorAndTone: string | null;
-  /**
-   * The takes per prompt the user picked. Requests clamp it to the model's
-   * limit, so a model that allows fewer does not overwrite the choice.
-   */
-  preferredOutputs: number;
+  numberOfMedia: number;
   composition: string | null;
   useBrandGuidelines: boolean;
   enhancePrompt: boolean;
@@ -67,7 +60,7 @@ export class ImageStateService {
       resolution: '1K',
       style: null,
       colorAndTone: null,
-      preferredOutputs: DEFAULT_IMAGE_OUTPUTS,
+      numberOfMedia: DEFAULT_OUTPUTS,
       composition: null,
       useBrandGuidelines: false,
       enhancePrompt: false,
@@ -92,12 +85,7 @@ export class ImageStateService {
               loadedModel = this.initialState.model;
             }
 
-            // numberOfMedia was saved with every setting change, so a stored 1
-            // is usually the old default rather than a choice. Dropping it
-            // lets existing users get the multiple-takes default.
-            const rest = {...parsed};
-            delete rest.numberOfMedia;
-            savedState = {...this.initialState, ...rest, model: loadedModel};
+            savedState = {...this.initialState, ...parsed, model: loadedModel};
           }
         }
       } catch (e) {

@@ -42,7 +42,7 @@ import {
 import {
   GenerationModelConfig,
   MODEL_CONFIGS,
-  DEFAULT_VIDEO_OUTPUTS,
+  DEFAULT_OUTPUTS,
   clampOutputs,
   isOmniModelValue,
   maxOutputsFor,
@@ -144,7 +144,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
     prompt: '',
     generationModel: 'gemini-omni-1.1-flash-preview',
     aspectRatio: '16:9',
-    numberOfMedia: DEFAULT_VIDEO_OUTPUTS,
+    numberOfMedia: DEFAULT_OUTPUTS,
     style: null,
     lighting: null,
     colorAndTone: null,
@@ -163,7 +163,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
    * clamped to the current model, so passing through Omni (one take) and back
    * to Veo does not lose the choice.
    */
-  preferredOutputs = DEFAULT_VIDEO_OUTPUTS;
+  preferredOutputs = DEFAULT_OUTPUTS;
 
   // --- Negative Prompt Chips ---
   negativePhrases: string[] = [];
@@ -331,7 +331,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
       style: this.searchRequest.style,
       colorAndTone: this.searchRequest.colorAndTone,
       lighting: this.searchRequest.lighting,
-      preferredOutputs: this.preferredOutputs,
+      // The picked count, not the clamped one, so it survives Omni.
+      numberOfMedia: this.preferredOutputs,
       durationSeconds: this.searchRequest.durationSeconds,
       composition: this.searchRequest.composition,
       generateAudio: this.searchRequest.generateAudio,
@@ -355,7 +356,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
     this.searchRequest.style = state.style;
     this.searchRequest.colorAndTone = state.colorAndTone;
     this.searchRequest.lighting = state.lighting;
-    this.preferredOutputs = state.preferredOutputs;
+    this.preferredOutputs = state.numberOfMedia;
     this.applyOutputsLimit();
     this.searchRequest.durationSeconds = state.durationSeconds;
     this.searchRequest.composition = state.composition;
@@ -453,7 +454,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
 
   onResolutionChanged(resolution: '1K' | '2K' | '4K') {
     this.searchRequest.resolution = resolution;
-    this.applyOutputsLimit();
     this.saveState();
   }
 
@@ -489,12 +489,9 @@ export class VideoComponent implements OnInit, AfterViewInit {
     this.saveState();
   }
 
-  /** Largest count the picker offers for the current model and resolution. */
+  /** Largest count the picker offers for the current model. */
   get maxOutputs(): number {
-    return maxOutputsFor(
-      this.currentModelConfig(),
-      this.searchRequest.resolution,
-    );
+    return maxOutputsFor(this.currentModelConfig());
   }
 
   private currentModelConfig(): GenerationModelConfig | undefined {
@@ -503,12 +500,11 @@ export class VideoComponent implements OnInit, AfterViewInit {
     );
   }
 
-  /** Re-derives the request's count after the model or resolution changes. */
+  /** Re-derives the request's count after the model changes. */
   private applyOutputsLimit(): void {
     this.searchRequest.numberOfMedia = clampOutputs(
       this.preferredOutputs,
       this.currentModelConfig(),
-      this.searchRequest.resolution,
     );
   }
 
@@ -868,7 +864,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
       prompt: '',
       generationModel: 'veo-3.0-generate-001',
       aspectRatio: '16:9',
-      numberOfMedia: DEFAULT_VIDEO_OUTPUTS,
+      numberOfMedia: DEFAULT_OUTPUTS,
       style: null,
       lighting: null,
       colorAndTone: null,
@@ -879,7 +875,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
       useBrandGuidelines: false,
       enhancePrompt: false,
     };
-    this.preferredOutputs = DEFAULT_VIDEO_OUTPUTS;
+    this.preferredOutputs = DEFAULT_OUTPUTS;
     this.videoStateService.resetState();
   }
 
@@ -905,6 +901,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
       if (modelOption) {
         this.searchRequest.generationModel = modelOption.value;
         this.selectedGenerationModel = modelOption.viewValue;
+        this.applyOutputsLimit();
       }
     }
 
