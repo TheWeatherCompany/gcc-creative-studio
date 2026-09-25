@@ -42,7 +42,10 @@ import {
 import {
   GenerationModelConfig,
   MODEL_CONFIGS,
+  DEFAULT_OUTPUTS,
+  clampOutputs,
   isOmniModelValue,
+  maxOutputsFor,
 } from '../common/config/model-config';
 import {JobStatus, MediaItem} from '../common/models/media-item.model';
 import {
@@ -141,7 +144,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
     prompt: '',
     generationModel: 'gemini-omni-1.1-flash-preview',
     aspectRatio: '16:9',
-    numberOfMedia: 1,
+    numberOfMedia: DEFAULT_OUTPUTS,
     style: null,
     lighting: null,
     colorAndTone: null,
@@ -154,6 +157,13 @@ export class VideoComponent implements OnInit, AfterViewInit {
     referenceImages: [],
     resolution: '1K',
   };
+
+  /**
+   * The takes per prompt the user picked. searchRequest.numberOfMedia is this
+   * clamped to the current model, so passing through Omni (one take) and back
+   * to Veo does not lose the choice.
+   */
+  preferredOutputs = DEFAULT_OUTPUTS;
 
   // --- Negative Prompt Chips ---
   negativePhrases: string[] = [];
@@ -321,7 +331,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
       style: this.searchRequest.style,
       colorAndTone: this.searchRequest.colorAndTone,
       lighting: this.searchRequest.lighting,
-      numberOfMedia: this.searchRequest.numberOfMedia,
+      // The picked count, not the clamped one, so it survives Omni.
+      numberOfMedia: this.preferredOutputs,
       durationSeconds: this.searchRequest.durationSeconds,
       composition: this.searchRequest.composition,
       generateAudio: this.searchRequest.generateAudio,
@@ -345,10 +356,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
     this.searchRequest.style = state.style;
     this.searchRequest.colorAndTone = state.colorAndTone;
     this.searchRequest.lighting = state.lighting;
-    this.searchRequest.numberOfMedia = isOmniModelValue(state.model)
-      ? 1
-      : state.numberOfMedia;
-    this.selectedOutputs.set(this.searchRequest.numberOfMedia || 1);
+    this.preferredOutputs = state.numberOfMedia;
+    this.applyOutputsLimit();
     this.searchRequest.durationSeconds = state.durationSeconds;
     this.searchRequest.composition = state.composition;
     this.searchRequest.generateAudio = state.generateAudio;
@@ -418,10 +427,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
       this.selectedAspectRatio = landscapeOption.viewValue;
     }
 
-    if (isOmniModelValue(model.value)) {
-      this.searchRequest.numberOfMedia = 1;
-      this.selectedOutputs.set(1);
-    }
+    this.applyOutputsLimit();
 
     this.aspectRatioOptions.forEach(opt => {
       opt.disabled = !supportedRatios.includes(opt.value);
@@ -478,8 +484,28 @@ export class VideoComponent implements OnInit, AfterViewInit {
   }
 
   selectNumberOfVideos(num: number): void {
-    this.searchRequest.numberOfMedia = num;
+    this.preferredOutputs = num;
+    this.applyOutputsLimit();
     this.saveState();
+  }
+
+  /** Largest count the picker offers for the current model. */
+  get maxOutputs(): number {
+    return maxOutputsFor(this.currentModelConfig());
+  }
+
+  private currentModelConfig(): GenerationModelConfig | undefined {
+    return this.generationModels.find(
+      m => m.value === this.searchRequest.generationModel,
+    );
+  }
+
+  /** Re-derives the request's count after the model changes. */
+  private applyOutputsLimit(): void {
+    this.searchRequest.numberOfMedia = clampOutputs(
+      this.preferredOutputs,
+      this.currentModelConfig(),
+    );
   }
 
   selectComposition(composition: string): void {
@@ -723,6 +749,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
       }
     }
 
+    // Some paths (remix, templates) set the model directly, so clamp here too.
+    this.applyOutputsLimit();
     const payload: VeoRequest = {
       ...this.searchRequest,
       startImageAssetId:
@@ -836,7 +864,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
       prompt: '',
       generationModel: 'veo-3.0-generate-001',
       aspectRatio: '16:9',
-      numberOfMedia: 1,
+      numberOfMedia: DEFAULT_OUTPUTS,
       style: null,
       lighting: null,
       colorAndTone: null,
@@ -847,6 +875,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
       useBrandGuidelines: false,
       enhancePrompt: false,
     };
+    this.preferredOutputs = DEFAULT_OUTPUTS;
     this.videoStateService.resetState();
   }
 
@@ -860,8 +889,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
     }
 
     if (this.templateParams.numMedia) {
-      console.log('Setting number of images:', this.templateParams.numMedia);
-      this.searchRequest.numberOfMedia = this.templateParams.numMedia;
+      this.preferredOutputs = this.templateParams.numMedia;
+      this.applyOutputsLimit();
     }
 
     if (this.templateParams.model) {
@@ -872,6 +901,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
       if (modelOption) {
         this.searchRequest.generationModel = modelOption.value;
         this.selectedGenerationModel = modelOption.viewValue;
+        this.applyOutputsLimit();
       }
     }
 
@@ -1827,7 +1857,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
   // Selected values
   selectedMode = signal<string>('Text to Video');
   selectedNewAspectRatio = signal<string>('Landscape (16:9)');
-  selectedOutputs = signal<number>(1);
   selectedModel = signal<string>('Veo 3.1 - Fast');
   selectedPreset = signal<string>('');
 
@@ -1871,14 +1900,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
     this.selectedNewAspectRatio.set(ratio);
     this.isSettingsDropdownOpen.set(null);
     console.log('Selected Aspect Ratio:', ratio);
-  }
-
-  selectOutputs(count: number) {
-    this.selectedOutputs.set(count);
-    this.searchRequest.numberOfMedia = count;
-    this.saveState();
-    this.isSettingsDropdownOpen.set(null);
-    console.log('Selected Outputs:', count);
   }
 
   selectNewModel(model: string) {

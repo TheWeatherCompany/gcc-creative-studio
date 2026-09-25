@@ -22,7 +22,7 @@ import {
   ReferenceVideo,
   ReferenceAudio,
 } from '../common/models/search.model';
-import {MODEL_CONFIGS} from '../common/config/model-config';
+import {DEFAULT_OUTPUTS, MODEL_CONFIGS} from '../common/config/model-config';
 
 const STORAGE_KEY = 'video_state';
 
@@ -65,7 +65,7 @@ export class VideoStateService {
       style: null,
       colorAndTone: null,
       lighting: null,
-      numberOfMedia: 1,
+      numberOfMedia: DEFAULT_OUTPUTS,
       durationSeconds: 8,
       composition: null,
       generateAudio: true,

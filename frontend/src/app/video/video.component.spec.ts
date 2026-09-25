@@ -37,6 +37,7 @@ import {provideHttpClientTesting} from '@angular/common/http/testing';
 import {provideRouter} from '@angular/router';
 import {CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
 import {of} from 'rxjs';
+import {MODEL_CONFIGS} from '../common/config/model-config';
 
 import {VideoComponent} from './video.component';
 import {SearchService} from '../services/search/search.service';
@@ -47,8 +48,13 @@ import {GalleryService} from '../gallery/gallery.service';
 describe('VideoComponent', () => {
   let component: VideoComponent;
   let fixture: ComponentFixture<VideoComponent>;
+  let startVeoGeneration: jasmine.Spy;
 
   beforeEach(async () => {
+    localStorage.removeItem('video_state');
+    startVeoGeneration = jasmine
+      .createSpy('startVeoGeneration')
+      .and.returnValue(of({}));
     await TestBed.configureTestingModule({
       declarations: [VideoComponent],
       imports: [
@@ -82,6 +88,7 @@ describe('VideoComponent', () => {
             videoPrompt: '',
             trackVideoJob: jasmine.createSpy('trackVideoJob'),
             restoreActiveVideoJobs: jasmine.createSpy('restoreActiveVideoJobs'),
+            startVeoGeneration,
           },
         },
         {
@@ -93,7 +100,8 @@ describe('VideoComponent', () => {
         {
           provide: VideoStateService,
           useValue: {
-            getState: () => ({}),
+            // The real defaults, so the tests see what a new user gets.
+            getState: () => new VideoStateService().getState(),
             updateState: jasmine.createSpy('updateState'),
           },
         },
@@ -114,5 +122,58 @@ describe('VideoComponent', () => {
 
   it('should create', () => {
     expect(component).toBeTruthy();
+  });
+
+  describe('takes per prompt', () => {
+    const model = (value: string) =>
+      MODEL_CONFIGS.find(m => m.value === value)!;
+    const omni = model('gemini-omni-1.1-flash-preview');
+    const veo = model('veo-3.1-generate-001');
+
+    /** The count sent, after checking it is the one the x-chip showed. */
+    function submittedCount(): number | undefined {
+      const shown = component.searchRequest.numberOfMedia;
+      component.searchRequest.prompt = 'a test prompt';
+      component.searchTerm();
+      const sent = startVeoGeneration.calls.mostRecent().args[0].numberOfMedia;
+      expect(sent).withContext('shown count').toBe(shown);
+      return sent;
+    }
+
+    it('should send one take until the user picks more', () => {
+      component.selectModel(veo);
+      expect(submittedCount()).toBe(1);
+    });
+
+    // Omni makes one take per job. Passing through it used to overwrite the
+    // user's pick with 1, both on screen and in the saved settings.
+    it('should keep a picked count through a switch to Omni and back', () => {
+      component.selectModel(veo);
+      component.selectNumberOfVideos(4);
+      expect(submittedCount()).toBe(4);
+      component.selectModel(omni);
+      expect(submittedCount()).toBe(1);
+      expect(
+        (
+          TestBed.inject(VideoStateService).updateState as jasmine.Spy
+        ).calls.mostRecent().args[0].numberOfMedia,
+      )
+        .withContext('saved count')
+        .toBe(4);
+      component.selectModel(veo);
+      expect(submittedCount()).toBe(4);
+    });
+
+    // A template sets its model directly, after its count. The x-chip showed
+    // x4 on Omni until the count was re-clamped for the template's model.
+    it('should clamp a template count to the template model', () => {
+      component.selectModel(veo);
+      component.templateParams = {
+        numMedia: 4,
+        model: 'gemini-omni-1.1-flash-preview',
+      };
+      component['applyTemplateParameters']();
+      expect(submittedCount()).toBe(1);
+    });
   });
 });
