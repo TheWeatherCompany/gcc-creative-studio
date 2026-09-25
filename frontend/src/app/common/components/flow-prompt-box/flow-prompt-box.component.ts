@@ -64,6 +64,14 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   @Input() prompt = '';
   @Input() aspectRatio = '16:9';
   @Input() outputs = 1;
+  /** Counts offered by the outputs picker, x1 up to the model's limit. */
+  outputOptions: number[] = [1, 2, 3, 4];
+  @Input() set maxOutputs(max: number) {
+    this.outputOptions = Array.from(
+      {length: Math.max(1, max)},
+      (_, i) => i + 1,
+    );
+  }
   @Input() aspectRatioOptions: {
     value: string;
     viewValue: string;

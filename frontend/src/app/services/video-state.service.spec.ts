@@ -54,7 +54,23 @@ describe('VideoStateService', () => {
     expect(state.prompt).toBe('');
     expect(state.aspectRatio).toBe('16:9');
     expect(state.model).toBe('gemini-omni-1.1-flash-preview');
-    expect(state.numberOfMedia).toBe(1);
+    expect(state.preferredOutputs).toBe(2);
+  });
+
+  // See the matching ImageStateService case: a stored numberOfMedia of 1 is
+  // the old default, not a choice.
+  it('should give returning users the multiple-takes default, but keep a picked count', () => {
+    const cases: [object, number][] = [
+      [{numberOfMedia: 1}, 2],
+      [{numberOfMedia: 1, preferredOutputs: 4}, 4],
+    ];
+    for (const [saved, expected] of cases) {
+      localStorage.setItem('video_state', JSON.stringify(saved));
+      const fresh = new VideoStateService();
+      expect(fresh.getState().preferredOutputs)
+        .withContext(JSON.stringify(saved))
+        .toBe(expected);
+    }
   });
 
   it('should load initial state from localStorage if present', () => {

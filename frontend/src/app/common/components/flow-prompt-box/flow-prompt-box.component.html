@@ -720,30 +720,12 @@
             <div
               class="absolute right-0 top-full z-30 mt-1 w-full rounded-lg bg-neutral-700 p-1 shadow-lg"
             >
-              <button
-                (click)="selectOutputs(1)"
-                class="block w-full px-3 py-1.5 text-left text-sm rounded hover:bg-neutral-600"
-              >
-                x1
-              </button>
-              @if (!isOmniModel()) {
+              @for (count of outputOptions; track count) {
                 <button
-                  (click)="selectOutputs(2)"
+                  (click)="selectOutputs(count)"
                   class="block w-full px-3 py-1.5 text-left text-sm rounded hover:bg-neutral-600"
                 >
-                  x2
-                </button>
-                <button
-                  (click)="selectOutputs(3)"
-                  class="block w-full px-3 py-1.5 text-left text-sm rounded hover:bg-neutral-600"
-                >
-                  x3
-                </button>
-                <button
-                  (click)="selectOutputs(4)"
-                  class="block w-full px-3 py-1.5 text-left text-sm rounded hover:bg-neutral-600"
-                >
-                  x4
+                  x{{ count }}
                 </button>
               }
             </div>

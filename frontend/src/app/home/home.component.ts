@@ -43,6 +43,9 @@ import {
 import {
   GenerationModelConfig,
   MODEL_CONFIGS,
+  DEFAULT_IMAGE_OUTPUTS,
+  clampOutputs,
+  maxOutputsFor,
 } from '../common/config/model-config';
 import {JobStatus, MediaItem} from '../common/models/media-item.model';
 import {
@@ -104,7 +107,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     prompt: '',
     generationModel: 'gemini-3.1-flash-lite-image',
     aspectRatio: '1:1',
-    numberOfMedia: 1,
+    numberOfMedia: DEFAULT_IMAGE_OUTPUTS,
     style: null,
     lighting: null,
     colorAndTone: null,
@@ -116,6 +119,13 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     googleSearch: false,
     resolution: '1K',
   };
+
+  /**
+   * The takes per prompt the user picked. searchRequest.numberOfMedia is this
+   * clamped to the current model and resolution, so switching to a model that
+   * allows fewer, and back, does not lose the choice.
+   */
+  preferredOutputs = DEFAULT_IMAGE_OUTPUTS;
 
   modes = [
     {value: 'Text to Image', icon: 'description', label: 'Text to Image'},
@@ -266,7 +276,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     'Vibrant',
     'Warm',
   ];
-  numberOfImagesOptions = [1, 2, 3, 4];
   compositions = [
     'Closeup',
     'Knolling',
@@ -420,7 +429,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
         | undefined;
       this.searchRequest.style = state.style;
       this.searchRequest.colorAndTone = state.colorAndTone;
-      this.searchRequest.numberOfMedia = state.numberOfMedia;
+      this.preferredOutputs = state.preferredOutputs;
+      this.applyOutputsLimit();
       this.searchRequest.composition = state.composition;
       this.searchRequest.useBrandGuidelines = state.useBrandGuidelines;
       this.searchRequest.enhancePrompt = state.enhancePrompt;
@@ -457,7 +467,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       resolution: this.searchRequest.resolution,
       style: this.searchRequest.style || null,
       colorAndTone: this.searchRequest.colorAndTone || null,
-      numberOfMedia: this.searchRequest.numberOfMedia,
+      preferredOutputs: this.preferredOutputs,
       composition: this.searchRequest.composition || null,
       useBrandGuidelines: this.searchRequest.useBrandGuidelines,
       enhancePrompt: this.searchRequest.enhancePrompt || false,
@@ -483,7 +493,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       | undefined;
     this.searchRequest.style = state.style;
     this.searchRequest.colorAndTone = state.colorAndTone;
-    this.searchRequest.numberOfMedia = state.numberOfMedia;
+    this.preferredOutputs = state.preferredOutputs;
+    this.applyOutputsLimit();
     this.searchRequest.composition = state.composition;
     this.searchRequest.useBrandGuidelines = state.useBrandGuidelines;
     this.searchRequest.enhancePrompt = state.enhancePrompt;
@@ -520,6 +531,29 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
+  /** Largest count the picker offers for the current model and resolution. */
+  get maxOutputs(): number {
+    return maxOutputsFor(
+      this.currentModelConfig(),
+      this.searchRequest.resolution,
+    );
+  }
+
+  private currentModelConfig(): GenerationModelConfig | undefined {
+    return this.generationModels.find(
+      m => m.value === this.searchRequest.generationModel,
+    );
+  }
+
+  /** Re-derives the request's count after the model or resolution changes. */
+  private applyOutputsLimit(): void {
+    this.searchRequest.numberOfMedia = clampOutputs(
+      this.preferredOutputs,
+      this.currentModelConfig(),
+      this.searchRequest.resolution,
+    );
+  }
+
   private applyModelSettings(model: GenerationModelConfig) {
     const capabilities = model.capabilities;
 
@@ -551,7 +585,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     }
 
     if (this.templateParams.numMedia) {
-      this.searchRequest.numberOfMedia = this.templateParams.numMedia;
+      this.preferredOutputs = this.templateParams.numMedia;
+      this.applyOutputsLimit();
     }
 
     if (this.templateParams.model) {
@@ -663,6 +698,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       this.searchRequest.googleSearch = false;
     }
 
+    this.applyOutputsLimit();
     this.saveState();
   }
 
@@ -681,6 +717,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
   onResolutionChanged(resolution: '1K' | '2K' | '4K') {
     this.searchRequest.resolution = resolution;
+    this.applyOutputsLimit();
     this.saveState();
   }
 
@@ -745,7 +782,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   selectNumberOfImages(num: number): void {
-    this.searchRequest.numberOfMedia = num;
+    this.preferredOutputs = num;
+    this.applyOutputsLimit();
     this.saveState();
   }
 
@@ -809,6 +847,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
 
+    // Some paths (remix, templates) set the model directly, so clamp here too.
+    this.applyOutputsLimit();
     const payload: ImagenRequest = {
       ...this.searchRequest,
       negativePrompt: this.negativePhrases.join(', '),
@@ -896,7 +936,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       prompt: '',
       generationModel: 'gemini-3.1-flash-image',
       aspectRatio: '1:1',
-      numberOfMedia: 1,
+      numberOfMedia: DEFAULT_IMAGE_OUTPUTS,
       style: null,
       lighting: null,
       colorAndTone: null,
@@ -907,6 +947,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       googleSearch: false,
       resolution: '1K',
     };
+    this.preferredOutputs = DEFAULT_IMAGE_OUTPUTS;
     this.negativePhrases = [];
     this.referenceImages = [];
     this.sourceMediaItems = [];

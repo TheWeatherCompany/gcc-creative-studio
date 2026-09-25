@@ -37,6 +37,7 @@ import {provideHttpClientTesting} from '@angular/common/http/testing';
 import {provideRouter} from '@angular/router';
 import {CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
 import {of} from 'rxjs';
+import {MODEL_CONFIGS} from '../common/config/model-config';
 
 import {VideoComponent} from './video.component';
 import {SearchService} from '../services/search/search.service';
@@ -47,8 +48,13 @@ import {GalleryService} from '../gallery/gallery.service';
 describe('VideoComponent', () => {
   let component: VideoComponent;
   let fixture: ComponentFixture<VideoComponent>;
+  let startVeoGeneration: jasmine.Spy;
 
   beforeEach(async () => {
+    localStorage.removeItem('video_state');
+    startVeoGeneration = jasmine
+      .createSpy('startVeoGeneration')
+      .and.returnValue(of({}));
     await TestBed.configureTestingModule({
       declarations: [VideoComponent],
       imports: [
@@ -82,6 +88,7 @@ describe('VideoComponent', () => {
             videoPrompt: '',
             trackVideoJob: jasmine.createSpy('trackVideoJob'),
             restoreActiveVideoJobs: jasmine.createSpy('restoreActiveVideoJobs'),
+            startVeoGeneration,
           },
         },
         {
@@ -93,7 +100,8 @@ describe('VideoComponent', () => {
         {
           provide: VideoStateService,
           useValue: {
-            getState: () => ({}),
+            // The real defaults, so the tests see what a new user gets.
+            getState: () => new VideoStateService().getState(),
             updateState: jasmine.createSpy('updateState'),
           },
         },
@@ -114,5 +122,40 @@ describe('VideoComponent', () => {
 
   it('should create', () => {
     expect(component).toBeTruthy();
+  });
+
+  describe('takes per prompt', () => {
+    const model = (value: string) =>
+      MODEL_CONFIGS.find(m => m.value === value)!;
+    const omni = model('gemini-omni-1.1-flash-preview');
+    const veo = model('veo-3.1-generate-001');
+
+    /** The count sent, after checking it is the one the x-chip showed. */
+    function submittedCount(): number | undefined {
+      const shown = component.searchRequest.numberOfMedia;
+      component.searchRequest.prompt = 'a test prompt';
+      component.searchTerm();
+      const sent = startVeoGeneration.calls.mostRecent().args[0].numberOfMedia;
+      expect(sent).withContext('shown count').toBe(shown);
+      return sent;
+    }
+
+    // The default model is Omni, which makes one take per job. The two-take
+    // default has to survive it, or a new user never sees it on Veo.
+    it('should send one take on Omni and the two-take default on Veo', () => {
+      expect(submittedCount()).toBe(1);
+      component.selectModel(veo);
+      expect(submittedCount()).toBe(2);
+    });
+
+    it('should keep a picked count through a switch to Omni and back', () => {
+      component.selectModel(veo);
+      component.selectNumberOfVideos(4);
+      expect(submittedCount()).toBe(4);
+      component.selectModel(omni);
+      expect(submittedCount()).toBe(1);
+      component.selectModel(veo);
+      expect(submittedCount()).toBe(4);
+    });
   });
 });

@@ -115,6 +115,27 @@ describe('FlowPromptBoxComponent', () => {
   });
 
   describe('Outputs per prompt', () => {
+    it('should offer x1 up to the model limit in the picker', () => {
+      for (const [max, expected] of [
+        [4, ['x1', 'x2', 'x3', 'x4']],
+        [2, ['x1', 'x2']],
+        [1, ['x1']],
+      ] as [number, string[]][]) {
+        fixture.componentRef.setInput('maxOutputs', max);
+        component.isSettingsMenuOpen.set(true);
+        component.isSettingsDropdownOpen.set('outputs');
+        fixture.detectChanges();
+        const labels = Array.from(
+          (fixture.nativeElement as HTMLElement).querySelectorAll(
+            'button.block.w-full',
+          ),
+        )
+          .map(b => b.textContent?.trim() ?? '')
+          .filter(t => /^x\d$/.test(t));
+        expect(labels).withContext(`max ${max}`).toEqual(expected);
+      }
+    });
+
     it('should default outputs to 1', () => {
       expect(component.outputs).toBe(1);
     });

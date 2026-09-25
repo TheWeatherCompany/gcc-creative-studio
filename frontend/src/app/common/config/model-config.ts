@@ -43,6 +43,13 @@ export interface ModelCapability {
    * Imagen does not expose it, and Gemini Omni rejects it outright.
    */
   supportsTemperature?: boolean;
+  /** Most outputs one prompt may ask for. Absent means MAX_OUTPUTS. */
+  maxOutputs?: number;
+  /**
+   * A lower ceiling at a given resolution, when the model allows more at
+   * smaller sizes. See GEMINI_IMAGE_4K_MAX_OUTPUTS.
+   */
+  maxOutputsByResolution?: Partial<Record<'1K' | '2K' | '4K', number>>;
 }
 
 export interface GenerationModelConfig {
@@ -66,6 +73,48 @@ export const OMNI_MODEL_VALUES: readonly string[] = [
 
 export function isOmniModelValue(value?: string | null): boolean {
   return !!value && OMNI_MODEL_VALUES.includes(value);
+}
+
+/** The backend accepts 1 to 4 outputs per request (number_of_media). */
+export const MAX_OUTPUTS = 4;
+
+/**
+ * Takes per prompt before the user picks a count. Several takes per prompt is
+ * the Google Flow habit the creative team relies on to pick the best result.
+ * Video is lower because every take is a full Veo render at Veo prices.
+ */
+export const DEFAULT_IMAGE_OUTPUTS = 4;
+export const DEFAULT_VIDEO_OUTPUTS = 2;
+
+/**
+ * Gemini image models return each image inline in the response, and the
+ * backend fans the takes out in parallel on the API host, so every take in a
+ * job is held in memory at once. A 4K PNG is about 19 MB, and 4 x 4K per job
+ * is what OOM-killed cstudio-be on 2026-09-24. Lift this once generation runs
+ * off the API host (Cloud Tasks worker).
+ */
+const GEMINI_IMAGE_4K_MAX_OUTPUTS = 2;
+
+export function maxOutputsFor(
+  model: GenerationModelConfig | undefined,
+  resolution?: string | null,
+): number {
+  const capabilities = model?.capabilities;
+  const modelMax = capabilities?.maxOutputs ?? MAX_OUTPUTS;
+  const resolutionMax =
+    capabilities?.maxOutputsByResolution?.[resolution as '1K' | '2K' | '4K'] ??
+    modelMax;
+  return Math.min(modelMax, resolutionMax);
+}
+
+/** The count a request should carry: the user's choice, within the model's limits. */
+export function clampOutputs(
+  requested: number | null | undefined,
+  model: GenerationModelConfig | undefined,
+  resolution?: string | null,
+): number {
+  const wanted = Math.floor(Number(requested)) || 1;
+  return Math.max(1, Math.min(wanted, maxOutputsFor(model, resolution)));
 }
 
 export const MODEL_CONFIGS: GenerationModelConfig[] = [
@@ -100,6 +149,7 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       supportsTemperature: true,
       supportsGoogleSearch: true,
       supportsVideoReference: true,
+      maxOutputsByResolution: {'4K': GEMINI_IMAGE_4K_MAX_OUTPUTS},
     },
   },
   {
@@ -160,6 +210,7 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       supportsTemperature: true,
       supportsGoogleSearch: true,
       supportsVideoReference: true,
+      maxOutputsByResolution: {'4K': GEMINI_IMAGE_4K_MAX_OUTPUTS},
     },
   },
   {
@@ -186,6 +237,7 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       supportedResolutions: ['1K', '2K', '4K'],
       supportedDurations: [],
       supportsVideoReference: true,
+      maxOutputsByResolution: {'4K': GEMINI_IMAGE_4K_MAX_OUTPUTS},
       supportsTemperature: true,
     },
   },
@@ -320,6 +372,9 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       supportedResolutions: [],
       supportedDurations: [4, 6, 8, 10],
       supportsAudio: true,
+      // The backend makes a single Omni interaction per job, whatever the
+      // requested count (num_outputs = 1 in veo_service).
+      maxOutputs: 1,
     },
   },
   {
