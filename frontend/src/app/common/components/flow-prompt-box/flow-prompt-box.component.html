@@ -117,6 +117,34 @@
       </div>
     </div>
 
+    <!-- Model notice: why the model changed, or why Generate is blocked -->
+    @if (modelNotice) {
+      <div
+        role="status"
+        data-testid="model-notice"
+        class="mt-3 flex items-start gap-2 rounded-lg px-3 py-2 text-xs"
+        [ngClass]="
+          modelNotice.blocking
+            ? 'bg-red-950/60 text-red-200'
+            : 'bg-amber-950/60 text-amber-200'
+        "
+      >
+        <mat-icon class="!h-4 !w-4 !text-base flex-shrink-0">{{
+          modelNotice.blocking ? 'block' : 'swap_horiz'
+        }}</mat-icon>
+        <span class="flex-1">{{ modelNotice.text }}</span>
+        @if (!modelNotice.blocking) {
+          <button
+            (click)="modelNoticeDismissed.emit(); $event.stopPropagation()"
+            aria-label="Dismiss"
+            class="text-amber-300 hover:text-white"
+          >
+            <mat-icon class="!h-4 !w-4 !text-base">close</mat-icon>
+          </button>
+        }
+      </div>
+    }
+
     <!-- Prompt Area -->
     <div class="mt-4">
       <textarea
@@ -270,9 +298,9 @@
             </div>
           </ng-container>
 
-          <!-- Video Reference Slot (only for Ingredients to Video mode AND only for Gemini Omni) -->
+          <!-- Video Reference Slot: Ingredients to Video on a model that takes one, or when attached so it can be removed -->
           <div
-            *ngIf="mode === 'Ingredients to Video' && isOmniModel()"
+            *ngIf="mode === 'Ingredients to Video' && (supportsReferenceMedia || referenceVideo)"
             class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex flex-col items-center justify-center"
             (click)="!referenceVideo && openVideoSelectorForReference.emit()"
           >
@@ -319,9 +347,9 @@
             </ng-container>
           </div>
 
-          <!-- Audio Reference Slot (only for Ingredients to Video mode AND only for Gemini Omni) -->
+          <!-- Audio Reference Slot: as the video slot above -->
           <div
-            *ngIf="mode === 'Ingredients to Video' && isOmniModel()"
+            *ngIf="mode === 'Ingredients to Video' && (supportsReferenceMedia || referenceAudio)"
             class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex flex-col items-center justify-center"
             (click)="!referenceAudio && openAudioSelectorForReference.emit()"
           >

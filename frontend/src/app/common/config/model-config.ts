@@ -45,6 +45,12 @@ export interface ModelCapability {
   supportsTemperature?: boolean;
   /** Most outputs one prompt may ask for. Absent means MAX_OUTPUTS. */
   maxOutputs?: number;
+  /**
+   * Accepts a reference video or audio in Ingredients to Video. Only Gemini
+   * Omni does: the backend's Veo path accepts both fields but never sends
+   * them to Veo.
+   */
+  supportsReferenceMedia?: boolean;
 }
 
 export interface GenerationModelConfig {
@@ -349,6 +355,7 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       // The backend makes a single Omni interaction per job, whatever the
       // requested count (num_outputs = 1 in veo_service).
       maxOutputs: 1,
+      supportsReferenceMedia: true,
     },
   },
   {

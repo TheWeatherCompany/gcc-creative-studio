@@ -114,6 +114,23 @@ describe('FlowPromptBoxComponent', () => {
     });
   });
 
+  it('should show a model notice by the picker, dismissable unless it blocks', () => {
+    for (const blocking of [false, true]) {
+      fixture.componentRef.setInput('modelNotice', {
+        text: 'Switched to Gemini Omni',
+        blocking,
+      });
+      fixture.detectChanges();
+      const notice = (fixture.nativeElement as HTMLElement).querySelector(
+        '[data-testid="model-notice"]',
+      );
+      expect(notice?.textContent).toContain('Switched to Gemini Omni');
+      expect(notice?.querySelector('button[aria-label="Dismiss"]') !== null)
+        .withContext(`blocking ${blocking}`)
+        .toBe(!blocking);
+    }
+  });
+
   describe('Outputs per prompt', () => {
     it('should offer x1 up to the model limit in the picker', () => {
       for (const [max, expected] of [

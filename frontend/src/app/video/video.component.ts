@@ -44,7 +44,6 @@ import {
   MODEL_CONFIGS,
   DEFAULT_OUTPUTS,
   clampOutputs,
-  isOmniModelValue,
   maxOutputsFor,
 } from '../common/config/model-config';
 import {JobStatus, MediaItem} from '../common/models/media-item.model';
@@ -164,6 +163,13 @@ export class VideoComponent implements OnInit, AfterViewInit {
    * to Veo does not lose the choice.
    */
   preferredOutputs = DEFAULT_OUTPUTS;
+
+  /**
+   * Set when an input forced a model change, and shown by the model picker
+   * until the user picks a model or dismisses it. A snackbar alone was easy
+   * to miss, and the switch changes resolution and takes.
+   */
+  modelSwitchNotice: string | null = null;
 
   // --- Negative Prompt Chips ---
   negativePhrases: string[] = [];
@@ -408,6 +414,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
   }
 
   selectModel(model: {value: string; viewValue: string}): void {
+    this.modelSwitchNotice = null;
     this.searchRequest.generationModel = model.value;
     this.selectedGenerationModel = model.viewValue;
 
@@ -506,6 +513,81 @@ export class VideoComponent implements OnInit, AfterViewInit {
       this.preferredOutputs,
       this.currentModelConfig(),
     );
+  }
+
+  /**
+   * The attached Ingredients to Video input that `model` cannot take, or null
+   * if it can take them all.
+   */
+  private unsupportedInput(
+    model: GenerationModelConfig | undefined,
+  ): string | null {
+    const capabilities = model?.capabilities;
+    if (!capabilities) return null;
+    if (
+      (this.referenceVideo || this.referenceAudio) &&
+      !capabilities.supportsReferenceMedia
+    ) {
+      return 'a reference video or audio';
+    }
+    if (
+      this.referenceImages.length > 0 &&
+      (!capabilities.supportedModes?.includes('Ingredients to Video') ||
+        this.referenceImages.length > capabilities.maxReferenceImages)
+    ) {
+      return this.referenceImages.length === 1
+        ? 'a reference image'
+        : `${this.referenceImages.length} reference images`;
+    }
+    return null;
+  }
+
+  /**
+   * Why the current model cannot run with the attached inputs. The backend
+   * would drop or reject them, so generation is blocked until the user
+   * removes them or picks another model.
+   */
+  get inputsBlockedNotice(): string | null {
+    if (this.currentMode !== 'Ingredients to Video') return null;
+    const model = this.currentModelConfig();
+    const input = this.unsupportedInput(model);
+    return input && model
+      ? `${model.viewValue} can't use ${input}. Remove it, or pick a model that accepts it.`
+      : null;
+  }
+
+  /** What the prompt box shows by the model picker, if anything. */
+  get modelNotice(): {text: string; blocking: boolean} | null {
+    const blocked = this.inputsBlockedNotice;
+    if (blocked) return {text: blocked, blocking: true};
+    return this.modelSwitchNotice
+      ? {text: this.modelSwitchNotice, blocking: false}
+      : null;
+  }
+
+  /**
+   * Keeps the chosen model when it can take the attached inputs. Otherwise
+   * switches to the first model that can, and says so by the model picker.
+   */
+  private ensureModelTakesInputs(): void {
+    const current = this.currentModelConfig();
+    const input = this.unsupportedInput(current);
+    if (!current || !input) return;
+    const fallback = this.generationModels.find(m => !this.unsupportedInput(m));
+    // With no model to fall back to, the submit check blocks instead.
+    if (!fallback) return;
+    this.selectModel(fallback);
+    const caveats: string[] = [];
+    if (!fallback.capabilities.supportedResolutions.length) {
+      caveats.push('renders at 720p');
+    }
+    if (maxOutputsFor(fallback) < maxOutputsFor(current)) {
+      caveats.push(`makes up to ${maxOutputsFor(fallback)} take per prompt`);
+    }
+    this.modelSwitchNotice =
+      `Switched from ${current.viewValue} to ${fallback.viewValue}, which ` +
+      `accepts ${input}.` +
+      (caveats.length ? ` It ${caveats.join(' and ')}.` : '');
   }
 
   selectComposition(composition: string): void {
@@ -676,6 +758,12 @@ export class VideoComponent implements OnInit, AfterViewInit {
         this._snackBar,
         'Please enter a prompt to generate a video.',
       );
+      return;
+    }
+
+    const blocked = this.inputsBlockedNotice;
+    if (blocked) {
+      handleInfoSnackbar(this._snackBar, blocked);
       return;
     }
 
@@ -1576,7 +1664,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
           };
         }
       }
-      this.handleOmniModelSwitch();
+      this.ensureModelTakesInputs();
       this.saveState();
     });
   }
@@ -1618,7 +1706,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
           index: res.selectedIndex,
         };
       }
-      this.handleOmniModelSwitch();
+      this.ensureModelTakesInputs();
       this.saveState();
     });
   }
@@ -1627,41 +1715,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
     event.stopPropagation();
     this.referenceAudio = null;
     this.saveState();
-  }
-
-  private handleOmniModelSwitch(): void {
-    if (this.referenceVideo || this.referenceAudio) {
-      const currentModel = this.searchRequest.generationModel;
-      if (isOmniModelValue(currentModel)) {
-        return;
-      }
-      const omniModel = this.generationModels.find(m =>
-        isOmniModelValue(m.value),
-      );
-      if (omniModel) {
-        if (this.searchRequest.generationModel !== omniModel.value) {
-          this.selectModel(omniModel);
-          handleSuccessSnackbar(
-            this._snackBar,
-            "We've switched to the Gemini Omni model, as this one supports video and audio references.",
-          );
-        }
-      } else {
-        const veo31Model = this.generationModels.find(
-          m => m.value === 'veo-3.1-generate-001',
-        );
-        if (
-          veo31Model &&
-          this.searchRequest.generationModel !== veo31Model.value
-        ) {
-          this.selectModel(veo31Model);
-          handleSuccessSnackbar(
-            this._snackBar,
-            "We've switched to the Veo 3.1 model, as this one supports reference inputs.",
-          );
-        }
-      }
-    }
   }
 
   openImageSelectorForReference(): void {
@@ -1757,39 +1810,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
         this.updateModeAndNotify();
         this._snackBar.open(snackbarMessage, 'OK', {duration: 5000});
       }
-
-      const currentModel = this.searchRequest.generationModel;
-      if (isOmniModelValue(currentModel)) {
-        // Already on an Omni model
-      } else {
-        const omniModel = this.generationModels.find(m =>
-          isOmniModelValue(m.value),
-        );
-        if (omniModel) {
-          if (this.searchRequest.generationModel !== omniModel.value) {
-            this.selectModel(omniModel);
-            handleSuccessSnackbar(
-              this._snackBar,
-              "We've switched to the Gemini Omni model for you, as this one supports reference images.",
-            );
-          }
-        } else {
-          const veo31Model = this.generationModels.find(
-            m => m.value === 'veo-3.1-generate-001',
-          );
-          if (
-            veo31Model &&
-            this.searchRequest.generationModel !== veo31Model.value
-          ) {
-            this.selectModel(veo31Model);
-            handleSuccessSnackbar(
-              this._snackBar,
-              "We've switched to the Veo 3.1 model for you, as this one supports reference images.",
-            );
-          }
-        }
-      }
     }
+    this.ensureModelTakesInputs();
   }
 
   clearReferenceImage(index: number, event: MouseEvent) {

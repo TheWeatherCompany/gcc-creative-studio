@@ -16,7 +16,7 @@
 
 import {ComponentFixture, TestBed} from '@angular/core/testing';
 import {ReactiveFormsModule, FormsModule} from '@angular/forms';
-import {MatDialogModule} from '@angular/material/dialog';
+import {MatDialogModule, MatDialogRef} from '@angular/material/dialog';
 import {MatSnackBarModule} from '@angular/material/snack-bar';
 import {MatMenuModule} from '@angular/material/menu';
 import {MatButtonModule} from '@angular/material/button';
@@ -174,6 +174,76 @@ describe('VideoComponent', () => {
       };
       component['applyTemplateParameters']();
       expect(submittedCount()).toBe(1);
+    });
+  });
+
+  describe('model choice for reference inputs', () => {
+    const model = (value: string) =>
+      MODEL_CONFIGS.find(m => m.value === value)!;
+    const omni = model('gemini-omni-1.1-flash-preview');
+    const veo = model('veo-3.1-generate-001');
+
+    /** Attaches a reference through the same selector dialog the UI opens. */
+    function attach(kind: 'image' | 'video'): void {
+      const picked = {id: 7, gcsUri: 'gs://bucket/ref', presignedUrl: 'url'};
+      const open = component.dialog.open as jasmine.Spy;
+      (jasmine.isSpy(open)
+        ? open
+        : spyOn(component.dialog, 'open')
+      ).and.returnValue({
+        afterClosed: () => of(picked),
+      } as unknown as MatDialogRef<unknown>);
+      if (kind === 'image') {
+        component.openImageSelectorForReference();
+      } else {
+        component.openVideoSelectorForReference();
+      }
+    }
+
+    function submit(): void {
+      component.searchRequest.prompt = 'a test prompt';
+      component.searchTerm();
+    }
+
+    beforeEach(() => {
+      component.selectModel(veo);
+      component.currentMode = 'Ingredients to Video';
+    });
+
+    // Veo 3.1 takes reference images. Adding one used to switch to Omni,
+    // which is 720p only, with nothing but a snackbar to say so.
+    it('should keep Veo when a reference image is added', () => {
+      attach('image');
+
+      expect(component.searchRequest.generationModel).toBe(veo.value);
+      expect(component.modelNotice).toBeNull();
+      submit();
+      const sent = startVeoGeneration.calls.mostRecent().args[0];
+      expect(sent.generationModel).toBe(veo.value);
+      expect(sent.referenceImages?.length).toBe(1);
+    });
+
+    it('should switch to Omni with a notice by the model picker for a reference video', () => {
+      attach('video');
+
+      expect(component.searchRequest.generationModel).toBe(omni.value);
+      expect(component.modelNotice?.blocking).toBeFalse();
+      expect(component.modelNotice?.text).toContain(veo.viewValue);
+      expect(component.modelNotice?.text).toContain(omni.viewValue);
+    });
+
+    // Veo's backend path accepts a reference video but never sends it, so the
+    // user would get a generation that silently ignored their reference.
+    it('should block, not switch, when the picked model cannot take the reference', () => {
+      component.selectModel(omni);
+      attach('video');
+      component.selectModel(veo);
+
+      submit();
+
+      expect(startVeoGeneration).not.toHaveBeenCalled();
+      expect(component.searchRequest.generationModel).toBe(veo.value);
+      expect(component.modelNotice?.blocking).toBeTrue();
     });
   });
 });
