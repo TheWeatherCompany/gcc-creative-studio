@@ -39,6 +39,11 @@ interface EnrichedMediaItemLink extends SourceMediaItemLink {
 
 const FRAME_ROLES = new Set(['start_frame', 'end_frame']);
 
+// Image models with no generator page of their own: virtual try-on and the
+// upscaler. The image page would reuse them as a different model, with their
+// inputs as ingredients.
+const NOT_REUSABLE_MODEL = /^virtual-try-on-|-upscale-/;
+
 /**
  * The prompt the user typed. Search results carry it in `metadata` as
  * `originalPrompt`; `prompt` is the rewritten one the model actually saw.
@@ -58,6 +63,7 @@ export function feedPrompt(item: GalleryItem): string {
 
 /** The generator page that made this item, or null if none can reuse it. */
 export function generatorRoute(item: GalleryItem): '/' | '/video' | null {
+  if (item.model && NOT_REUSABLE_MODEL.test(item.model)) return null;
   const type = MODEL_CONFIGS.find(m => m.value === item.model)?.type;
   if (type === 'IMAGE') return '/';
   if (type === 'VIDEO') return '/video';

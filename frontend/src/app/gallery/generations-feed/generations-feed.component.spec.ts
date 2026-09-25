@@ -189,6 +189,25 @@ describe('GenerationsFeedComponent', () => {
     });
   }
 
+  /**
+   * Answers a search from what the server holds right now: `ids`, newest
+   * first. Unlike answerSearch, a deleted row is gone from both the results
+   * and the count, and a new one pushes the rest down.
+   */
+  function answerFrom(req: TestRequest, ids: number[]) {
+    const {offset = 0, limit} = req.request.body as GallerySearchDto;
+    req.flush({
+      data: ids.slice(offset, offset + limit).map(id => searchRow({id})),
+      count: ids.length,
+      page: Math.floor(offset / limit) + 1,
+      pageSize: limit,
+      totalPages: Math.max(1, Math.ceil(ids.length / limit)),
+    });
+  }
+  const newestFirst = (total: number) =>
+    Array.from({length: total}, (_, i) => total - i);
+  const deleteUrl = `${environment.backendURL}/gallery/bulk-delete`;
+
   /** Creates the feed in workspace 1 and returns the first search request. */
   function start(): TestRequest {
     fixture = TestBed.createComponent(GenerationsFeedComponent);
@@ -373,6 +392,21 @@ describe('GenerationsFeedComponent', () => {
         });
       }));
     }
+
+    it('is offered for a retired image model but not for try-on or upscale results', fakeAsync(() => {
+      answerSearch(start(), 3, [
+        {id: 3, model: 'virtual-try-on-001'},
+        {id: 2, model: 'imagen-4.0-upscale-preview'},
+        {id: 1, model: 'imagen-4.0-generate-001'},
+      ]);
+      fixture.detectChanges();
+
+      expect(rowEls().map(row => !!button(row, 'reuse'))).toEqual([
+        false,
+        false,
+        true,
+      ]);
+    }));
   });
 
   describe('Download', () => {
@@ -462,30 +496,73 @@ describe('GenerationsFeedComponent', () => {
     expect(rowIds()).toEqual([42, 41]);
   }));
 
-  // The service re-emits every page it has fetched each time it appends the
-  // next one, so a row removed only from the view would come back.
-  it('keeps a deleted submission out of the feed after the next page loads', fakeAsync(() => {
-    answerSearch(start(), 50);
+  describe('Delete', () => {
+    it('keeps every other generation when the next pages load after a delete', fakeAsync(() => {
+      let server = newestFirst(81);
+      answerFrom(start(), server);
+      fixture.detectChanges();
+
+      const target = rowEls().find(row => row.dataset['id'] === '80')!;
+      button(target, 'delete').click();
+      const del = httpMock.expectOne(deleteUrl);
+      expect(del.request.body).toEqual({
+        items: [{id: 80, type: 'media_item'}],
+        workspace_id: 1,
+      });
+      server = server.filter(id => id !== 80);
+      del.flush({deleted_count: 1});
+      fixture.detectChanges();
+      expect(rowIds()).not.toContain(80);
+
+      // The server list moved up by one, so a page boundary that stayed put
+      // would skip a row, and one counted by totalPages would stop a row
+      // early.
+      sentinelObserver().enter(sentinel());
+      answerFrom(httpMock.expectOne(searchUrl), server);
+      fixture.detectChanges();
+      sentinelObserver().enter(sentinel());
+      answerFrom(httpMock.expectOne(searchUrl), server);
+      fixture.detectChanges();
+
+      expect(rowIds()).toEqual(server);
+      sentinelObserver().enter(sentinel());
+      httpMock.expectNone(searchUrl);
+      expect(el().textContent).toContain(
+        "You've reached your first generation",
+      );
+    }));
+
+    it('keeps the row and says so when the backend deleted nothing', fakeAsync(() => {
+      spyOn(console, 'error');
+      answerFrom(start(), [3, 2, 1]);
+      fixture.detectChanges();
+
+      button(rowEls()[1], 'delete').click();
+      // Not the caller's to delete: the backend skips it and still answers 200.
+      httpMock.expectOne(deleteUrl).flush({deleted_count: 0});
+      fixture.detectChanges();
+
+      expect(rowIds()).toEqual([3, 2, 1]);
+      expect(notifications.show).toHaveBeenCalledOnceWith(
+        jasmine.stringContaining('was not deleted'),
+        'error',
+        jasmine.anything(),
+        undefined,
+        jasmine.anything(),
+      );
+    }));
+  });
+
+  it('shows a row once when a new generation pushes it onto the next page', fakeAsync(() => {
+    let server = newestFirst(50);
+    answerFrom(start(), server);
     fixture.detectChanges();
 
-    const target = rowEls().find(row => row.dataset['id'] === '48')!;
-    button(target, 'delete').click();
-    const del = httpMock.expectOne(
-      `${environment.backendURL}/gallery/bulk-delete`,
-    );
-    expect(del.request.body).toEqual({
-      items: [{id: 48, type: 'media_item'}],
-      workspace_id: 1,
-    });
-    del.flush({deleted_count: 1});
-    fixture.detectChanges();
-    expect(rowIds()).not.toContain(48);
-
+    server = [51, ...server];
     sentinelObserver().enter(sentinel());
-    answerSearch(httpMock.expectOne(searchUrl), 50);
+    answerFrom(httpMock.expectOne(searchUrl), server);
     fixture.detectChanges();
 
-    expect(rowIds().length).toBe(49);
-    expect(rowIds()).not.toContain(48);
+    expect(rowIds()).toEqual(newestFirst(50));
   }));
 });

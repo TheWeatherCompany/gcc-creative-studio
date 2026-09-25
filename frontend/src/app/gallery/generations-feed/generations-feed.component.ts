@@ -105,9 +105,6 @@ export class GenerationsFeedComponent
   /** Detail responses by item id, for reference inputs and Reuse. */
   private details = new Map<number, GalleryItem>();
   private detailRequests = new Map<number, Observable<GalleryItem | null>>();
-  // Deleted rows stay hidden: the service re-emits every page it has fetched
-  // whenever it appends the next one.
-  private deletedIds = new Set<number>();
 
   private subscriptions = new Subscription();
   private scrollObserver?: IntersectionObserver;
@@ -128,7 +125,12 @@ export class GenerationsFeedComponent
   ngOnInit(): void {
     this.subscriptions.add(
       this.galleryService.images$.subscribe(items => {
-        this.rows = items.filter(item => !this.deletedIds.has(item.id));
+        // Offset paging repeats a row when a new generation lands at the top
+        // between pages, since everything below it moves down one place.
+        const seen = new Set<number>();
+        this.rows = items.filter(
+          item => !seen.has(item.id) && seen.add(item.id),
+        );
       }),
     );
     this.subscriptions.add(
@@ -147,7 +149,6 @@ export class GenerationsFeedComponent
       this.workspaceStateService.activeWorkspaceId$.subscribe(() => {
         this.details.clear();
         this.detailRequests.clear();
-        this.deletedIds.clear();
       }),
     );
     this.search();
@@ -394,24 +395,32 @@ export class GenerationsFeedComponent
       .subscribe(confirmed => {
         if (!confirmed) return;
         this.deleting.add(row.id);
-        this.galleryService
-          .bulkDelete([{id: row.id, type: row.itemType}], workspaceId)
-          .subscribe({
-            next: () => {
-              this.deleting.delete(row.id);
-              this.deletedIds.add(row.id);
-              this.rows = this.rows.filter(r => r.id !== row.id);
-              if (this.lightboxItem?.id === row.id) this.closeLightbox();
-              handleSuccessSnackbar(
+        const items = [{id: row.id, type: row.itemType}];
+        this.galleryService.bulkDelete(items, workspaceId).subscribe({
+          next: ({deleted_count}) => {
+            this.deleting.delete(row.id);
+            // The backend answers 200 but skips an item the caller neither
+            // made nor administers.
+            if (!deleted_count) {
+              handleErrorSnackbar(
                 this.snackBar,
-                'Media deleted successfully',
+                {
+                  message:
+                    'This generation was not deleted. Only the person who made it, or an admin, can delete it.',
+                },
+                'Delete media',
               );
-            },
-            error: err => {
-              this.deleting.delete(row.id);
-              handleErrorSnackbar(this.snackBar, err, 'Delete media');
-            },
-          });
+              return;
+            }
+            this.galleryService.removeLoadedItems(items);
+            if (this.lightboxItem?.id === row.id) this.closeLightbox();
+            handleSuccessSnackbar(this.snackBar, 'Media deleted successfully');
+          },
+          error: err => {
+            this.deleting.delete(row.id);
+            handleErrorSnackbar(this.snackBar, err, 'Delete media');
+          },
+        });
       });
   }
 

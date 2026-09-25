@@ -43,12 +43,18 @@ import {SearchService} from '../services/search/search.service';
 import {WorkspaceStateService} from '../services/workspace/workspace-state.service';
 import {VideoStateService} from '../services/video-state.service';
 import {GalleryService} from '../gallery/gallery.service';
+import {GalleryItem} from '../common/models/gallery-item.model';
+import {reuseNavigation} from '../gallery/generations-feed/feed-navigation';
 
 describe('VideoComponent', () => {
   let component: VideoComponent;
   let fixture: ComponentFixture<VideoComponent>;
+  let startVeoGeneration: jasmine.Spy;
 
   beforeEach(async () => {
+    startVeoGeneration = jasmine
+      .createSpy('startVeoGeneration')
+      .and.returnValue(of({}));
     await TestBed.configureTestingModule({
       declarations: [VideoComponent],
       imports: [
@@ -82,6 +88,7 @@ describe('VideoComponent', () => {
             videoPrompt: '',
             trackVideoJob: jasmine.createSpy('trackVideoJob'),
             restoreActiveVideoJobs: jasmine.createSpy('restoreActiveVideoJobs'),
+            startVeoGeneration,
           },
         },
         {
@@ -114,5 +121,40 @@ describe('VideoComponent', () => {
 
   it('should create', () => {
     expect(component).toBeTruthy();
+  });
+
+  // The feed's Reuse passes uploaded start and end frames as asset ids. The
+  // request only carries those in Frames to Video, so without the mode switch
+  // the reused generation ran as text to video with no frames.
+  it('sends the start and end frames of a reused generation that were uploaded assets', () => {
+    const asset = (assetId: number, role: string) => ({
+      assetId,
+      role,
+      presignedUrl: `https://storage.test/asset-${assetId}.png`,
+    });
+    const row = {
+      id: 7,
+      model: 'veo-3.1-generate-001',
+      mimeType: 'video/mp4',
+      aspectRatio: '16:9',
+      metadata: {originalPrompt: 'a fox in the snow'},
+    } as unknown as GalleryItem;
+    const detail = {
+      ...row,
+      enrichedSourceAssets: [asset(11, 'start_frame'), asset(12, 'end_frame')],
+    } as unknown as GalleryItem;
+
+    (
+      component as unknown as {applyRemixState(state: unknown): void}
+    ).applyRemixState(reuseNavigation(row, detail)!.remixState);
+    component.searchTerm();
+
+    expect(startVeoGeneration).toHaveBeenCalledOnceWith(
+      jasmine.objectContaining({
+        prompt: 'a fox in the snow',
+        startImageAssetId: {id: 11, type: 'source_asset'},
+        endImageAssetId: {id: 12, type: 'source_asset'},
+      }),
+    );
   });
 });

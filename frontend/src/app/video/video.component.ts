@@ -1352,10 +1352,13 @@ export class VideoComponent implements OnInit, AfterViewInit {
     if (remixState.startImageAssetId) {
       this.startImageAssetId = remixState.startImageAssetId;
       this.sourceMediaItems[0] = null;
+      // Only Frames to Video sends asset frames with the request.
+      this.currentMode = 'Frames to Video';
     }
     if (remixState.endImageAssetId) {
       this.endImageAssetId = remixState.endImageAssetId;
       this.sourceMediaItems[1] = null;
+      this.currentMode = 'Frames to Video';
     }
     if (remixState.startImagePreviewUrl)
       this.image1Preview = remixState.startImagePreviewUrl;
