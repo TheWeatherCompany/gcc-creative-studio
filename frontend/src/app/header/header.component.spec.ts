@@ -134,6 +134,48 @@ describe('HeaderComponent', () => {
     );
   });
 
+  // The rail is position:fixed below the top of the viewport and cannot
+  // scroll, so on a short laptop screen anything past the bottom edge is
+  // unreachable. Karma runs specs inside an iframe; resizing it gives the
+  // media queries a real viewport to evaluate against.
+  describe('on a short desktop viewport', () => {
+    let frame: HTMLElement;
+    let previousStyle: string;
+
+    beforeEach(() => {
+      frame = window.frameElement as HTMLElement;
+      expect(frame).withContext('specs run in the Karma iframe').toBeTruthy();
+      previousStyle = frame.getAttribute('style') ?? '';
+    });
+
+    afterEach(() => frame.setAttribute('style', previousStyle));
+
+    const logoutBottom = (width: number, height: number, admin: boolean) => {
+      frame.style.width = `${width}px`;
+      frame.style.height = `${height}px`;
+      expect(window.innerHeight).withContext('iframe resized').toBe(height);
+      (TestBed.inject(AuthService).isUserAdmin as jasmine.Spy).and.returnValue(
+        admin,
+      );
+      create();
+      component.menuFixed = true;
+      fixture.detectChanges();
+      const logout = fixture.nativeElement.querySelector(
+        '.menu-items [matTooltip="Logout"]',
+      ) as HTMLElement;
+      return logout.getBoundingClientRect().bottom;
+    };
+
+    // A 1440x900 MacBook leaves about 760px once the browser chrome is drawn.
+    it('keeps Logout on screen for an admin', () => {
+      expect(logoutBottom(1440, 760, true)).toBeLessThanOrEqual(760);
+    });
+
+    it('keeps Logout on screen for everyone else', () => {
+      expect(logoutBottom(1280, 680, false)).toBeLessThanOrEqual(680);
+    });
+  });
+
   describe('isGalleryActive', () => {
     // isActive('/gallery', false) is a subset match, so a media detail page
     // keeps the gallery highlighted too. The non-gallery route comes last so

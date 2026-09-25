@@ -207,6 +207,17 @@ describe('Workspace picker', () => {
     expect(overlay.querySelectorAll('.current-badge').length).toBe(1);
   }));
 
+  it('names the dialog after its title for screen readers', fakeAsync(() => {
+    openPicker();
+
+    const dialog = overlay.querySelector('[role="dialog"]')!;
+    const labelId = dialog.getAttribute('aria-labelledby');
+    expect(labelId).toBeTruthy();
+    expect(document.getElementById(labelId!)?.textContent?.trim()).toBe(
+      'Workspaces',
+    );
+  }));
+
   it('switches the active workspace when a card is clicked', fakeAsync(() => {
     openPicker();
 

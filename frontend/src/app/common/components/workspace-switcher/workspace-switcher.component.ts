@@ -43,6 +43,7 @@ import {
   InviteUserModalComponent,
 } from '../invite-user-modal/invite-user-modal.component';
 import {
+  WORKSPACE_PICKER_TITLE_ID,
   WorkspacePickerDialogComponent,
   WorkspacePickerDialogData,
   WorkspacePickerResult,
@@ -231,6 +232,7 @@ export class WorkspaceSwitcherComponent implements OnInit {
       WorkspacePickerResult
     >(WorkspacePickerDialogComponent, {
       maxWidth: '92vw',
+      ariaLabelledBy: WORKSPACE_PICKER_TITLE_ID,
       data: {
         workspaces: this.workspaces,
         activeWorkspaceId: this.activeWorkspaceId,

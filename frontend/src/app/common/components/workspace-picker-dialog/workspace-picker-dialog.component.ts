@@ -47,6 +47,12 @@ export type WorkspacePickerResult =
   | {action: 'invite'}
   | {action: 'brandGuidelines'};
 
+/**
+ * Id of the picker's visible title. Pass it as the dialog's ariaLabelledBy so
+ * screen readers announce the dialog by name.
+ */
+export const WORKSPACE_PICKER_TITLE_ID = 'workspace-picker-title';
+
 /** Above this many workspaces the picker offers a filter-by-name box. */
 export const WORKSPACE_FILTER_THRESHOLD = 6;
 
@@ -86,6 +92,7 @@ export function orderWorkspaces(workspaces: Workspace[]): Workspace[] {
 })
 export class WorkspacePickerDialogComponent {
   readonly WorkspaceScope = WorkspaceScope;
+  readonly titleId = WORKSPACE_PICKER_TITLE_ID;
   readonly ordered: Workspace[];
   readonly showFilter: boolean;
   readonly activeWorkspace: Workspace | null;
