@@ -1,0 +1,228 @@
+<!--
+ Copyright 2026 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<div class="feed-container">
+  <div class="flex flex-wrap items-center gap-4 mb-6">
+    <h1 class="text-white !text-2xl font-semibold !m-0 mr-auto">Generations</h1>
+    <div class="w-full md:w-96">
+      <studio-search-filter
+        [(value)]="query"
+        placeholder="Search your generations..."
+        size="small"
+        [expandable]="false"
+        (search)="search()"
+      ></studio-search-filter>
+    </div>
+    <studio-button
+      variant="primary"
+      size="small"
+      routerLink="/gallery"
+      title="Back to the gallery grid"
+    >
+      <mat-icon class="mr-1">grid_view</mat-icon>
+      <span>Grid</span>
+    </studio-button>
+  </div>
+
+  @if (isLoading && rows.length === 0) {
+    <div class="flex flex-col justify-center items-center mt-8">
+      <mat-progress-spinner color="primary" mode="indeterminate"></mat-progress-spinner>
+      <p class="pt-5 text-white">Loading generations...</p>
+    </div>
+  }
+
+  <div class="flex flex-col">
+    @for (row of rows; track row.id) {
+      <article #feedRow class="feed-row" [attr.data-id]="row.id" data-testid="feed-row">
+        <div class="feed-media">
+          <div
+            class="grid gap-1"
+            [style.max-width]="mediaMaxWidth(row)"
+            [style.grid-template-columns]="'repeat(' + gridColumns(row) + ', minmax(0, 1fr))'"
+          >
+            @for (index of outputs(row); track index) {
+              <button
+                type="button"
+                class="feed-tile"
+                data-testid="feed-output"
+                [style.aspect-ratio]="tileAspectRatio(row)"
+                [attr.aria-label]="'Open output ' + (index + 1)"
+                (click)="openLightbox(row, index)"
+              >
+                @if (isAudio(row)) {
+                  <mat-icon class="feed-tile-icon">graphic_eq</mat-icon>
+                } @else if (thumbnailUrl(row, index); as thumb) {
+                  <img [src]="thumb" [alt]="prompt(row)" loading="lazy" />
+                } @else if (isVideo(row)) {
+                  <video [src]="row.presignedUrls?.[index]" preload="metadata" muted playsinline></video>
+                } @else {
+                  <img [src]="row.presignedUrls?.[index]" [alt]="prompt(row)" loading="lazy" />
+                }
+                @if (isVideo(row)) {
+                  <mat-icon class="feed-play-icon">play_circle</mat-icon>
+                }
+              </button>
+            }
+          </div>
+        </div>
+
+        <div class="feed-details">
+          <div class="feed-actions" role="toolbar" aria-label="Generation actions">
+            <button
+              mat-icon-button
+              matTooltip="Download all outputs"
+              aria-label="Download"
+              data-testid="feed-download"
+              [disabled]="downloading.has(row.id)"
+              (click)="download(row)"
+            >
+              @if (downloading.has(row.id)) {
+                <mat-progress-spinner mode="indeterminate" diameter="18"></mat-progress-spinner>
+              } @else {
+                <mat-icon>download</mat-icon>
+              }
+            </button>
+            @if (canReuse(row)) {
+              <button
+                mat-icon-button
+                matTooltip="Reuse prompt and settings"
+                aria-label="Reuse"
+                data-testid="feed-reuse"
+                [disabled]="reusing.has(row.id)"
+                (click)="reuse(row)"
+              >
+                <mat-icon>replay</mat-icon>
+              </button>
+            }
+            <button
+              mat-icon-button
+              matTooltip="Delete"
+              aria-label="Delete"
+              data-testid="feed-delete"
+              [disabled]="deleting.has(row.id)"
+              (click)="delete(row)"
+            >
+              <mat-icon>delete</mat-icon>
+            </button>
+          </div>
+
+          <div class="feed-prompt">
+            <p
+              data-testid="feed-prompt"
+              [class.line-clamp-3]="!expandedPrompts.has(row.id)"
+            >{{ prompt(row) }}</p>
+            @if (isPromptLong(row)) {
+              <button
+                mat-icon-button
+                class="feed-prompt-toggle"
+                [attr.aria-label]="expandedPrompts.has(row.id) ? 'Collapse prompt' : 'Expand prompt'"
+                [attr.aria-expanded]="expandedPrompts.has(row.id)"
+                (click)="togglePrompt(row)"
+              >
+                <mat-icon>{{ expandedPrompts.has(row.id) ? 'expand_less' : 'expand_more' }}</mat-icon>
+              </button>
+            }
+          </div>
+
+          @if (references(row); as refs) {
+            @if (refs.length) {
+              <div class="flex flex-wrap gap-2" data-testid="feed-references">
+                @for (ref of refs; track ref.key) {
+                  <a
+                    class="feed-reference"
+                    [routerLink]="ref.link"
+                    [queryParams]="ref.queryParams"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    matTooltip="Open reference input"
+                  >
+                    @if (ref.isAudio) {
+                      <mat-icon>graphic_eq</mat-icon>
+                    } @else {
+                      <img [src]="ref.thumbnailUrl" alt="Reference input" loading="lazy" />
+                    }
+                  </a>
+                }
+              </div>
+            }
+          }
+
+          <div class="feed-meta" data-testid="feed-meta">
+            <span>Created {{ row.createdAt | date: 'MMM d, y, h:mm a' }}</span>
+            <span>
+              {{ modelName(row) }}
+              @if (row.aspectRatio) {
+                <span class="text-neutral-500">&middot;</span> {{ row.aspectRatio }}
+              }
+            </span>
+          </div>
+        </div>
+      </article>
+    }
+  </div>
+
+  <!-- Infinite-scroll sentinel, as in the media gallery. -->
+  <div #scrollSentinel aria-hidden="true" class="h-px w-full"></div>
+
+  @if (!isLoading && !allLoaded && rows.length > 0) {
+    <div class="flex justify-center mt-8">
+      <studio-button variant="primary" size="medium" (click)="loadMore()">Load more</studio-button>
+    </div>
+  }
+
+  @if (isLoading && rows.length > 0) {
+    <div class="flex justify-center items-center py-8">
+      <mat-progress-spinner color="primary" mode="indeterminate" [diameter]="50"></mat-progress-spinner>
+    </div>
+  }
+
+  @if (!isLoading && allLoaded && rows.length > 0) {
+    <p class="text-center text-neutral-400 py-8">You've reached your first generation</p>
+  }
+
+  @if (!isLoading && allLoaded && rows.length === 0) {
+    <p class="text-center text-white py-10">
+      {{ query.trim() ? 'No generations match your search' : 'No generations in this workspace yet' }}
+    </p>
+  }
+</div>
+
+@if (lightboxItem) {
+  <div class="fixed inset-0 bg-black/80 z-[1000] flex items-center justify-center p-4" (click)="closeLightbox()">
+    <div (click)="$event.stopPropagation()" class="relative w-full h-full max-w-7xl max-h-[90vh] flex">
+      <app-media-lightbox
+        class="w-full h-full"
+        [mediaItem]="lightboxItem"
+        [initialIndex]="lightboxIndex"
+        [showSeeMoreInfoButton]="true"
+        [showShareButton]="false"
+        (editClicked)="onLightboxEdit($event)"
+        (generateVideoClicked)="onLightboxGenerateVideo($event)"
+        (sendToVtoClicked)="onLightboxVto($event)"
+        (editWithOmniClicked)="onLightboxOmni($event)"
+        (extendWithAiClicked)="onLightboxExtend($event)"
+        (concatenateClicked)="onLightboxConcatenate($event)"
+      ></app-media-lightbox>
+    </div>
+    <button
+      (click)="closeLightbox()"
+      class="absolute top-4 right-4 z-[1001] text-white bg-black/40 rounded-full p-2 hover:bg-black/60 transition-colors"
+      aria-label="Close lightbox"
+    >
+      <mat-icon>close</mat-icon>
+    </button>
+  </div>
+}

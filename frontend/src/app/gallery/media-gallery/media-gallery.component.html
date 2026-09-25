@@ -132,6 +132,18 @@
               <mat-icon class="mr-1">create_new_folder</mat-icon>
               <span>New Folder</span>
             </studio-button>
+
+            <!-- Fork: opt-in generations feed (one row per submission) -->
+            <studio-button
+              *ngIf="!isSelectorMode && !isSelectionMode"
+              variant="primary"
+              size="small"
+              routerLink="/gallery/feed"
+              title="View generations as a feed, with prompts"
+            >
+              <mat-icon class="mr-1">view_agenda</mat-icon>
+              <span>Feed</span>
+            </studio-button>
           </div>
 
           <!-- Select All Button -->
