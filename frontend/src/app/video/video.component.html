@@ -413,6 +413,8 @@
           [aspectRatio]="selectedAspectRatio"
           [outputs]="searchRequest.numberOfMedia || 1"
           [maxOutputs]="maxOutputs"
+          [modelNotice]="modelNotice"
+          (modelNoticeDismissed)="modelSwitchNotice = null"
           [mode]="currentMode"
           [modes]="modes"
           [aspectRatioOptions]="aspectRatioOptions"
