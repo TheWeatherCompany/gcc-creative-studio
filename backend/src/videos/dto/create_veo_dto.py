@@ -163,10 +163,18 @@ class CreateVeoDto(BaseDto):
         3. Ensures reference image roles are only used with correct model.
         4. Validates model-specific resolution limits.
         5. Validates model-specific duration limits.
+        6. Ensures reference video and audio are only used with Gemini Omni,
+           the only path that reads them.
         """
         conflicting_roles_present = False
         reference_roles_present = False
         model = self.generation_model
+
+        if (self.reference_video or self.reference_audio) and not model.is_omni:
+            raise ValueError(
+                "Reference video and audio need a Gemini Omni model; "
+                f"'{model.value}' cannot use them.",
+            )
 
         if self.source_media_items:
             non_reference_roles = {
