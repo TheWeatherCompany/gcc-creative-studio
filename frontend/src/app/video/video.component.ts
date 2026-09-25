@@ -159,15 +159,15 @@ export class VideoComponent implements OnInit, AfterViewInit {
 
   /**
    * The takes per prompt the user picked. searchRequest.numberOfMedia is this
-   * clamped to the current model, so passing through Omni (one take) and back
-   * to Veo does not lose the choice.
+   * clamped to the current model, so passing through a model with a lower
+   * limit and back does not lose the choice.
    */
   preferredOutputs = DEFAULT_OUTPUTS;
 
   /**
    * Set when an input forced a model change, and shown by the model picker
    * until the user picks a model or dismisses it. A snackbar alone was easy
-   * to miss, and the switch changes resolution and takes.
+   * to miss, and the switch can change the resolution.
    */
   modelSwitchNotice: string | null = null;
 
@@ -577,17 +577,12 @@ export class VideoComponent implements OnInit, AfterViewInit {
     // With no model to fall back to, the submit check blocks instead.
     if (!fallback) return;
     this.selectModel(fallback);
-    const caveats: string[] = [];
-    if (!fallback.capabilities.supportedResolutions.length) {
-      caveats.push('renders at 720p');
-    }
-    if (maxOutputsFor(fallback) < maxOutputsFor(current)) {
-      caveats.push(`makes up to ${maxOutputsFor(fallback)} take per prompt`);
-    }
     this.modelSwitchNotice =
       `Switched from ${current.viewValue} to ${fallback.viewValue}, which ` +
       `accepts ${input}.` +
-      (caveats.length ? ` It ${caveats.join(' and ')}.` : '');
+      (fallback.capabilities.supportedResolutions.length
+        ? ''
+        : ' It renders at 720p.');
   }
 
   selectComposition(composition: string): void {

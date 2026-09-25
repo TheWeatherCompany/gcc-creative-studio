@@ -145,35 +145,14 @@ describe('VideoComponent', () => {
       expect(submittedCount()).toBe(1);
     });
 
-    // Omni makes one take per job. Passing through it used to overwrite the
-    // user's pick with 1, both on screen and in the saved settings.
-    it('should keep a picked count through a switch to Omni and back', () => {
+    // Omni used to be held to one take, and picking it reset the count to 1.
+    // The backend now makes one Omni interaction per take.
+    it('should offer and send up to 4 takes on Omni', () => {
       component.selectModel(veo);
       component.selectNumberOfVideos(4);
-      expect(submittedCount()).toBe(4);
       component.selectModel(omni);
-      expect(submittedCount()).toBe(1);
-      expect(
-        (
-          TestBed.inject(VideoStateService).updateState as jasmine.Spy
-        ).calls.mostRecent().args[0].numberOfMedia,
-      )
-        .withContext('saved count')
-        .toBe(4);
-      component.selectModel(veo);
+      expect(component.maxOutputs).withContext('picker limit').toBe(4);
       expect(submittedCount()).toBe(4);
-    });
-
-    // A template sets its model directly, after its count. The x-chip showed
-    // x4 on Omni until the count was re-clamped for the template's model.
-    it('should clamp a template count to the template model', () => {
-      component.selectModel(veo);
-      component.templateParams = {
-        numMedia: 4,
-        model: 'gemini-omni-1.1-flash-preview',
-      };
-      component['applyTemplateParameters']();
-      expect(submittedCount()).toBe(1);
     });
   });
 
