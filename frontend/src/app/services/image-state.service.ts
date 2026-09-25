@@ -16,7 +16,7 @@
 
 import {Injectable} from '@angular/core';
 import {BehaviorSubject, Observable} from 'rxjs';
-import {MODEL_CONFIGS} from '../common/config/model-config';
+import {DEFAULT_OUTPUTS, MODEL_CONFIGS} from '../common/config/model-config';
 
 const STORAGE_KEY = 'image_state';
 
@@ -60,7 +60,7 @@ export class ImageStateService {
       resolution: '1K',
       style: null,
       colorAndTone: null,
-      numberOfMedia: 1,
+      numberOfMedia: DEFAULT_OUTPUTS,
       composition: null,
       useBrandGuidelines: false,
       enhancePrompt: false,
