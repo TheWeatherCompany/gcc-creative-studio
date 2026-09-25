@@ -23,7 +23,8 @@ import {MatSnackBar, MatSnackBarModule} from '@angular/material/snack-bar';
 import {NoopAnimationsModule} from '@angular/platform-browser/animations';
 import {MatMenuModule} from '@angular/material/menu';
 import {MatTooltipModule} from '@angular/material/tooltip';
-import {CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
+import {CUSTOM_ELEMENTS_SCHEMA, Injector} from '@angular/core';
+import {NgOptimizedImage} from '@angular/common';
 
 import {of, throwError} from 'rxjs';
 
@@ -38,6 +39,8 @@ import {
   MoveToFolderDialogComponent,
   MoveToFolderDialogResult,
 } from '../move-to-folder-dialog/move-to-folder-dialog.component';
+import {NotificationService} from '../../services/notification.service';
+import {AppInjector, setAppInjector} from '../../../app-injector';
 
 describe('MediaLightboxComponent', () => {
   let component: MediaLightboxComponent;
@@ -64,6 +67,8 @@ describe('MediaLightboxComponent', () => {
         // The action toolbar uses a mat-menu and tooltips.
         MatMenuModule,
         MatTooltipModule,
+        // The image viewer renders through ngSrc once an item is set.
+        NgOptimizedImage,
       ],
       providers: [
         provideRouter([]),
@@ -308,6 +313,103 @@ describe('MediaLightboxComponent', () => {
 
       expect(lastToast()).toBe('Not a member of this workspace.');
       expect(navigate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('download', () => {
+    const signedUrl =
+      'https://storage.googleapis.com/bucket/images/1b2c3d4e?X-Goog-Signature=abc';
+    let notificationService: jasmine.SpyObj<NotificationService>;
+    let clickedLinks: HTMLAnchorElement[];
+    let windowOpen: jasmine.Spy;
+    let previousInjector: Injector;
+
+    afterEach(() => setAppInjector(previousInjector));
+
+    beforeEach(() => {
+      notificationService = jasmine.createSpyObj('NotificationService', [
+        'show',
+      ]);
+      previousInjector = AppInjector;
+      setAppInjector({
+        get: () => notificationService,
+      } as unknown as Injector);
+
+      clickedLinks = [];
+      spyOn(HTMLAnchorElement.prototype, 'click').and.callFake(function (
+        this: HTMLAnchorElement,
+      ) {
+        clickedLinks.push(this);
+      });
+      windowOpen = spyOn(window, 'open');
+
+      component.mediaItem = {
+        id: 42,
+        mimeType: 'image/png',
+        presignedUrls: ['https://example.test/first', signedUrl],
+      } as MediaItem;
+      component.selectedIndex = 1;
+      component.selectedUrl = signedUrl;
+      fixture.detectChanges();
+    });
+
+    function clickDownloadButton(): void {
+      const button = Array.from(
+        fixture.nativeElement.querySelectorAll('studio-button'),
+      ).find(el => (el as HTMLElement).textContent?.trim() === 'download') as
+        | HTMLElement
+        | undefined;
+      expect(button).withContext('download button').toBeDefined();
+      button!.click();
+    }
+
+    // The click handler is async (fetch, then blob), so wait for it to settle.
+    async function settle(): Promise<void> {
+      for (let i = 0; i < 20 && component.isDownloading; i++) {
+        await new Promise(resolve => setTimeout(resolve));
+      }
+    }
+
+    // Reported Sept 2 and Sept 4: the button opened the signed URL in a new
+    // tab, where the browser ignores `download` because it is cross-origin.
+    it('saves the file from a same-origin blob link instead of opening a tab', async () => {
+      spyOn(window, 'fetch').and.resolveTo(
+        new Response(new Blob(['png'], {type: 'image/png'})),
+      );
+
+      clickDownloadButton();
+      await settle();
+
+      expect(window.fetch).toHaveBeenCalledWith(signedUrl, jasmine.anything());
+      expect(clickedLinks.length).toBe(1);
+      const link = clickedLinks[0];
+      expect(link.href).toMatch(/^blob:/);
+      expect(link.target).not.toBe('_blank');
+      expect(link.download).toBe('creative-studio-42-2.png');
+      expect(windowOpen).not.toHaveBeenCalled();
+      expect(component.isDownloading).toBeFalse();
+    });
+
+    // An expired signed URL comes back 403. The user must hear about it,
+    // and must not be bounced to a tab showing a GCS XML error.
+    it('tells the user when the file cannot be fetched and opens nothing', async () => {
+      spyOn(window, 'fetch').and.resolveTo(
+        new Response('<Error>ExpiredToken</Error>', {status: 403}),
+      );
+
+      clickDownloadButton();
+      await settle();
+
+      expect(notificationService.show).toHaveBeenCalledWith(
+        'Could not download the file. Please try again.',
+        'error',
+        jasmine.anything(),
+        undefined,
+        jasmine.anything(),
+      );
+      expect(clickedLinks.length).toBe(0);
+      expect(windowOpen).not.toHaveBeenCalled();
+      expect(component.isDownloading).toBeFalse();
     });
   });
 });
