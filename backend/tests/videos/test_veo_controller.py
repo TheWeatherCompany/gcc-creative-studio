@@ -359,3 +359,76 @@ def test_generate_videos_gemini_omni_1_1_flash_preview_success(
     assert response.status_code == 200
     assert response.json()["id"] == 125
     assert response.json()["model"] == "gemini-omni-1.1-flash-preview"
+
+
+VEO_MODELS = [
+    GenerationModelEnum.VEO_3_1_PREVIEW,
+    GenerationModelEnum.VEO_3_1_GENERATE_001,
+    GenerationModelEnum.VEO_3_1_LITE_GENERATE_001,
+    GenerationModelEnum.VEO_3_1_LITE_PREVIEW,
+    GenerationModelEnum.VEO_3_1_FAST_GENERATE_001,
+    GenerationModelEnum.VEO_3_FAST,
+    GenerationModelEnum.VEO_3_QUALITY,
+    GenerationModelEnum.VEO_3_FAST_PREVIEW,
+    GenerationModelEnum.VEO_3_QUALITY_PREVIEW,
+]
+OMNI_MODELS = [
+    GenerationModelEnum.GEMINI_OMNI,
+    GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW,
+    GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW,
+]
+REFERENCE = {"id": 10, "type": "media_item"}
+
+
+@pytest.mark.parametrize(
+    "model, references, accepted",
+    [
+        (model, {field: REFERENCE}, False)
+        for model in VEO_MODELS
+        for field in ("referenceVideo", "referenceAudio")
+    ]
+    + [
+        (
+            model,
+            {"referenceVideo": REFERENCE, "referenceAudio": REFERENCE},
+            True,
+        )
+        for model in OMNI_MODELS
+    ],
+)
+def test_reference_video_and_audio_need_gemini_omni(
+    client, mock_veo_service, model, references, accepted
+):
+    # Only the Omni path reads these; Veo used to accept and silently drop them.
+    mock_veo_service.start_video_generation_job.return_value = (
+        MediaItemResponse(
+            id=1,
+            workspace_id=1,
+            user_email="test@example.com",
+            mime_type=MimeTypeEnum.VIDEO_MP4,
+            status="processing",
+            gcs_uris=[],
+            presigned_urls=[],
+            aspect_ratio="16:9",
+            model=model,
+        )
+    )
+    payload = {
+        "prompt": "A storm rolling in",
+        "workspaceId": 1,
+        "generationModel": model.value,
+        **references,
+    }
+
+    response = client.post("/api/videos/generate-videos", json=payload)
+
+    if accepted:
+        assert response.status_code == 200, response.json()
+        mock_veo_service.start_video_generation_job.assert_called_once()
+    else:
+        assert response.status_code == 422
+        assert (
+            "Reference video and audio need a Gemini Omni model"
+            in response.json()["detail"][0]["msg"]
+        )
+        mock_veo_service.start_video_generation_job.assert_not_called()

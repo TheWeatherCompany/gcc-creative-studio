@@ -36,6 +36,7 @@ from src.common.base_dto import (
 )
 from src.common.generation_executor import GenerationExecutor
 from src.common.media_utils import concatenate_videos, generate_thumbnail
+from src.common.prompt_options import apply_prompt_options, recorded_prompts
 from src.common.schema.genai_model_setup import GenAIModelSetup
 from src.common.schema.media_item_model import (
     AssetRoleEnum,
@@ -285,6 +286,9 @@ def _process_video_in_background(
                             request_dto.prompt = rewritten_prompt
                         else:
                             rewritten_prompt = request_dto.prompt
+                        request_dto.prompt = await apply_prompt_options(
+                            request_dto, rewritten_prompt, brand_guideline_repo
+                        )
 
                         # --- Handle Source Assets for API Call ---
                         start_image_for_api: types.Image | None = None
@@ -1082,7 +1086,7 @@ def _process_video_in_background(
                         # --- WHEN COMPLETE, UPDATE THE DOCUMENT IN FIRESTORE ---
                         update_data = {
                             "status": JobStatusEnum.COMPLETED,
-                            "prompt": rewritten_prompt,
+                            **recorded_prompts(request_dto, rewritten_prompt),
                             "gcs_uris": final_gcs_uris,  # The final GCS URLs
                             "thumbnail_uris": permanent_thumbnail_gcs_uris,
                             "generation_time": generation_time,
