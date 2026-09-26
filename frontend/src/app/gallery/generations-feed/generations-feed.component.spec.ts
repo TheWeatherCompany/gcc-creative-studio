@@ -620,6 +620,44 @@ describe('GenerationsFeedComponent', () => {
       );
       closeFeed();
     }));
+
+    it('removes a row that a refresh brought in', fakeAsync(() => {
+      answerFrom(start(), newestFirst(90));
+      answerActive([activeJob(91)], []);
+      tick(ACTIVE_JOBS_POLL_MS);
+      answerActive([], []);
+      answerFrom(httpMock.expectOne(searchUrl), newestFirst(91));
+      fixture.detectChanges();
+      expect(rowIds()[0]).toBe(91);
+
+      button(rowEls()[0], 'delete').click();
+      httpMock.expectOne(deleteUrl).flush({deleted_count: 1});
+      fixture.detectChanges();
+
+      expect(rowIds()).toEqual(newestFirst(90).slice(0, 40));
+      closeFeed();
+    }));
+
+    it('keeps a deleted row out when a refresh sent before the delete answers after it', fakeAsync(() => {
+      answerFrom(start(), newestFirst(90));
+      answerActive([], []);
+      setVisibility('hidden');
+      setVisibility('visible');
+      tick();
+      answerActive([], []);
+      const refresh = httpMock.expectOne(searchUrl);
+      fixture.detectChanges();
+
+      button(rowEls()[1], 'delete').click();
+      httpMock.expectOne(deleteUrl).flush({deleted_count: 1});
+      const server = newestFirst(90).filter(id => id !== 89);
+      if (!refresh.cancelled) answerFrom(refresh, newestFirst(90));
+      httpMock.match(searchUrl).forEach(req => answerFrom(req, server));
+      fixture.detectChanges();
+
+      expect(rowIds()).toEqual(server.slice(0, 40));
+      closeFeed();
+    }));
   });
 
   it('shows a row once when a new generation pushes it onto the next page', fakeAsync(() => {
