@@ -352,9 +352,6 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       supportedResolutions: [],
       supportedDurations: [4, 6, 8, 10],
       supportsAudio: true,
-      // The backend makes a single Omni interaction per job, whatever the
-      // requested count (num_outputs = 1 in veo_service).
-      maxOutputs: 1,
       supportsReferenceMedia: true,
     },
   },

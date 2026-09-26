@@ -776,7 +776,11 @@ def _process_video_in_background(
                                 )
                             )
 
-                            num_outputs = 1
+                            # One interaction returns one video, so each take
+                            # is its own call. On a follow-up turn every take
+                            # continues the same parent interaction: the takes
+                            # are alternatives, not a chain.
+                            num_outputs = request_dto.number_of_media
                             worker_logger.info(
                                 f"Queueing {num_outputs} Gemini Omni generation interactions."
                             )
@@ -915,14 +919,39 @@ def _process_video_in_background(
                                 generate_single_omni_output(i)
                                 for i in range(num_outputs)
                             ]
-                            parallel_results = await asyncio.gather(*tasks)
+                            # Like the Gemini image fan-out, a take that comes
+                            # back with no video is dropped and the job fails
+                            # only if every take is empty. Any other error
+                            # fails the job, as it does for images. Gathering
+                            # every result first lets the other takes finish
+                            # and clean up their temp files before that.
+                            parallel_results = await asyncio.gather(
+                                *tasks, return_exceptions=True
+                            )
+                            takes = []
+                            empty_takes = []
+                            for take, result in enumerate(parallel_results, 1):
+                                if isinstance(result, EmptyGenerationError):
+                                    worker_logger.warning(
+                                        "Gemini Omni take %s of %s was dropped: %s",
+                                        take,
+                                        num_outputs,
+                                        result,
+                                    )
+                                    empty_takes.append(result)
+                                elif isinstance(result, BaseException):
+                                    raise result
+                                else:
+                                    takes.append(result)
+                            if not takes:
+                                raise empty_takes[0]
 
                             for (
                                 final_gcs_uri,
                                 thumbnail_gcs_uri,
                                 interaction_id,
                                 thought_signature,
-                            ) in parallel_results:
+                            ) in takes:
                                 final_gcs_uris.append(final_gcs_uri)
                                 permanent_thumbnail_gcs_uris.append(
                                     thumbnail_gcs_uri
