@@ -45,7 +45,9 @@ import {
   catchError,
   distinctUntilChanged,
   exhaustMap,
+  expand,
   map,
+  reduce,
   shareReplay,
   startWith,
   switchMap,
@@ -142,16 +144,19 @@ export class GenerationsFeedComponent
 
   // The service's pages, as last emitted.
   private pagedRows: GalleryItem[] = [];
-  // The first page as re-read after a job finished, shown above the service's
-  // pages. Those pages stay as they are, so a user who has scrolled down keeps
-  // everything they loaded; see render() for how the two meet.
+  // The newest rows as re-read after a job finished (the first page, or more;
+  // see refreshTopRows), shown above the service's pages. Those pages stay as
+  // they are, so a user who has scrolled down keeps everything they loaded;
+  // see render() for how the two meet.
   private topRows: GalleryItem[] = [];
   private filters: GallerySearchDto | null = null;
-  // The first-page refresh in flight, if any. A new search, a workspace
-  // switch or a newer refresh cancels it.
+  // The refresh in flight, if any, and the finished job it reads down to. A
+  // new search or a workspace switch cancels it; a newer refresh takes it
+  // over.
   private topRowsRefresh?: Subscription;
-  // Ids from the last active-jobs poll; null until the first one answers.
-  private activeJobIds: Set<number> | null = null;
+  private refreshUntil?: MediaItem;
+  // The last active-jobs poll, by id; null until the first one answers.
+  private activeJobs: Map<number, MediaItem> | null = null;
   // Set while the tab is hidden, including when the feed opens in a hidden
   // tab, and cleared by the next poll that answers. No poll runs while
   // hidden, so a job can start and finish unseen (in the generator's own tab,
@@ -598,9 +603,9 @@ export class GenerationsFeedComponent
   }
 
   private onActiveJobs(jobs: MediaItem[]): void {
-    const ids = new Set(jobs.map(job => job.id));
-    const previous = this.activeJobIds;
-    this.activeJobIds = ids;
+    const active = new Map(jobs.map(job => [job.id, job]));
+    const previous = this.activeJobs;
+    this.activeJobs = active;
     const resumed = this.missedPolls;
     this.missedPolls = false;
     this.inFlight = jobs
@@ -613,20 +618,61 @@ export class GenerationsFeedComponent
         isVideo: !!job.mimeType?.startsWith('video/'),
       }));
     // A job that left the list has finished. Most finish completed, and then
-    // their row belongs at the top of the feed. After the tab was hidden,
-    // one may have come and gone without showing in any poll.
-    if (resumed || (previous && [...previous].some(id => !ids.has(id)))) {
-      this.refreshTopRows();
+    // their row belongs near the top of the feed, as far down as the oldest
+    // of them started. After the tab was hidden, one may have come and gone
+    // without showing in any poll.
+    const finished = [...(previous?.values() ?? [])].filter(
+      job => !active.has(job.id),
+    );
+    if (resumed || finished.length) {
+      this.refreshTopRows(
+        finished.reduce<MediaItem | undefined>(
+          (oldest, job) => (!oldest || sortsBefore(oldest, job) ? job : oldest),
+          undefined,
+        ),
+      );
     }
   }
 
-  /** Re-reads the first page of the current search, keeping later pages. */
-  private refreshTopRows(): void {
+  /**
+   * Re-reads the newest rows of the current search, keeping later pages. The
+   * search sorts by when a job started, so a long job's row can land below
+   * rows made while it ran, past the first page: pages after the first are
+   * read too while `until` (a finished job) would sort after them, as far as
+   * the pages loaded. Past those, the next page brings the row in.
+   */
+  private refreshTopRows(until?: MediaItem): void {
     const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
     if (workspaceId === null || !this.filters) return;
+    // Taking over a refresh still loading, read at least as far down.
+    const pending = this.topRowsRefresh?.closed ? undefined : this.refreshUntil;
+    if (pending && (!until || sortsBefore(until, pending))) until = pending;
     this.topRowsRefresh?.unsubscribe();
-    this.topRowsRefresh = this.galleryService
-      .searchOnce({...this.filters, workspaceId, offset: 0, limit: PAGE_SIZE})
+    this.refreshUntil = until;
+
+    const filters = this.filters;
+    const reach = this.pagedRows.length;
+    const read = (offset: number) =>
+      this.galleryService
+        .searchOnce({...filters, workspaceId, offset, limit: PAGE_SIZE})
+        .pipe(map(items => ({offset, items})));
+    this.topRowsRefresh = read(0)
+      .pipe(
+        expand(({offset, items}) => {
+          const last = items[items.length - 1];
+          const next = offset + PAGE_SIZE;
+          return until &&
+            items.length === PAGE_SIZE &&
+            next < reach &&
+            sortsBefore(last, until)
+            ? read(next)
+            : EMPTY;
+        }),
+        reduce<{items: GalleryItem[]}, GalleryItem[]>(
+          (rows, page) => [...rows, ...page.items],
+          [],
+        ),
+      )
       .subscribe({
         next: items => {
           this.topRows = items;

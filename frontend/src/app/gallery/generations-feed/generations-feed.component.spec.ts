@@ -95,6 +95,7 @@ interface RowSpec {
   model?: string;
   aspectRatio?: string;
   mimeType?: string;
+  createdAt?: string;
 }
 
 /** A search result row the way /gallery/search returns it. */
@@ -104,12 +105,13 @@ function searchRow({
   model = 'gemini-3.1-flash-image',
   aspectRatio = '16:9',
   mimeType = 'image/png',
+  createdAt = '2026-09-20T15:30:00',
 }: RowSpec) {
   return {
     id,
     workspaceId: 1,
     itemType: 'media_item',
-    createdAt: '2026-09-20T15:30:00',
+    createdAt,
     status: 'completed',
     presignedUrls: Array.from(
       {length: outputs},
@@ -215,14 +217,16 @@ describe('GenerationsFeedComponent', () => {
   }
 
   /**
-   * Answers a search from what the server holds right now: `ids`, newest
-   * first. Unlike answerSearch, a deleted row is gone from both the results
-   * and the count, and a new one pushes the rest down.
+   * Answers a search from what the server holds right now: `ids` (or rows),
+   * newest first. Unlike answerSearch, a deleted row is gone from both the
+   * results and the count, and a new one pushes the rest down.
    */
-  function answerFrom(req: TestRequest, ids: number[]) {
+  function answerFrom(req: TestRequest, ids: (number | RowSpec)[]) {
     const {offset = 0, limit} = req.request.body as GallerySearchDto;
     req.flush({
-      data: ids.slice(offset, offset + limit).map(id => searchRow({id})),
+      data: ids
+        .slice(offset, offset + limit)
+        .map(row => searchRow(typeof row === 'number' ? {id: row} : row)),
       count: ids.length,
       page: Math.floor(offset / limit) + 1,
       pageSize: limit,
@@ -833,5 +837,60 @@ describe('GenerationsFeedComponent', () => {
       expect(rowIds()).toEqual(newest);
       closeFeed();
     }));
+
+    describe('a long job that finishes below the first page', () => {
+      // Rows are made a second apart; the search sorts by start time.
+      const startedAt = (second: number) =>
+        new Date(Date.UTC(2026, 8, 20, 12, 0, 0) + second * 1000).toISOString();
+      const rowsMadeAt = (ids: number[]) =>
+        ids.map(id => ({id, createdAt: startedAt(id)}));
+      const longJob = (second: number) => ({
+        ...activeJob(91, 'video/mp4'),
+        createdAt: startedAt(second),
+      });
+
+      /** Loads rows 90 to 11 (two pages) while job 91 runs. */
+      function loadTwoPages(job: object) {
+        answerFrom(start(), rowsMadeAt(newestFirst(90)));
+        answerActive([], [job]);
+        sentinelObserver().enter(sentinel());
+        answerFrom(httpMock.expectOne(searchUrl), rowsMadeAt(newestFirst(90)));
+      }
+
+      it('reads on past the first page to where the job started', fakeAsync(() => {
+        const job = longJob(45.5);
+        loadTwoPages(job);
+
+        tick(ACTIVE_JOBS_POLL_MS);
+        answerActive([], []);
+        // It started between rows 46 and 45, so 45 rows sort above it.
+        const server = rowsMadeAt(newestFirst(90));
+        server.splice(45, 0, {id: 91, createdAt: job.createdAt});
+        const first = httpMock.expectOne(searchUrl);
+        expect((first.request.body as GallerySearchDto).offset).toBe(0);
+        answerFrom(first, server);
+        const second = httpMock.expectOne(searchUrl);
+        expect((second.request.body as GallerySearchDto).offset).toBe(40);
+        answerFrom(second, server);
+        httpMock.expectNone(searchUrl);
+        fixture.detectChanges();
+
+        expect(rowIds()).toEqual(server.slice(0, 81).map(row => row.id));
+        closeFeed();
+      }));
+
+      it('reads no further than the pages loaded', fakeAsync(() => {
+        // Older than every loaded row: the next page will bring it in.
+        loadTwoPages(longJob(5.5));
+
+        tick(ACTIVE_JOBS_POLL_MS);
+        answerActive([], []);
+        const server = rowsMadeAt(newestFirst(90));
+        answerFrom(httpMock.expectOne(searchUrl), server);
+        answerFrom(httpMock.expectOne(searchUrl), server);
+        httpMock.expectNone(searchUrl);
+        closeFeed();
+      }));
+    });
   });
 });
