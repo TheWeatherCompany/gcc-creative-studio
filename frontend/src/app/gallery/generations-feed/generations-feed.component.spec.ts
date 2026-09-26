@@ -746,6 +746,49 @@ describe('GenerationsFeedComponent', () => {
       closeFeed();
     }));
 
+    // A middle-clicked link, or a reload in a background tab: the feed loads
+    // while hidden, so no poll saw the jobs that finish before it is shown.
+    it('catches up when a feed opened in a hidden tab is first shown', fakeAsync(() => {
+      visibility = 'hidden';
+      answerSearch(start(), 5);
+      tick(ACTIVE_JOBS_POLL_MS * 6);
+      expect(pollRequests()).toBe(0);
+
+      setVisibility('visible');
+      tick();
+      answerActive([], []);
+      answerSearch(httpMock.expectOne(searchUrl), 6);
+      fixture.detectChanges();
+
+      expect(rowIds()).toEqual([6, 5, 4, 3, 2, 1]);
+      closeFeed();
+    }));
+
+    // Waking a laptop is when the first poll tends to fail.
+    it('still catches up when the first poll after the tab returns fails', fakeAsync(() => {
+      spyOn(console, 'error');
+      answerSearch(start(), 5);
+      answerActive([], []);
+
+      setVisibility('hidden');
+      tick(ACTIVE_JOBS_POLL_MS * 6);
+      setVisibility('visible');
+      tick();
+      httpMock
+        .expectOne(activeImagesUrl)
+        .flush(null, {status: 503, statusText: 'Service Unavailable'});
+      httpMock.match(activeVideosUrl);
+      httpMock.expectNone(searchUrl);
+
+      tick(ACTIVE_JOBS_POLL_MS);
+      answerActive([], []);
+      answerSearch(httpMock.expectOne(searchUrl), 6);
+      fixture.detectChanges();
+
+      expect(rowIds()).toEqual([6, 5, 4, 3, 2, 1]);
+      closeFeed();
+    }));
+
     it('keeps the feed in order when a row loaded earlier has since gone', fakeAsync(() => {
       answerSearch(start(), 90);
       answerActive([activeJob(91)], []);

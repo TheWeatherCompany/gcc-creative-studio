@@ -152,6 +152,11 @@ export class GenerationsFeedComponent
   private topRowsRefresh?: Subscription;
   // Ids from the last active-jobs poll; null until the first one answers.
   private activeJobIds: Set<number> | null = null;
+  // Set while the tab is hidden, including when the feed opens in a hidden
+  // tab, and cleared by the next poll that answers. No poll runs while
+  // hidden, so a job can start and finish unseen (in the generator's own tab,
+  // say), and only a refresh then would bring its row in.
+  private missedPolls = false;
 
   private subscriptions = new Subscription();
   private scrollObserver?: IntersectionObserver;
@@ -565,43 +570,40 @@ export class GenerationsFeedComponent
         startWith(null),
         map(() => this.document.visibilityState === 'visible'),
         distinctUntilChanged(),
-        switchMap((visible, change) =>
-          visible
-            ? timer(0, ACTIVE_JOBS_POLL_MS).pipe(
-                // A slow answer skips ticks rather than stacking requests.
-                exhaustMap(tick =>
-                  forkJoin([
-                    this.searchService.listActiveImageJobs(),
-                    this.searchService.listActiveVideoJobs(),
-                  ]).pipe(
-                    // The first poll after the tab was hidden. A job started
-                    // and finished while it was (in the generator's own tab,
-                    // say) never showed in a poll, so nothing else would
-                    // bring its row in.
-                    map(([images, videos]) => ({
-                      jobs: [...(images ?? []), ...(videos ?? [])],
-                      resumed: change > 0 && tick === 0,
-                    })),
-                    catchError(err => {
-                      console.error(
-                        'Could not read in-flight generations',
-                        err,
-                      );
-                      return EMPTY;
-                    }),
-                  ),
-                ),
-              )
-            : EMPTY,
-        ),
+        switchMap(visible => {
+          if (!visible) {
+            this.missedPolls = true;
+            return EMPTY;
+          }
+          return timer(0, ACTIVE_JOBS_POLL_MS).pipe(
+            // A slow answer skips ticks rather than stacking requests.
+            exhaustMap(() =>
+              forkJoin([
+                this.searchService.listActiveImageJobs(),
+                this.searchService.listActiveVideoJobs(),
+              ]).pipe(
+                map(([images, videos]) => [
+                  ...(images ?? []),
+                  ...(videos ?? []),
+                ]),
+                catchError(err => {
+                  console.error('Could not read in-flight generations', err);
+                  return EMPTY;
+                }),
+              ),
+            ),
+          );
+        }),
       )
-      .subscribe(({jobs, resumed}) => this.onActiveJobs(jobs, resumed));
+      .subscribe(jobs => this.onActiveJobs(jobs));
   }
 
-  private onActiveJobs(jobs: MediaItem[], resumed: boolean): void {
+  private onActiveJobs(jobs: MediaItem[]): void {
     const ids = new Set(jobs.map(job => job.id));
     const previous = this.activeJobIds;
     this.activeJobIds = ids;
+    const resumed = this.missedPolls;
+    this.missedPolls = false;
     this.inFlight = jobs
       .slice()
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
@@ -614,7 +616,7 @@ export class GenerationsFeedComponent
     // A job that left the list has finished. Most finish completed, and then
     // their row belongs at the top of the feed. After the tab was hidden,
     // one may have come and gone without showing in any poll.
-    if (previous && (resumed || [...previous].some(id => !ids.has(id)))) {
+    if (resumed || (previous && [...previous].some(id => !ids.has(id)))) {
       this.refreshTopRows();
     }
   }
