@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+import {DOCUMENT} from '@angular/common';
 import {
   AfterViewInit,
   Component,
   ElementRef,
   HostListener,
+  Inject,
   NgZone,
   OnDestroy,
   OnInit,
@@ -29,13 +31,33 @@ import {
 import {MatDialog} from '@angular/material/dialog';
 import {MatSnackBar} from '@angular/material/snack-bar';
 import {Router} from '@angular/router';
-import {Observable, Subscription, firstValueFrom, of} from 'rxjs';
-import {catchError, shareReplay} from 'rxjs/operators';
+import {
+  EMPTY,
+  Observable,
+  Subscription,
+  firstValueFrom,
+  forkJoin,
+  fromEvent,
+  of,
+  timer,
+} from 'rxjs';
+import {
+  catchError,
+  distinctUntilChanged,
+  exhaustMap,
+  expand,
+  map,
+  reduce,
+  shareReplay,
+  startWith,
+  switchMap,
+} from 'rxjs/operators';
 import {ConfirmationDialogComponent} from '../../common/components/confirmation-dialog/confirmation-dialog.component';
 import {MODEL_CONFIGS} from '../../common/config/model-config';
 import {GalleryItem} from '../../common/models/gallery-item.model';
-import {JobStatus} from '../../common/models/media-item.model';
+import {JobStatus, MediaItem} from '../../common/models/media-item.model';
 import {GallerySearchDto} from '../../common/models/search.model';
+import {SearchService} from '../../services/search/search.service';
 import {WorkspaceStateService} from '../../services/workspace/workspace-state.service';
 import {downloadMedia} from '../../utils/download-media';
 import {
@@ -59,6 +81,17 @@ import {
 const PAGE_SIZE = 40;
 // Roughly three lines of the prompt column; shorter prompts need no toggle.
 const PROMPT_TOGGLE_THRESHOLD = 160;
+// How often the header re-reads the user's in-flight jobs while the feed is
+// open and the tab is visible. Images finish in seconds, videos in minutes.
+export const ACTIVE_JOBS_POLL_MS = 10_000;
+
+/** One of the user's queued or running generations, for the header. */
+export interface InFlightJob {
+  id: number;
+  prompt: string;
+  model?: string;
+  isVideo: boolean;
+}
 
 /** A reference input thumbnail shown under a row's prompt. */
 export interface FeedReference {
@@ -102,9 +135,33 @@ export class GenerationsFeedComponent
   lightboxItem: GalleryItem | null = null;
   lightboxIndex = 0;
 
+  /** The user's in-flight generations, in every workspace. */
+  inFlight: InFlightJob[] = [];
+
   /** Detail responses by item id, for reference inputs and Reuse. */
   private details = new Map<number, GalleryItem>();
   private detailRequests = new Map<number, Observable<GalleryItem | null>>();
+
+  // The service's pages, as last emitted.
+  private pagedRows: GalleryItem[] = [];
+  // The newest rows as re-read after a job finished (the first page, or more;
+  // see refreshTopRows), shown above the service's pages. Those pages stay as
+  // they are, so a user who has scrolled down keeps everything they loaded;
+  // see render() for how the two meet.
+  private topRows: GalleryItem[] = [];
+  private filters: GallerySearchDto | null = null;
+  // The refresh in flight, if any, and the finished job it reads down to. A
+  // new search or a workspace switch cancels it; a newer refresh takes it
+  // over.
+  private topRowsRefresh?: Subscription;
+  private refreshUntil?: MediaItem;
+  // The last active-jobs poll, by id; null until the first one answers.
+  private activeJobs: Map<number, MediaItem> | null = null;
+  // Set while the tab is hidden, including when the feed opens in a hidden
+  // tab, and cleared by the next poll that answers. No poll runs while
+  // hidden, so a job can start and finish unseen (in the generator's own tab,
+  // say), and only a refresh then would bring its row in.
+  private missedPolls = false;
 
   private subscriptions = new Subscription();
   private scrollObserver?: IntersectionObserver;
@@ -115,22 +172,20 @@ export class GenerationsFeedComponent
 
   constructor(
     private galleryService: GalleryService,
+    private searchService: SearchService,
     private workspaceStateService: WorkspaceStateService,
     private router: Router,
     private dialog: MatDialog,
     private snackBar: MatSnackBar,
     private ngZone: NgZone,
+    @Inject(DOCUMENT) private document: Document,
   ) {}
 
   ngOnInit(): void {
     this.subscriptions.add(
       this.galleryService.images$.subscribe(items => {
-        // Offset paging repeats a row when a new generation lands at the top
-        // between pages, since everything below it moves down one place.
-        const seen = new Set<number>();
-        this.rows = items.filter(
-          item => !seen.has(item.id) && seen.add(item.id),
-        );
+        this.pagedRows = items;
+        this.render();
       }),
     );
     this.subscriptions.add(
@@ -149,8 +204,10 @@ export class GenerationsFeedComponent
       this.workspaceStateService.activeWorkspaceId$.subscribe(() => {
         this.details.clear();
         this.detailRequests.clear();
+        this.clearTopRows();
       }),
     );
+    this.subscriptions.add(this.pollActiveJobs());
     this.search();
   }
 
@@ -197,6 +254,7 @@ export class GenerationsFeedComponent
 
   ngOnDestroy(): void {
     this.subscriptions.unsubscribe();
+    this.topRowsRefresh?.unsubscribe();
     this.scrollObserver?.disconnect();
     this.rowObserver?.disconnect();
   }
@@ -212,6 +270,8 @@ export class GenerationsFeedComponent
       filters.query = term;
     }
     this.expandedPrompts.clear();
+    this.filters = filters;
+    this.clearTopRows();
     this.galleryService.setFilters(filters);
   }
 
@@ -282,8 +342,7 @@ export class GenerationsFeedComponent
   }
 
   modelName(row: GalleryItem): string | undefined {
-    const config = MODEL_CONFIGS.find(m => m.value === row.model);
-    return config ? config.viewValue.replace('\n', ' ') : row.model;
+    return modelLabel(row.model);
   }
 
   canReuse(row: GalleryItem): boolean {
@@ -412,7 +471,14 @@ export class GenerationsFeedComponent
               );
               return;
             }
+            // The service drops the row from its pages; the refreshed first
+            // page is the feed's own. A refresh sent before the delete may
+            // still carry the row, so it is sent again.
+            this.topRows = this.topRows.filter(r => r.id !== row.id);
             this.galleryService.removeLoadedItems(items);
+            if (this.topRowsRefresh && !this.topRowsRefresh.closed) {
+              this.refreshTopRows();
+            }
             if (this.lightboxItem?.id === row.id) this.closeLightbox();
             handleSuccessSnackbar(this.snackBar, 'Media deleted successfully');
           },
@@ -469,6 +535,154 @@ export class GenerationsFeedComponent
     }
   }
 
+  /**
+   * The refreshed first page, then the service's pages from where it ends.
+   * The refresh is the newer read, so a loaded row that would sort above its
+   * last row but is not in it has gone (deleted elsewhere, say) and is
+   * dropped, whether or not the loaded pages reach that far. Any row left in
+   * both (newer rows pushed it down, so a later page re-sent it, or offset
+   * paging repeated it) shows once, in its first place.
+   */
+  private render(): void {
+    const lastTop = this.topRows[this.topRows.length - 1];
+    const older = lastTop
+      ? this.pagedRows.filter(item => sortsBefore(lastTop, item))
+      : this.pagedRows;
+    const seen = new Set<number>();
+    this.rows = [...this.topRows, ...older].filter(item => {
+      if (seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    });
+  }
+
+  private clearTopRows(): void {
+    this.topRowsRefresh?.unsubscribe();
+    this.topRows = [];
+    this.render();
+  }
+
+  /**
+   * Re-reads the user's in-flight jobs while the tab is visible, and once
+   * straight away when it becomes visible again. Uses the endpoints the
+   * generator pages restore their job cards from, not a gallery search, which
+   * forces status=COMPLETED for non-admins. A failed poll keeps the last count.
+   */
+  private pollActiveJobs(): Subscription {
+    return fromEvent(this.document, 'visibilitychange')
+      .pipe(
+        startWith(null),
+        map(() => this.document.visibilityState === 'visible'),
+        distinctUntilChanged(),
+        switchMap(visible => {
+          if (!visible) {
+            this.missedPolls = true;
+            return EMPTY;
+          }
+          return timer(0, ACTIVE_JOBS_POLL_MS).pipe(
+            // A slow answer skips ticks rather than stacking requests.
+            exhaustMap(() =>
+              forkJoin([
+                this.searchService.listActiveImageJobs(),
+                this.searchService.listActiveVideoJobs(),
+              ]).pipe(
+                map(([images, videos]) => [
+                  ...(images ?? []),
+                  ...(videos ?? []),
+                ]),
+                catchError(err => {
+                  console.error('Could not read in-flight generations', err);
+                  return EMPTY;
+                }),
+              ),
+            ),
+          );
+        }),
+      )
+      .subscribe(jobs => this.onActiveJobs(jobs));
+  }
+
+  private onActiveJobs(jobs: MediaItem[]): void {
+    const active = new Map(jobs.map(job => [job.id, job]));
+    const previous = this.activeJobs;
+    this.activeJobs = active;
+    const resumed = this.missedPolls;
+    this.missedPolls = false;
+    this.inFlight = jobs
+      .slice()
+      .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
+      .map(job => ({
+        id: job.id,
+        prompt: job.originalPrompt || job.prompt || '',
+        model: modelLabel(job.model),
+        isVideo: !!job.mimeType?.startsWith('video/'),
+      }));
+    // A job that left the list has finished. Most finish completed, and then
+    // their row belongs near the top of the feed, as far down as the oldest
+    // of them started. After the tab was hidden, one may have come and gone
+    // without showing in any poll.
+    const finished = [...(previous?.values() ?? [])].filter(
+      job => !active.has(job.id),
+    );
+    if (resumed || finished.length) {
+      this.refreshTopRows(
+        finished.reduce<MediaItem | undefined>(
+          (oldest, job) => (!oldest || sortsBefore(oldest, job) ? job : oldest),
+          undefined,
+        ),
+      );
+    }
+  }
+
+  /**
+   * Re-reads the newest rows of the current search, keeping later pages. The
+   * search sorts by when a job started, so a long job's row can land below
+   * rows made while it ran, past the first page: pages after the first are
+   * read too while `until` (a finished job) would sort after them, as far as
+   * the pages loaded. Past those, the next page brings the row in.
+   */
+  private refreshTopRows(until?: MediaItem): void {
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    if (workspaceId === null || !this.filters) return;
+    // Taking over a refresh still loading, read at least as far down.
+    const pending = this.topRowsRefresh?.closed ? undefined : this.refreshUntil;
+    if (pending && (!until || sortsBefore(until, pending))) until = pending;
+    this.topRowsRefresh?.unsubscribe();
+    this.refreshUntil = until;
+
+    const filters = this.filters;
+    const reach = this.pagedRows.length;
+    const read = (offset: number) =>
+      this.galleryService
+        .searchOnce({...filters, workspaceId, offset, limit: PAGE_SIZE})
+        .pipe(map(items => ({offset, items})));
+    this.topRowsRefresh = read(0)
+      .pipe(
+        expand(({offset, items}) => {
+          const last = items[items.length - 1];
+          const next = offset + PAGE_SIZE;
+          return until &&
+            items.length === PAGE_SIZE &&
+            next < reach &&
+            sortsBefore(last, until)
+            ? read(next)
+            : EMPTY;
+        }),
+        reduce<{items: GalleryItem[]}, GalleryItem[]>(
+          (rows, page) => [...rows, ...page.items],
+          [],
+        ),
+      )
+      .subscribe({
+        next: items => {
+          this.topRows = items;
+          this.render();
+        },
+        error: err =>
+          console.error('Could not refresh the newest generations', err),
+      });
+  }
+
   private navigate(navigation: FeedNavigation): void {
     void this.router.navigate(navigation.commands, {
       state: {remixState: navigation.remixState},
@@ -500,4 +714,23 @@ export class GenerationsFeedComponent
     }
     return request;
   }
+}
+
+/**
+ * Whether `a` comes before `b` in the feed: newest first, then the higher id,
+ * as the search sorts.
+ */
+function sortsBefore(
+  a: {id: number; createdAt?: string},
+  b: {id: number; createdAt?: string},
+): boolean {
+  const aTime = Date.parse(a.createdAt ?? '');
+  const bTime = Date.parse(b.createdAt ?? '');
+  if (aTime === bTime || isNaN(aTime) || isNaN(bTime)) return a.id > b.id;
+  return aTime > bTime;
+}
+
+function modelLabel(model?: string): string | undefined {
+  const config = MODEL_CONFIGS.find(m => m.value === model);
+  return config ? config.viewValue.replace('\n', ' ') : model;
 }
