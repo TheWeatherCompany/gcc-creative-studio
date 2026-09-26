@@ -813,5 +813,25 @@ describe('GenerationsFeedComponent', () => {
       expect(rowIds()).toEqual([...newest, ...older]);
       closeFeed();
     }));
+
+    it('drops a row that has gone even when the refreshed page runs past the pages loaded', fakeAsync(() => {
+      answerSearch(start(), 90);
+      answerActive([], []);
+
+      // Row 88 was deleted elsewhere and nothing new arrived, so the
+      // refreshed first page ends on row 50, which no loaded page holds.
+      setVisibility('hidden');
+      setVisibility('visible');
+      tick();
+      answerActive([], []);
+      const newest = newestFirst(90)
+        .slice(0, 41)
+        .filter(id => id !== 88);
+      answerFrom(httpMock.expectOne(searchUrl), newest);
+      fixture.detectChanges();
+
+      expect(rowIds()).toEqual(newest);
+      closeFeed();
+    }));
   });
 });

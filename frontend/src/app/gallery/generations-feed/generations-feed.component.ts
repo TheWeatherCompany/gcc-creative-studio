@@ -531,19 +531,18 @@ export class GenerationsFeedComponent
   }
 
   /**
-   * The refreshed first page, then the service's pages from just after the
-   * first page's last row. Both are newest first, so skipping everything up
-   * to that row keeps the order even when a row newer than it has gone since
-   * the pages were fetched. Any row left in both (newer rows pushed it down,
-   * so a later page re-sent it, or offset paging repeated it) shows once, in
-   * its first place.
+   * The refreshed first page, then the service's pages from where it ends.
+   * The refresh is the newer read, so a loaded row that would sort above its
+   * last row but is not in it has gone (deleted elsewhere, say) and is
+   * dropped, whether or not the loaded pages reach that far. Any row left in
+   * both (newer rows pushed it down, so a later page re-sent it, or offset
+   * paging repeated it) shows once, in its first place.
    */
   private render(): void {
     const lastTop = this.topRows[this.topRows.length - 1];
-    const cut = lastTop
-      ? this.pagedRows.findIndex(item => item.id === lastTop.id)
-      : -1;
-    const older = cut === -1 ? this.pagedRows : this.pagedRows.slice(cut + 1);
+    const older = lastTop
+      ? this.pagedRows.filter(item => sortsBefore(lastTop, item))
+      : this.pagedRows;
     const seen = new Set<number>();
     this.rows = [...this.topRows, ...older].filter(item => {
       if (seen.has(item.id)) return false;
@@ -669,6 +668,20 @@ export class GenerationsFeedComponent
     }
     return request;
   }
+}
+
+/**
+ * Whether `a` comes before `b` in the feed: newest first, then the higher id,
+ * as the search sorts.
+ */
+function sortsBefore(
+  a: {id: number; createdAt?: string},
+  b: {id: number; createdAt?: string},
+): boolean {
+  const aTime = Date.parse(a.createdAt ?? '');
+  const bTime = Date.parse(b.createdAt ?? '');
+  if (aTime === bTime || isNaN(aTime) || isNaN(bTime)) return a.id > b.id;
+  return aTime > bTime;
 }
 
 function modelLabel(model?: string): string | undefined {
