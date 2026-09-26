@@ -64,6 +64,20 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   @Input() prompt = '';
   @Input() aspectRatio = '16:9';
   @Input() outputs = 1;
+  /** Counts offered by the outputs picker, x1 up to the model's limit. */
+  outputOptions: number[] = [1, 2, 3, 4];
+  /**
+   * A note about the chosen model, shown by the model picker. A blocking one
+   * explains why Generate will not run, so it cannot be dismissed.
+   */
+  @Input() modelNotice: {text: string; blocking: boolean} | null = null;
+  @Output() modelNoticeDismissed = new EventEmitter<void>();
+  @Input() set maxOutputs(max: number) {
+    this.outputOptions = Array.from(
+      {length: Math.max(1, max)},
+      (_, i) => i + 1,
+    );
+  }
   @Input() aspectRatioOptions: {
     value: string;
     viewValue: string;
@@ -266,6 +280,12 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   onPromptInput(event: Event) {
     const target = event.target as HTMLTextAreaElement;
     this.promptChanged.emit(target.value);
+  }
+
+  /** Whether the active model accepts a reference video or audio. */
+  get supportsReferenceMedia(): boolean {
+    return !!this.getSelectedModelObject()?.capabilities
+      ?.supportsReferenceMedia;
   }
 
   /** Whether the active model accepts a sampling temperature. */

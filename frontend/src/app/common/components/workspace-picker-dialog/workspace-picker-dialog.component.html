@@ -1,0 +1,165 @@
+<!--
+ Copyright 2026 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<div class="picker">
+  <div class="picker-header">
+    <div>
+      <h2 class="picker-title" [id]="titleId">Workspaces</h2>
+      <p class="picker-subtitle">Newest first. Pick one to switch to it.</p>
+    </div>
+    <button
+      type="button"
+      class="close-button"
+      aria-label="Close"
+      (click)="dialogRef.close()"
+    >
+      <mat-icon>close</mat-icon>
+    </button>
+  </div>
+
+  @if (activeWorkspace) {
+    <div class="current-bar">
+      <div class="current-label">
+        <span class="current-caption">Current workspace</span>
+        <span class="current-name" [title]="activeWorkspace.name">{{
+          activeWorkspace.name
+        }}</span>
+      </div>
+      <div class="current-actions">
+        <span
+          [matTooltip]="
+            data.canInvite
+              ? ''
+              : 'Only the owner or an admin can invite people to a private workspace'
+          "
+        >
+          <button
+            type="button"
+            class="action-button invite-action"
+            [disabled]="!data.canInvite"
+            (click)="invite()"
+          >
+            <mat-icon>person_add</mat-icon>
+            <span>Invite people</span>
+          </button>
+        </span>
+        <span
+          [matTooltip]="
+            data.canAccessBrandGuidelines
+              ? ''
+              : 'Only the owner or an admin can manage brand guidelines here'
+          "
+        >
+          <button
+            type="button"
+            class="action-button guidelines-action"
+            [disabled]="
+              !data.canAccessBrandGuidelines || (guidelineProcessing$ | async)
+            "
+            (click)="openBrandGuidelines()"
+          >
+            @if (guidelineProcessing$ | async) {
+              <mat-progress-spinner
+                class="guideline-spinner"
+                mode="indeterminate"
+                [diameter]="18"
+              ></mat-progress-spinner>
+              <span>Processing guidelines</span>
+            } @else {
+              <mat-icon>style</mat-icon>
+              <span>Brand guidelines</span>
+            }
+          </button>
+        </span>
+      </div>
+    </div>
+  }
+
+  @if (showFilter) {
+    <div class="filter-box">
+      <mat-icon class="filter-icon">search</mat-icon>
+      <input
+        type="text"
+        class="filter-input"
+        placeholder="Filter by name"
+        aria-label="Filter workspaces by name"
+        [(ngModel)]="filterText"
+        cdkFocusInitial
+      />
+    </div>
+  }
+
+  <div class="card-grid">
+    <button type="button" class="workspace-card create-card" (click)="create()">
+      <div class="tile create-tile">
+        <mat-icon>add</mat-icon>
+      </div>
+      <div class="card-body">
+        <span class="card-name">Create workspace</span>
+        <span class="card-meta">New private workspace</span>
+      </div>
+    </button>
+
+    @for (workspace of visible; track workspace.id) {
+      <button
+        type="button"
+        class="workspace-card"
+        [class.active]="isActive(workspace)"
+        [attr.aria-current]="isActive(workspace) ? 'true' : null"
+        [attr.data-workspace-id]="workspace.id"
+        (click)="select(workspace)"
+      >
+        <div class="tile" [style.background]="tileBackground(workspace)">
+          <span class="tile-initials">{{ initials(workspace) }}</span>
+          <mat-icon
+            class="scope-badge"
+            [matTooltip]="
+              workspace.scope === WorkspaceScope.PUBLIC
+                ? 'Public: everyone can see it'
+                : 'Private: members only'
+            "
+            >{{
+              workspace.scope === WorkspaceScope.PUBLIC ? 'public' : 'lock'
+            }}</mat-icon
+          >
+          @if (isActive(workspace)) {
+            <span class="current-badge">
+              <mat-icon>check</mat-icon>Current
+            </span>
+          }
+        </div>
+        <div class="card-body">
+          <span class="card-name" [title]="workspace.name">{{
+            workspace.name
+          }}</span>
+          <span class="card-meta">
+            @if (workspace.createdAt) {
+              Created {{ workspace.createdAt | date: 'mediumDate' }}
+            } @else {
+              {{
+                workspace.scope === WorkspaceScope.PUBLIC ? 'Public' : 'Private'
+              }}
+            }
+          </span>
+        </div>
+      </button>
+    }
+  </div>
+
+  @if (visible.length === 0) {
+    <p class="no-results">No workspaces match "{{ filterText }}"</p>
+  }
+</div>

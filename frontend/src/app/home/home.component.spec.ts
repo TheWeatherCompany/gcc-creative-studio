@@ -439,6 +439,28 @@ describe('HomeComponent', () => {
     expect(mockImageStateService.updateState).toHaveBeenCalled();
   });
 
+  describe('takes per prompt', () => {
+    /** The count sent, after checking it is the one the x-chip showed. */
+    function submittedCount(): number | undefined {
+      const shown = component.searchRequest.numberOfMedia;
+      component.searchRequest.prompt = 'a test prompt';
+      mockSearchService.startImagenGeneration.and.returnValue(of({} as any));
+      component.searchTerm();
+      const sent =
+        mockSearchService.startImagenGeneration.calls.mostRecent().args[0]
+          .numberOfMedia;
+      expect(sent).withContext('shown count').toBe(shown);
+      return sent;
+    }
+
+    // Extra takes cost extra tokens, so the user opts in to them.
+    it('should send one take until the user picks more', () => {
+      expect(submittedCount()).toBe(1);
+      component.selectNumberOfImages(4);
+      expect(submittedCount()).toBe(4);
+    });
+  });
+
   it('should clear an image from referenceImages', () => {
     component.referenceImages = [{previewUrl: 'url1'} as any];
     const event = new MouseEvent('click');

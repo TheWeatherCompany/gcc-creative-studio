@@ -139,9 +139,6 @@ export class GenerationsFeedComponent
   /** Detail responses by item id, for reference inputs and Reuse. */
   private details = new Map<number, GalleryItem>();
   private detailRequests = new Map<number, Observable<GalleryItem | null>>();
-  // Deleted rows stay hidden: the service re-emits every page it has fetched
-  // whenever it appends the next one.
-  private deletedIds = new Set<number>();
 
   // The service's pages, as last emitted.
   private pagedRows: GalleryItem[] = [];
@@ -197,7 +194,6 @@ export class GenerationsFeedComponent
       this.workspaceStateService.activeWorkspaceId$.subscribe(() => {
         this.details.clear();
         this.detailRequests.clear();
-        this.deletedIds.clear();
         this.clearTopRows();
       }),
     );
@@ -448,24 +444,39 @@ export class GenerationsFeedComponent
       .subscribe(confirmed => {
         if (!confirmed) return;
         this.deleting.add(row.id);
-        this.galleryService
-          .bulkDelete([{id: row.id, type: row.itemType}], workspaceId)
-          .subscribe({
-            next: () => {
-              this.deleting.delete(row.id);
-              this.deletedIds.add(row.id);
-              this.render();
-              if (this.lightboxItem?.id === row.id) this.closeLightbox();
-              handleSuccessSnackbar(
+        const items = [{id: row.id, type: row.itemType}];
+        this.galleryService.bulkDelete(items, workspaceId).subscribe({
+          next: ({deleted_count}) => {
+            this.deleting.delete(row.id);
+            // The backend answers 200 but skips an item the caller neither
+            // made nor administers.
+            if (!deleted_count) {
+              handleErrorSnackbar(
                 this.snackBar,
-                'Media deleted successfully',
+                {
+                  message:
+                    'This generation was not deleted. Only the person who made it, or an admin, can delete it.',
+                },
+                'Delete media',
               );
-            },
-            error: err => {
-              this.deleting.delete(row.id);
-              handleErrorSnackbar(this.snackBar, err, 'Delete media');
-            },
-          });
+              return;
+            }
+            // The service drops the row from its pages; the refreshed first
+            // page is the feed's own. A refresh sent before the delete may
+            // still carry the row, so it is sent again.
+            this.topRows = this.topRows.filter(r => r.id !== row.id);
+            this.galleryService.removeLoadedItems(items);
+            if (this.topRowsRefresh && !this.topRowsRefresh.closed) {
+              this.refreshTopRows();
+            }
+            if (this.lightboxItem?.id === row.id) this.closeLightbox();
+            handleSuccessSnackbar(this.snackBar, 'Media deleted successfully');
+          },
+          error: err => {
+            this.deleting.delete(row.id);
+            handleErrorSnackbar(this.snackBar, err, 'Delete media');
+          },
+        });
       });
   }
 
@@ -519,7 +530,8 @@ export class GenerationsFeedComponent
    * first page's last row. Both are newest first, so skipping everything up
    * to that row keeps the order even when a row newer than it has gone since
    * the pages were fetched. Any row left in both (newer rows pushed it down,
-   * so a later page re-sent it) shows once, in its first place.
+   * so a later page re-sent it, or offset paging repeated it) shows once, in
+   * its first place.
    */
   private render(): void {
     const lastTop = this.topRows[this.topRows.length - 1];
@@ -529,7 +541,7 @@ export class GenerationsFeedComponent
     const older = cut === -1 ? this.pagedRows : this.pagedRows.slice(cut + 1);
     const seen = new Set<number>();
     this.rows = [...this.topRows, ...older].filter(item => {
-      if (seen.has(item.id) || this.deletedIds.has(item.id)) return false;
+      if (seen.has(item.id)) return false;
       seen.add(item.id);
       return true;
     });

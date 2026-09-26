@@ -58,6 +58,39 @@ function extensionFromUrl(url: string): string | undefined {
 }
 
 /**
+ * Thrown when the signed URL can no longer be used. Retrying cannot help:
+ * the page holds the same URL until it reloads and asks the backend for a
+ * fresh one.
+ */
+export class DownloadLinkExpiredError extends Error {
+  constructor() {
+    super('The download link has expired');
+    this.name = 'DownloadLinkExpiredError';
+  }
+}
+
+/**
+ * True when a V4 signed URL (X-Goog-Date plus X-Goog-Expires) is past its
+ * expiry. URLs without those parameters are never treated as expired.
+ */
+export function isSignedUrlExpired(url: string, now = Date.now()): boolean {
+  let search: string;
+  try {
+    search = new window.URL(url, window.location.href).search;
+  } catch {
+    return false;
+  }
+  const params = new window.URLSearchParams(search);
+  const date = params.get('X-Goog-Date');
+  const expires = Number(params.get('X-Goog-Expires'));
+  const match = date?.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
+  if (!match || !Number.isFinite(expires) || expires <= 0) return false;
+  const [, y, mo, d, h, mi, sec] = match.map(Number);
+  const signedAt = Date.UTC(y, mo - 1, d, h, mi, sec);
+  return now >= signedAt + expires * 1000;
+}
+
+/**
  * Builds the name the file is saved under. Object names in the bucket are
  * mostly bare UUIDs (some with no extension at all), so the base name comes
  * from the caller and only the extension is derived: the served
@@ -83,7 +116,8 @@ export function buildDownloadFilename(
  * `download` attribute on cross-origin links, so the file is fetched (the
  * bucket's CORS policy allows GET from any origin) and saved from a
  * same-origin object URL. Rejects on any network or HTTP failure so the
- * caller can tell the user; it never falls back to opening a new tab.
+ * caller can tell the user; it never falls back to opening a new tab. An
+ * expired or rejected signature rejects with DownloadLinkExpiredError.
  */
 export async function downloadMedia(
   url: string,
@@ -93,7 +127,17 @@ export async function downloadMedia(
   // no-store: an <img>/<video> may already have cached this URL from a
   // non-CORS request, and reusing that cached response would fail the CORS
   // check.
+  // Checked up front as well as from the status, so an expired link is
+  // recognised without a round trip and whatever status GCS picks for it.
+  if (isSignedUrlExpired(url)) {
+    throw new DownloadLinkExpiredError();
+  }
   const response = await fetch(url, {cache: 'no-store'});
+  // GCS answers an expired signature with 400 ExpiredToken and a bad one
+  // with 403 SignatureDoesNotMatch.
+  if (response.status === 400 || response.status === 403) {
+    throw new DownloadLinkExpiredError();
+  }
   if (!response.ok) {
     throw new Error(`Download failed (HTTP ${response.status})`);
   }

@@ -390,12 +390,32 @@ describe('MediaLightboxComponent', () => {
       expect(component.isDownloading).toBeFalse();
     });
 
-    // An expired signed URL comes back 403. The user must hear about it,
-    // and must not be bounced to a tab showing a GCS XML error.
-    it('tells the user when the file cannot be fetched and opens nothing', async () => {
+    // A rejected signature comes back 403. The user must hear about it,
+    // and must not be bounced to a tab showing a GCS XML error. Retrying
+    // resends the same URL, so the message must send them to a reload.
+    it('tells the user to reload when the signed URL is rejected, and opens nothing', async () => {
       spyOn(window, 'fetch').and.resolveTo(
-        new Response('<Error>ExpiredToken</Error>', {status: 403}),
+        new Response('<Error>SignatureDoesNotMatch</Error>', {status: 403}),
       );
+
+      clickDownloadButton();
+      await settle();
+
+      expect(notificationService.show).toHaveBeenCalledWith(
+        'This download link has expired. Reload the page to download the file.',
+        'error',
+        jasmine.anything(),
+        undefined,
+        jasmine.anything(),
+      );
+      expect(clickedLinks.length).toBe(0);
+      expect(windowOpen).not.toHaveBeenCalled();
+      expect(component.isDownloading).toBeFalse();
+    });
+
+    // A dropped connection is transient, so a retry is the right advice.
+    it('tells the user to retry when the fetch fails for another reason', async () => {
+      spyOn(window, 'fetch').and.rejectWith(new TypeError('Failed to fetch'));
 
       clickDownloadButton();
       await settle();

@@ -28,4 +28,6 @@ export interface Workspace {
   scope: WorkspaceScope;
   members: WorkspaceMember[];
   memberIds: string[];
+  /** ISO timestamp; the list endpoint returns it, older stubs may not. */
+  createdAt?: string;
 }

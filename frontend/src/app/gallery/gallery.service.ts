@@ -70,6 +70,9 @@ export class GalleryService implements OnDestroy {
   // after its request went out, so a page from an old workspace or filter set
   // can never advance the page counter or land in the grid.
   private loadGeneration = 0;
+  // Loaded items the caller has since deleted (see removeLoadedItems). The
+  // backend no longer counts them, so later pages start that much earlier.
+  private removedCount = 0;
   private filters$ = new BehaviorSubject<GallerySearchDto | null>(null);
   private uiFiltersState: GalleryFiltersState | null = null;
   private dataLoadingSubscription: Subscription;
@@ -176,11 +179,12 @@ export class GalleryService implements OnDestroy {
     const body: GallerySearchDto = {
       ...this.filters$.value,
       workspaceId,
-      offset: this.currentPage * this.pageSize,
+      offset: this.currentPage * this.pageSize - this.removedCount,
       limit: this.pageSize,
     };
 
     const generation = this.loadGeneration;
+    const page = this.currentPage + 1;
     this.fetchImages(body)
       .pipe(
         catchError(err => {
@@ -190,7 +194,7 @@ export class GalleryService implements OnDestroy {
       )
       .subscribe(response => {
         if (response) {
-          this.processFetchResponse(response, generation, true);
+          this.processFetchResponse(response, generation, true, page);
         }
       });
   }
@@ -222,6 +226,7 @@ export class GalleryService implements OnDestroy {
     this.loadGeneration++;
     this.allFetchedImages = [];
     this.currentPage = 0;
+    this.removedCount = 0;
     this.allImagesLoaded$.next(false);
     this.imagesCache$.next([]);
   }
@@ -239,22 +244,45 @@ export class GalleryService implements OnDestroy {
     response: PaginatedGalleryResponse,
     generation: number,
     append = false,
+    // The page that was asked for. After a removal the offset no longer sits
+    // on a page boundary, so the backend's own page number would be one short.
+    page = response.page,
   ) {
     if (generation !== this.loadGeneration) {
       return;
     }
-    // Follow the page the backend says it served (1-based) rather than
-    // counting responses, so the next offset is always the page after it.
-    this.currentPage = response.page;
+    // Set the page served (1-based) rather than counting responses, so the
+    // next offset is always the page after it.
+    this.currentPage = page;
     this.allFetchedImages = append
       ? [...this.allFetchedImages, ...this.mapUnifiedResponse(response.data)]
       : this.mapUnifiedResponse(response.data);
     this.imagesCache$.next(this.allFetchedImages);
 
-    if (this.currentPage >= response.totalPages) {
+    // Compare with `count`, not `totalPages`: after a removal the pages are
+    // shifted, and a last page can be counted while items remain after it.
+    if (
+      this.currentPage * this.pageSize - this.removedCount >=
+      response.count
+    ) {
       this.allImagesLoaded$.next(true);
     }
     this.isLoading$.next(false);
+  }
+
+  /**
+   * Drops deleted items from the loaded pages. The backend has stopped
+   * counting them, so every later item has moved up; the next page starts
+   * earlier by as many, or the items at the page boundary would be skipped.
+   */
+  removeLoadedItems(items: {id: number; type: string}[]): void {
+    const removed = new Set(items.map(item => `${item.type}:${item.id}`));
+    const kept = this.allFetchedImages.filter(
+      item => !removed.has(`${item.itemType}:${item.id}`),
+    );
+    this.removedCount += this.allFetchedImages.length - kept.length;
+    this.allFetchedImages = kept;
+    this.imagesCache$.next(kept);
   }
 
   getMedia(id: number): Observable<GalleryItem> {

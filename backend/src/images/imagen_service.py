@@ -39,6 +39,7 @@ from src.common.base_dto import (
 )
 from src.common.generation_executor import GenerationExecutor
 from src.common.media_utils import generate_image_thumbnail_from_gcs
+from src.common.prompt_options import apply_prompt_options, recorded_prompts
 from src.common.schema.genai_model_setup import GenAIModelSetup
 from src.common.schema.media_item_model import (
     AssetRoleEnum,
@@ -662,6 +663,9 @@ def _process_image_in_background(
                         request_dto.prompt = rewritten_prompt
                     else:
                         rewritten_prompt = request_dto.prompt
+                    request_dto.prompt = await apply_prompt_options(
+                        request_dto, rewritten_prompt, brand_guideline_repo
+                    )
 
                     source_assets: list[SourceAssetLink] = []
                     reference_images_for_api: list[types.Image] = []
@@ -960,7 +964,7 @@ def _process_image_in_background(
                         # Update the MediaItem in Firestore
                         update_data = {
                             "status": JobStatusEnum.COMPLETED,
-                            "prompt": rewritten_prompt,
+                            **recorded_prompts(request_dto, rewritten_prompt),
                             "gcs_uris": permanent_gcs_uris,
                             "thumbnail_uris": thumbnail_uris,
                             "generation_time": generation_time,
