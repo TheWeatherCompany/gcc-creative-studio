@@ -87,6 +87,7 @@ import {FooterComponent} from './footer/footer.component';
 import {FunTemplatesComponent} from './fun-templates/fun-templates.component';
 import {MediaDetailComponent} from './gallery/media-detail/media-detail.component';
 import {MediaGalleryComponent} from './gallery/media-gallery/media-gallery.component';
+import {GenerationsFeedComponent} from './gallery/generations-feed/generations-feed.component';
 import {HeaderComponent} from './header/header.component';
 import {HomeComponent} from './home/home.component';
 import {AuthCallbackComponent} from './login/auth-callback.component';
@@ -119,6 +120,7 @@ import {UpscaleComponent} from './upscale/upscale.component';
     FunTemplatesComponent,
     VideoComponent,
     MediaGalleryComponent,
+    GenerationsFeedComponent,
     AssignTagsDialogComponent,
     MediaDetailComponent,
     MediaLightboxComponent,

@@ -145,6 +145,31 @@ describe('GalleryService infinite scroll', () => {
     expect([...shownWorkspaceIds]).toEqual([1]);
   }));
 
+  // The end of the list is judged from `count`. At an exact multiple of the
+  // page size an off-by-one there either asks for an empty extra page or
+  // stops one page early.
+  for (const total of [0, 39, 40, 80]) {
+    it(`stops after the last page of ${total} items`, fakeAsync(() => {
+      start();
+      workspaceState.setActiveWorkspaceId(1);
+      service.setFilters(filters);
+      tick(50);
+      pending().forEach(req => answer(req, total));
+      // Scroll to the end, with a cap in case the end is never reached.
+      for (let scrolls = 0; scrolls < 5 && !allLoaded; scrolls++) {
+        service.loadGallery();
+        pending().forEach(req => answer(req, total));
+      }
+
+      const pages = Math.max(1, Math.ceil(total / pageSize));
+      expect(sentBodies.map(body => body.offset ?? 0)).toEqual(
+        Array.from({length: pages}, (_, i) => i * pageSize),
+      );
+      expect(allLoaded).toBeTrue();
+      expect(shownIds).toEqual(Array.from({length: total}, (_, i) => i + 1));
+    }));
+  }
+
   // No workspace means no search. The gallery must still end somewhere
   // visible, but only once the workspace list has settled, so that "No media
   // items found" never flashes during a normal load.

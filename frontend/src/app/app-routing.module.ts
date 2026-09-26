@@ -22,6 +22,7 @@ import {AuthGuardService} from './common/services/auth.guard.service';
 import {FunTemplatesComponent} from './fun-templates/fun-templates.component';
 import {MediaDetailComponent} from './gallery/media-detail/media-detail.component';
 import {MediaGalleryComponent} from './gallery/media-gallery/media-gallery.component';
+import {GenerationsFeedComponent} from './gallery/generations-feed/generations-feed.component';
 import {HomeComponent} from './home/home.component';
 import {AuthCallbackComponent} from './login/auth-callback.component';
 import {LoginComponent} from './login/login.component';
@@ -61,6 +62,13 @@ const routes: Routes = [
   {
     path: 'folders/:folderId',
     component: MediaGalleryComponent,
+    canActivate: [AuthGuardService],
+  },
+  // The opt-in generations feed. It must stay above 'gallery/:id', which
+  // would otherwise take 'feed' for a media id.
+  {
+    path: 'gallery/feed',
+    component: GenerationsFeedComponent,
     canActivate: [AuthGuardService],
   },
   // When a user goes to '/gallery/some-unique-id', show the detail page.
