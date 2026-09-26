@@ -36,6 +36,7 @@ from src.common.base_dto import (
 )
 from src.common.generation_executor import GenerationExecutor
 from src.common.media_utils import concatenate_videos, generate_thumbnail
+from src.common.prompt_options import apply_prompt_options, recorded_prompts
 from src.common.schema.genai_model_setup import GenAIModelSetup
 from src.common.schema.media_item_model import (
     AssetRoleEnum,
@@ -285,6 +286,9 @@ def _process_video_in_background(
                             request_dto.prompt = rewritten_prompt
                         else:
                             rewritten_prompt = request_dto.prompt
+                        request_dto.prompt = await apply_prompt_options(
+                            request_dto, rewritten_prompt, brand_guideline_repo
+                        )
 
                         # --- Handle Source Assets for API Call ---
                         start_image_for_api: types.Image | None = None
@@ -772,7 +776,11 @@ def _process_video_in_background(
                                 )
                             )
 
-                            num_outputs = 1
+                            # One interaction returns one video, so each take
+                            # is its own call. On a follow-up turn every take
+                            # continues the same parent interaction: the takes
+                            # are alternatives, not a chain.
+                            num_outputs = request_dto.number_of_media
                             worker_logger.info(
                                 f"Queueing {num_outputs} Gemini Omni generation interactions."
                             )
@@ -911,14 +919,39 @@ def _process_video_in_background(
                                 generate_single_omni_output(i)
                                 for i in range(num_outputs)
                             ]
-                            parallel_results = await asyncio.gather(*tasks)
+                            # Like the Gemini image fan-out, a take that comes
+                            # back with no video is dropped and the job fails
+                            # only if every take is empty. Any other error
+                            # fails the job, as it does for images. Gathering
+                            # every result first lets the other takes finish
+                            # and clean up their temp files before that.
+                            parallel_results = await asyncio.gather(
+                                *tasks, return_exceptions=True
+                            )
+                            takes = []
+                            empty_takes = []
+                            for take, result in enumerate(parallel_results, 1):
+                                if isinstance(result, EmptyGenerationError):
+                                    worker_logger.warning(
+                                        "Gemini Omni take %s of %s was dropped: %s",
+                                        take,
+                                        num_outputs,
+                                        result,
+                                    )
+                                    empty_takes.append(result)
+                                elif isinstance(result, BaseException):
+                                    raise result
+                                else:
+                                    takes.append(result)
+                            if not takes:
+                                raise empty_takes[0]
 
                             for (
                                 final_gcs_uri,
                                 thumbnail_gcs_uri,
                                 interaction_id,
                                 thought_signature,
-                            ) in parallel_results:
+                            ) in takes:
                                 final_gcs_uris.append(final_gcs_uri)
                                 permanent_thumbnail_gcs_uris.append(
                                     thumbnail_gcs_uri
@@ -1082,7 +1115,7 @@ def _process_video_in_background(
                         # --- WHEN COMPLETE, UPDATE THE DOCUMENT IN FIRESTORE ---
                         update_data = {
                             "status": JobStatusEnum.COMPLETED,
-                            "prompt": rewritten_prompt,
+                            **recorded_prompts(request_dto, rewritten_prompt),
                             "gcs_uris": final_gcs_uris,  # The final GCS URLs
                             "thumbnail_uris": permanent_thumbnail_gcs_uris,
                             "generation_time": generation_time,

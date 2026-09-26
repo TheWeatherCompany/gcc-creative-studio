@@ -144,3 +144,18 @@
     }
   }
 }
+
+// Short desktop viewports (a 1440x900 laptop once browser chrome is drawn).
+// The rail is fixed below the top of the viewport and cannot scroll, so at
+// full spacing the last items, Logout included, fall below the fold.
+// Tightening the spacing keeps the whole rail on screen; taller screens keep
+// the roomier layout.
+@media (min-width: 768px) and (max-height: 880px) {
+  .mat-menu-floating .menu-items {
+    gap: 8px;
+
+    > div {
+      margin-bottom: 0;
+    }
+  }
+}

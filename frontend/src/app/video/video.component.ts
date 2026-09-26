@@ -42,7 +42,9 @@ import {
 import {
   GenerationModelConfig,
   MODEL_CONFIGS,
-  isOmniModelValue,
+  DEFAULT_OUTPUTS,
+  clampOutputs,
+  maxOutputsFor,
 } from '../common/config/model-config';
 import {JobStatus, MediaItem} from '../common/models/media-item.model';
 import {
@@ -141,7 +143,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
     prompt: '',
     generationModel: 'gemini-omni-1.1-flash-preview',
     aspectRatio: '16:9',
-    numberOfMedia: 1,
+    numberOfMedia: DEFAULT_OUTPUTS,
     style: null,
     lighting: null,
     colorAndTone: null,
@@ -154,6 +156,20 @@ export class VideoComponent implements OnInit, AfterViewInit {
     referenceImages: [],
     resolution: '1K',
   };
+
+  /**
+   * The takes per prompt the user picked. searchRequest.numberOfMedia is this
+   * clamped to the current model, so passing through a model with a lower
+   * limit and back does not lose the choice.
+   */
+  preferredOutputs = DEFAULT_OUTPUTS;
+
+  /**
+   * Set when an input forced a model change, and shown by the model picker
+   * until the user picks a model or dismisses it. A snackbar alone was easy
+   * to miss, and the switch can change the resolution.
+   */
+  modelSwitchNotice: string | null = null;
 
   // --- Negative Prompt Chips ---
   negativePhrases: string[] = [];
@@ -321,7 +337,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
       style: this.searchRequest.style,
       colorAndTone: this.searchRequest.colorAndTone,
       lighting: this.searchRequest.lighting,
-      numberOfMedia: this.searchRequest.numberOfMedia,
+      // The picked count, not the clamped one, so it survives Omni.
+      numberOfMedia: this.preferredOutputs,
       durationSeconds: this.searchRequest.durationSeconds,
       composition: this.searchRequest.composition,
       generateAudio: this.searchRequest.generateAudio,
@@ -345,10 +362,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
     this.searchRequest.style = state.style;
     this.searchRequest.colorAndTone = state.colorAndTone;
     this.searchRequest.lighting = state.lighting;
-    this.searchRequest.numberOfMedia = isOmniModelValue(state.model)
-      ? 1
-      : state.numberOfMedia;
-    this.selectedOutputs.set(this.searchRequest.numberOfMedia || 1);
+    this.preferredOutputs = state.numberOfMedia;
+    this.applyOutputsLimit();
     this.searchRequest.durationSeconds = state.durationSeconds;
     this.searchRequest.composition = state.composition;
     this.searchRequest.generateAudio = state.generateAudio;
@@ -399,6 +414,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
   }
 
   selectModel(model: {value: string; viewValue: string}): void {
+    this.modelSwitchNotice = null;
     this.searchRequest.generationModel = model.value;
     this.selectedGenerationModel = model.viewValue;
 
@@ -418,10 +434,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
       this.selectedAspectRatio = landscapeOption.viewValue;
     }
 
-    if (isOmniModelValue(model.value)) {
-      this.searchRequest.numberOfMedia = 1;
-      this.selectedOutputs.set(1);
-    }
+    this.applyOutputsLimit();
+    this.applyResolutionLimit();
 
     this.aspectRatioOptions.forEach(opt => {
       opt.disabled = !supportedRatios.includes(opt.value);
@@ -478,8 +492,113 @@ export class VideoComponent implements OnInit, AfterViewInit {
   }
 
   selectNumberOfVideos(num: number): void {
-    this.searchRequest.numberOfMedia = num;
+    this.preferredOutputs = num;
+    this.applyOutputsLimit();
     this.saveState();
+  }
+
+  /** Largest count the picker offers for the current model. */
+  get maxOutputs(): number {
+    return maxOutputsFor(this.currentModelConfig());
+  }
+
+  private currentModelConfig(): GenerationModelConfig | undefined {
+    return this.generationModels.find(
+      m => m.value === this.searchRequest.generationModel,
+    );
+  }
+
+  /** Re-derives the request's count after the model changes. */
+  private applyOutputsLimit(): void {
+    this.searchRequest.numberOfMedia = clampOutputs(
+      this.preferredOutputs,
+      this.currentModelConfig(),
+    );
+  }
+
+  /**
+   * Drops a resolution the current model can't render. Omni has no picker and
+   * renders at 1K only, so a 2K or 4K pick carried over from Veo would be
+   * rejected by the backend.
+   */
+  private applyResolutionLimit(): void {
+    const config = this.currentModelConfig();
+    if (!config) return;
+    const supported = config.capabilities.supportedResolutions;
+    const resolution = this.searchRequest.resolution;
+    if (!resolution || !supported.includes(resolution)) {
+      this.searchRequest.resolution = supported[0] ?? '1K';
+    }
+  }
+
+  /**
+   * The attached Ingredients to Video input that `model` cannot take, or null
+   * if it can take them all.
+   */
+  private unsupportedInput(
+    model: GenerationModelConfig | undefined,
+  ): string | null {
+    const capabilities = model?.capabilities;
+    if (!capabilities) return null;
+    if (
+      (this.referenceVideo || this.referenceAudio) &&
+      !capabilities.supportsReferenceMedia
+    ) {
+      return 'a reference video or audio';
+    }
+    if (
+      this.referenceImages.length > 0 &&
+      (!capabilities.supportedModes?.includes('Ingredients to Video') ||
+        this.referenceImages.length > capabilities.maxReferenceImages)
+    ) {
+      return this.referenceImages.length === 1
+        ? 'a reference image'
+        : `${this.referenceImages.length} reference images`;
+    }
+    return null;
+  }
+
+  /**
+   * Why the current model cannot run with the attached inputs. The backend
+   * would drop or reject them, so generation is blocked until the user
+   * removes them or picks another model.
+   */
+  get inputsBlockedNotice(): string | null {
+    if (this.currentMode !== 'Ingredients to Video') return null;
+    const model = this.currentModelConfig();
+    const input = this.unsupportedInput(model);
+    return input && model
+      ? `${model.viewValue} can't use ${input}. Remove it, or pick a model that accepts it.`
+      : null;
+  }
+
+  /** What the prompt box shows by the model picker, if anything. */
+  get modelNotice(): {text: string; blocking: boolean} | null {
+    const blocked = this.inputsBlockedNotice;
+    if (blocked) return {text: blocked, blocking: true};
+    return this.modelSwitchNotice
+      ? {text: this.modelSwitchNotice, blocking: false}
+      : null;
+  }
+
+  /**
+   * Keeps the chosen model when it can take the attached inputs. Otherwise
+   * switches to the first model that can, and says so by the model picker.
+   */
+  private ensureModelTakesInputs(): void {
+    const current = this.currentModelConfig();
+    const input = this.unsupportedInput(current);
+    if (!current || !input) return;
+    const fallback = this.generationModels.find(m => !this.unsupportedInput(m));
+    // With no model to fall back to, the submit check blocks instead.
+    if (!fallback) return;
+    this.selectModel(fallback);
+    this.modelSwitchNotice =
+      `Switched from ${current.viewValue} to ${fallback.viewValue}, which ` +
+      `accepts ${input}.` +
+      (fallback.capabilities.supportedResolutions.length
+        ? ''
+        : ' It renders at 720p.');
   }
 
   selectComposition(composition: string): void {
@@ -653,6 +772,12 @@ export class VideoComponent implements OnInit, AfterViewInit {
       return;
     }
 
+    const blocked = this.inputsBlockedNotice;
+    if (blocked) {
+      handleInfoSnackbar(this._snackBar, blocked);
+      return;
+    }
+
     const hasSourceAssets = this.startImageAssetId || this.endImageAssetId;
     const hasSourceMediaItems = this.sourceMediaItems.some(i => !!i);
     const isVeo3 = [
@@ -723,6 +848,9 @@ export class VideoComponent implements OnInit, AfterViewInit {
       }
     }
 
+    // Some paths (remix, templates) set the model directly, so clamp here too.
+    this.applyOutputsLimit();
+    this.applyResolutionLimit();
     const payload: VeoRequest = {
       ...this.searchRequest,
       startImageAssetId:
@@ -836,7 +964,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
       prompt: '',
       generationModel: 'veo-3.0-generate-001',
       aspectRatio: '16:9',
-      numberOfMedia: 1,
+      numberOfMedia: DEFAULT_OUTPUTS,
       style: null,
       lighting: null,
       colorAndTone: null,
@@ -847,6 +975,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
       useBrandGuidelines: false,
       enhancePrompt: false,
     };
+    this.preferredOutputs = DEFAULT_OUTPUTS;
     this.videoStateService.resetState();
   }
 
@@ -860,8 +989,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
     }
 
     if (this.templateParams.numMedia) {
-      console.log('Setting number of images:', this.templateParams.numMedia);
-      this.searchRequest.numberOfMedia = this.templateParams.numMedia;
+      this.preferredOutputs = this.templateParams.numMedia;
+      this.applyOutputsLimit();
     }
 
     if (this.templateParams.model) {
@@ -872,6 +1001,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
       if (modelOption) {
         this.searchRequest.generationModel = modelOption.value;
         this.selectedGenerationModel = modelOption.viewValue;
+        this.applyOutputsLimit();
       }
     }
 
@@ -1549,7 +1679,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
           };
         }
       }
-      this.handleOmniModelSwitch();
+      this.ensureModelTakesInputs();
       this.saveState();
     });
   }
@@ -1591,7 +1721,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
           index: res.selectedIndex,
         };
       }
-      this.handleOmniModelSwitch();
+      this.ensureModelTakesInputs();
       this.saveState();
     });
   }
@@ -1600,41 +1730,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
     event.stopPropagation();
     this.referenceAudio = null;
     this.saveState();
-  }
-
-  private handleOmniModelSwitch(): void {
-    if (this.referenceVideo || this.referenceAudio) {
-      const currentModel = this.searchRequest.generationModel;
-      if (isOmniModelValue(currentModel)) {
-        return;
-      }
-      const omniModel = this.generationModels.find(m =>
-        isOmniModelValue(m.value),
-      );
-      if (omniModel) {
-        if (this.searchRequest.generationModel !== omniModel.value) {
-          this.selectModel(omniModel);
-          handleSuccessSnackbar(
-            this._snackBar,
-            "We've switched to the Gemini Omni model, as this one supports video and audio references.",
-          );
-        }
-      } else {
-        const veo31Model = this.generationModels.find(
-          m => m.value === 'veo-3.1-generate-001',
-        );
-        if (
-          veo31Model &&
-          this.searchRequest.generationModel !== veo31Model.value
-        ) {
-          this.selectModel(veo31Model);
-          handleSuccessSnackbar(
-            this._snackBar,
-            "We've switched to the Veo 3.1 model, as this one supports reference inputs.",
-          );
-        }
-      }
-    }
   }
 
   openImageSelectorForReference(): void {
@@ -1730,39 +1825,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
         this.updateModeAndNotify();
         this._snackBar.open(snackbarMessage, 'OK', {duration: 5000});
       }
-
-      const currentModel = this.searchRequest.generationModel;
-      if (isOmniModelValue(currentModel)) {
-        // Already on an Omni model
-      } else {
-        const omniModel = this.generationModels.find(m =>
-          isOmniModelValue(m.value),
-        );
-        if (omniModel) {
-          if (this.searchRequest.generationModel !== omniModel.value) {
-            this.selectModel(omniModel);
-            handleSuccessSnackbar(
-              this._snackBar,
-              "We've switched to the Gemini Omni model for you, as this one supports reference images.",
-            );
-          }
-        } else {
-          const veo31Model = this.generationModels.find(
-            m => m.value === 'veo-3.1-generate-001',
-          );
-          if (
-            veo31Model &&
-            this.searchRequest.generationModel !== veo31Model.value
-          ) {
-            this.selectModel(veo31Model);
-            handleSuccessSnackbar(
-              this._snackBar,
-              "We've switched to the Veo 3.1 model for you, as this one supports reference images.",
-            );
-          }
-        }
-      }
     }
+    this.ensureModelTakesInputs();
   }
 
   clearReferenceImage(index: number, event: MouseEvent) {
@@ -1830,7 +1894,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
   // Selected values
   selectedMode = signal<string>('Text to Video');
   selectedNewAspectRatio = signal<string>('Landscape (16:9)');
-  selectedOutputs = signal<number>(1);
   selectedModel = signal<string>('Veo 3.1 - Fast');
   selectedPreset = signal<string>('');
 
@@ -1874,14 +1937,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
     this.selectedNewAspectRatio.set(ratio);
     this.isSettingsDropdownOpen.set(null);
     console.log('Selected Aspect Ratio:', ratio);
-  }
-
-  selectOutputs(count: number) {
-    this.selectedOutputs.set(count);
-    this.searchRequest.numberOfMedia = count;
-    this.saveState();
-    this.isSettingsDropdownOpen.set(null);
-    console.log('Selected Outputs:', count);
   }
 
   selectNewModel(model: string) {

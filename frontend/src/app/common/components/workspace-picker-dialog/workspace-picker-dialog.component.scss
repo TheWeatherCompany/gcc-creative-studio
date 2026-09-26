@@ -1,0 +1,322 @@
+/**
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+.picker {
+  padding: 24px;
+  width: min(760px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: rgba(30, 31, 32, 0.95);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  color: #e3e3e3;
+  box-sizing: border-box;
+}
+
+.picker-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.picker-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.picker-subtitle {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+  color: #9aa0a6;
+}
+
+.close-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #9aa0a6;
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #ffffff;
+  }
+}
+
+.current-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: rgba(138, 180, 248, 0.08);
+  border: 1px solid rgba(138, 180, 248, 0.25);
+  border-radius: 12px;
+}
+
+.current-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.current-caption {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9aa0a6;
+}
+
+.current-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: #ffffff;
+}
+
+.current-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.action-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px 7px 10px;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #e3e3e3;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+
+  mat-icon {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+  }
+
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+
+  &:focus-visible {
+    outline: 2px solid #8ab4f8;
+    outline-offset: 2px;
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.filter-box {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+
+  &:focus-within {
+    border-color: rgba(138, 180, 248, 0.6);
+  }
+}
+
+.filter-icon {
+  margin-right: 8px;
+  font-size: 20px;
+  width: 20px;
+  height: 20px;
+  color: #9aa0a6;
+}
+
+.filter-input {
+  width: 100%;
+  padding: 10px 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #ffffff;
+  font-size: 0.9rem;
+
+  &::placeholder {
+    color: #80868b;
+  }
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  // Cards clip their tile (overflow: hidden), which drops their minimum
+  // height to zero; without this a short dialog squashes every row.
+  grid-auto-rows: max-content;
+  min-height: 0;
+  gap: 14px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.workspace-card {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+
+  &:hover {
+    transform: translateY(-2px);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  &:focus-visible {
+    outline: 2px solid #8ab4f8;
+    outline-offset: 2px;
+  }
+
+  &.active {
+    border-color: #8ab4f8;
+    box-shadow: 0 0 0 1px #8ab4f8;
+    background: rgba(138, 180, 248, 0.1);
+  }
+}
+
+.tile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 10;
+}
+
+.tile-initials {
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.scope-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 16px;
+  width: 16px;
+  height: 16px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.current-badge {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 8px 2px 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #0b1a33;
+  background: #8ab4f8;
+  border-radius: 999px;
+
+  mat-icon {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+  }
+}
+
+.create-card {
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.create-tile {
+  color: #8ab4f8;
+  background: rgba(138, 180, 248, 0.08);
+
+  mat-icon {
+    font-size: 32px;
+    width: 32px;
+    height: 32px;
+  }
+}
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px 12px;
+  min-width: 0;
+}
+
+.card-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #ffffff;
+}
+
+.card-meta {
+  font-size: 0.75rem;
+  color: #9aa0a6;
+}
+
+.no-results {
+  margin: 16px 0 0;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #9aa0a6;
+}

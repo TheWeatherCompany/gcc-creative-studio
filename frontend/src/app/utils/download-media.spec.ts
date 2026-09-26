@@ -14,7 +14,12 @@
  * limitations under the License.
  */
 
-import {buildDownloadFilename} from './download-media';
+import {
+  buildDownloadFilename,
+  DownloadLinkExpiredError,
+  downloadMedia,
+  isSignedUrlExpired,
+} from './download-media';
 
 describe('buildDownloadFilename', () => {
   const signed = (path: string) =>
@@ -48,5 +53,28 @@ describe('buildDownloadFilename', () => {
     expect(
       buildDownloadFilename('creative-studio-7', signed('images/1b2c3d4e'), ''),
     ).toBe('creative-studio-7');
+  });
+});
+
+describe('signed URL expiry', () => {
+  // Signed 2026-09-25 12:00:00 UTC, valid for one hour.
+  const url =
+    'https://storage.googleapis.com/bucket/images/1b2c3d4e?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Date=20260925T120000Z&X-Goog-Expires=3600&X-Goog-Signature=abc';
+  const signedAt = Date.UTC(2026, 8, 25, 12, 0, 0);
+
+  it('treats the URL as expired from the end of its lifetime', () => {
+    expect(isSignedUrlExpired(url, signedAt + 3599_000)).toBeFalse();
+    expect(isSignedUrlExpired(url, signedAt + 3600_000)).toBeTrue();
+  });
+
+  // The backend can hand the page a cached URL with minutes left. Once it
+  // lapses, retrying cannot work, so the caller must be told it expired.
+  it('rejects an expired URL as expired without fetching it', async () => {
+    const fetchSpy = spyOn(window, 'fetch');
+
+    await expectAsync(downloadMedia(url, 'creative-studio-7')).toBeRejectedWith(
+      jasmine.any(DownloadLinkExpiredError),
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

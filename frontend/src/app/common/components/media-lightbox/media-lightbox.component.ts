@@ -51,7 +51,10 @@ import {
   MoveToFolderDialogResult,
 } from '../move-to-folder-dialog/move-to-folder-dialog.component';
 import {FolderService, folderErrorMessage} from '../../services/folder.service';
-import {downloadMedia} from '../../../utils/download-media';
+import {
+  DownloadLinkExpiredError,
+  downloadMedia,
+} from '../../../utils/download-media';
 
 @Component({
   selector: 'app-media-lightbox',
@@ -449,7 +452,13 @@ export class MediaLightboxComponent
     } catch (err) {
       handleErrorSnackbar(
         this.snackBar,
-        {message: 'Could not download the file. Please try again.', cause: err},
+        {
+          message:
+            err instanceof DownloadLinkExpiredError
+              ? 'This download link has expired. Reload the page to download the file.'
+              : 'Could not download the file. Please try again.',
+          cause: err,
+        },
         'Download',
       );
     } finally {
