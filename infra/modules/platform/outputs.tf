@@ -43,3 +43,8 @@ output "frontend_custom_domain_state" {
   description = "Firebase's provisioning state for the custom domain."
   value       = module.frontend_service.custom_domain_state
 }
+
+output "worker_service_url" {
+  description = "The URL of the generation worker service."
+  value       = module.worker_service.service_url
+}

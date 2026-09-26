@@ -96,3 +96,55 @@ variable "backend_runtime_secrets" {
   description = "Secrets to mount in the backend container at runtime."
   default     = {}
 }
+
+variable "worker_service_name" {
+  type    = string
+  default = "cstudio-worker"
+}
+
+variable "job_dispatch_mode" {
+  type        = string
+  default     = "in_process"
+  description = "in_process runs jobs on the API's thread pool; cloud_tasks enqueues them."
+  validation {
+    condition     = contains(["in_process", "cloud_tasks"], var.job_dispatch_mode)
+    error_message = "job_dispatch_mode must be in_process or cloud_tasks."
+  }
+}
+
+variable "job_worker_target" {
+  type        = string
+  default     = "backend"
+  description = "Which service Cloud Tasks and the sweep schedule call: backend (self-targeting stage) or worker."
+  validation {
+    condition     = contains(["backend", "worker"], var.job_worker_target)
+    error_message = "job_worker_target must be backend or worker."
+  }
+}
+
+variable "job_queue_max_concurrent_dispatches" {
+  type        = number
+  default     = 12
+  description = "Global cap on jobs running at once. This is the Vertex quota guard GENERATION_MAX_WORKERS used to approximate."
+}
+
+variable "worker_cpu" {
+  type    = string
+  default = "2000m"
+}
+
+variable "worker_memory" {
+  type    = string
+  default = "8Gi"
+}
+
+variable "worker_max_request_concurrency" {
+  type        = number
+  default     = 4
+  description = "Jobs per worker instance. 4 x the largest job (4 images at 4K) fits 8Gi with headroom; revisit from memory metrics."
+}
+
+variable "worker_min_instances" {
+  type    = number
+  default = 1
+}
