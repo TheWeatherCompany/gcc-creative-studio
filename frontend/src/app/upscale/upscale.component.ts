@@ -18,7 +18,7 @@ import {Component, ChangeDetectorRef, OnInit, OnDestroy} from '@angular/core';
 import {MatDialog} from '@angular/material/dialog';
 import {MatSnackBar} from '@angular/material/snack-bar';
 import {Subject, Observable} from 'rxjs';
-import {takeUntil, distinctUntilChanged} from 'rxjs/operators';
+import {takeUntil, distinctUntilChanged, finalize} from 'rxjs/operators';
 import {Router} from '@angular/router'; // Added Router
 import {ImageSelectorComponent} from '../common/components/image-selector/image-selector.component';
 import {
@@ -52,6 +52,7 @@ interface AssetPair {
 export class UpscaleComponent implements OnInit, OnDestroy {
   assetPair: AssetPair = {original: null, upscaled: null};
   isLoadingUpscale = false;
+  isUploadingSource = false;
   sliderValue = 50;
   showErrorOverlay = true; // Controls visibility of the error overlay
   readonly assetType = AssetTypeEnum.GENERIC_IMAGE;
@@ -206,18 +207,34 @@ export class UpscaleComponent implements OnInit, OnDestroy {
         }
 
         if (asset) {
-          this.selectedAsset = asset;
-          this.assetPair.original = {
-            name: asset.originalFilename,
-            url: asset.presignedUrl || asset.gcsUri,
-          };
-          this.assetPair.aspectRatio = asset.aspectRatio;
-          this.assetPair.upscaled = null; // Reset upscaled
-          this.completedJobId = null; // Reset previous job ID
-          this.cdr.detectChanges();
+          this.applySelectedAsset(asset);
         }
       }
     });
+  }
+
+  private applySelectedAsset(asset: SourceAssetResponseDto): void {
+    this.selectedAsset = asset;
+    this.assetPair.original = {
+      name: asset.originalFilename,
+      url: asset.presignedUrl || asset.gcsUri,
+    };
+    this.assetPair.aspectRatio = asset.aspectRatio;
+    this.assetPair.upscaled = null; // Reset upscaled
+    this.completedJobId = null; // Reset previous job ID
+    this.cdr.detectChanges();
+  }
+
+  /** A dropped or pasted image becomes the original without the picker. */
+  onFileAdded(file: File): void {
+    this.isUploadingSource = true;
+    this.sourceAssetService
+      .uploadAsset(file, {assetType: this.assetType})
+      .pipe(finalize(() => (this.isUploadingSource = false)))
+      .subscribe({
+        next: asset => this.applySelectedAsset(asset),
+        error: err => handleErrorSnackbar(this._snackBar, err, 'Upload'),
+      });
   }
 
   startUpscale(): void {
@@ -278,17 +295,6 @@ export class UpscaleComponent implements OnInit, OnDestroy {
     this.completedJobId = null;
     // Notify services to clear status to allow new uploads
     (this.sourceAssetService as any).activeUpscaleJob.next(null);
-  }
-
-  onDragOver(event: DragEvent): void {
-    event.preventDefault();
-    event.stopPropagation();
-  }
-
-  onDrop(event: DragEvent): void {
-    event.preventDefault();
-    event.stopPropagation();
-    this.openUploaderDialog();
   }
 
   get aspectRatioValue(): number {
