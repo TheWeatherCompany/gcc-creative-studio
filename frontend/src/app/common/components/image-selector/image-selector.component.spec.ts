@@ -212,6 +212,33 @@ describe('ImageSelectorComponent file intake', () => {
       );
     });
 
+    it('puts the backend reason for each failed file in the batch toast', () => {
+      setup({multiSelect: true});
+      spyOn(console, 'error');
+      const reasons: Record<string, unknown> = {
+        'b.png': {error: {detail: 'Cannot upload an empty file.'}},
+        'c.png': {error: {detail: [{msg: 'Unsupported image'}]}},
+        'd.png': new Error('Network down'),
+      };
+      assets.uploadAsset.and.callFake((f: File) =>
+        f.name in reasons
+          ? throwError(() => reasons[f.name])
+          : of({id: 1} as unknown as SourceAssetResponseDto),
+      );
+      component.onFilesAdded([
+        img('a.png', 1),
+        img('b.png', 2),
+        img('c.png', 3),
+        img('d.png', 4),
+      ]);
+
+      const toast = notifications.show.calls.mostRecent().args[0] as string;
+      expect(toast).toContain('b.png: Cannot upload an empty file.');
+      expect(toast).toContain('c.png: Unsupported image');
+      expect(toast).toContain('d.png: Network down');
+      expect(toast).not.toContain('a.png');
+    });
+
     describe('with Edit before upload on', () => {
       let cropper: jasmine.Spy;
       beforeEach(() => {

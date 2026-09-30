@@ -35,7 +35,19 @@ import {ImageCropperDialogComponent} from '../image-cropper-dialog/image-cropper
 import {
   handleErrorSnackbar,
   handleInfoSnackbar,
+  handleRejectedFilesSnackbar,
 } from '../../../utils/handleMessageSnackbar';
+
+// Mirrors how handleErrorSnackbar picks the message for a failed request.
+function errorReason(error: unknown): string {
+  const e = error as {
+    error?: {detail?: string | {msg?: string}[]};
+    message?: string;
+  };
+  const detail = e?.error?.detail;
+  const msg = Array.isArray(detail) ? detail[0]?.msg : detail;
+  return msg || e?.message || 'Something went wrong';
+}
 
 export interface MediaItemSelection {
   mediaItem: MediaItem;
@@ -186,20 +198,23 @@ export class ImageSelectorComponent implements OnInit {
       .pipe(finalize(() => (this.isUploading = false)))
       .subscribe(results => {
         const uploaded: SourceAssetResponseDto[] = [];
-        const failed: File[] = [];
+        const failed: {file: File; error: unknown}[] = [];
         for (const result of results) {
           if ('asset' in result) {
             uploaded.push(result.asset);
           } else {
             console.error('Upload failed for', result.file.name, result.error);
-            failed.push(result.file);
+            failed.push({file: result.file, error: result.error});
           }
         }
         if (failed.length) {
-          const names = failed.map(f => f.name).join(', ');
+          // Same reason the single-file path shows, kept per file.
+          const reasons = failed
+            .map(({file, error}) => `${file.name}: ${errorReason(error)}`)
+            .join('; ');
           handleErrorSnackbar(
             this.snackBar,
-            new Error(`Couldn't upload ${names}.`),
+            new Error(`Couldn't upload ${reasons}`),
             'Upload',
           );
         }
@@ -208,8 +223,7 @@ export class ImageSelectorComponent implements OnInit {
   }
 
   onFilesRejected(files: File[]): void {
-    const names = files.map(f => f.name).join(', ');
-    handleInfoSnackbar(this.snackBar, `Can't use ${names} here.`);
+    handleRejectedFilesSnackbar(this.snackBar, files);
   }
 
   /** Images dragged straight from another web page arrive as a URL. */
