@@ -51,15 +51,7 @@
         }
       </mat-menu>
     }
-    <studio-button
-      variant="primary"
-      size="small"
-      routerLink="/gallery"
-      title="Back to the gallery grid"
-    >
-      <mat-icon class="mr-1">grid_view</mat-icon>
-      <span>Grid</span>
-    </studio-button>
+    <gallery-view-toggle active="feed"></gallery-view-toggle>
   </div>
 
   @if (isLoading && rows.length === 0) {
