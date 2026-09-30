@@ -49,14 +49,16 @@ export class SourceAssetUploadFormComponent {
     });
   }
 
-  onFileSelected(event: Event): void {
-    const element = event.currentTarget as HTMLInputElement;
-    const fileList: FileList | null = element.files;
-    if (fileList && fileList.length > 0) {
-      const file = fileList[0];
-      this.form.patchValue({file: file});
-      this.fileName = file.name;
-    }
+  onFileInputChange(event: Event): void {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (file) this.setFile(file);
+  }
+
+  setFile(file: File): void {
+    this.form.patchValue({file});
+    this.form.get('file')?.markAsTouched();
+    this.fileName = file.name;
   }
 
   onCancel(): void {
