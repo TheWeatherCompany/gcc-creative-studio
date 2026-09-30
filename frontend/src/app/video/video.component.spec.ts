@@ -46,6 +46,7 @@ import {
   SourceAssetService,
 } from '../common/services/source-asset.service';
 import {setAppInjector} from '../app-injector';
+import {NotificationService} from '../common/services/notification.service';
 import {AssetTypeEnum} from '../admin/source-assets-management/source-asset.model';
 
 import {VideoComponent} from './video.component';
@@ -458,23 +459,56 @@ describe('VideoComponent', () => {
         expect(component.image2Preview).toBe('https://storage.test/9.png');
       });
 
-      // A paste in Text to Video switches to Frames to Video first. Two
-      // videos left over from Concatenate must not survive as a start frame,
-      // even if the pasted image then fails to upload.
-      it('leave no old video behind when a paste moves on to Frames to Video', () => {
-        component.onModeChanged('Concatenate Video');
-        component.onSlotFileAdded({num: 1, file: file('1.mp4', 'video/mp4')});
-        component.onSlotFileAdded({num: 2, file: file('2.mp4', 'video/mp4')});
-        component.onModeChanged('Text to Video');
+      // Two videos left over from Concatenate, then Text to Video from the
+      // menu, which clears nothing. Moving on to Frames to Video, from the
+      // menu or from a paste, must drop both videos without passing through
+      // Extend Video, which clears the prompt.
+      const leftoverCases: [string, () => void, string | null][] = [
+        ['from the menu', () => {}, null],
+        [
+          'from a paste',
+          () => component.onSlotFileAdded({num: 1, file: file('3.png')}),
+          'https://storage.test/3.png',
+        ],
+        [
+          'from a paste whose upload fails',
+          () => {
+            uploadAsset.and.returnValue(throwError(() => ({status: 500})));
+            component.onSlotFileAdded({num: 1, file: file('3.png')});
+          },
+          null,
+        ],
+      ];
+      for (const [name, afterSwitch, start] of leftoverCases) {
+        it(`move on to Frames to Video ${name} with no old video and the prompt kept`, () => {
+          component.onModeChanged('Concatenate Video');
+          component.onSlotFileAdded({num: 1, file: file('1.mp4', 'video/mp4')});
+          component.onSlotFileAdded({num: 2, file: file('2.mp4', 'video/mp4')});
+          expect([component.image1Preview, component.image2Preview])
+            .withContext('two leftover videos')
+            .toEqual([
+              'https://storage.test/1.mp4',
+              'https://storage.test/2.mp4',
+            ]);
+          component.onModeChanged('Text to Video');
+          component.onPromptChanged('a fox in the snow');
+          const notices = spyOn(TestBed.inject(NotificationService), 'show');
 
-        uploadAsset.and.returnValue(throwError(() => ({status: 500})));
-        component.onModeChanged('Frames to Video');
-        component.onSlotFileAdded({num: 1, file: file('3.png')});
+          component.onModeChanged('Frames to Video');
+          afterSwitch();
 
-        expect(component.currentMode).toBe('Frames to Video');
-        expect(component.image1Preview).toBeNull();
-        expect(component.image2Preview).toBeNull();
-      });
+          expect(component.currentMode).toBe('Frames to Video');
+          expect(component.searchRequest.prompt).toBe('a fox in the snow');
+          expect(component.image1Preview).withContext('start').toBe(start);
+          expect(component.image2Preview).withContext('end').toBeNull();
+          expect(
+            notices.calls
+              .allArgs()
+              .map(a => a[0] as string)
+              .filter(m => /Extend Mode|Concatenate Mode/.test(m)),
+          ).toEqual([]);
+        });
+      }
     });
 
     it('tell the slots what they take in each mode', () => {

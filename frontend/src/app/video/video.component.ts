@@ -670,13 +670,15 @@ export class VideoComponent implements OnInit, AfterViewInit {
     }
 
     // If we are entering Frames to Video mode, ensure we only keep image inputs.
-    // Slot 2 first: clearing slot 1 moves a video in slot 2 into slot 1.
+    // Reset the slots directly: clearInput would move a video from slot 2
+    // into slot 1 and run updateModeAndNotify, which switches to Extend Video
+    // and clears the prompt before this mode is set.
     if (mode === 'Frames to Video') {
-      if (this.image2Preview && this._input2IsVideo) {
-        this.clearVideo(2);
-      }
       if (this.image1Preview && this._input1IsVideo) {
-        this.clearVideo(1);
+        this.resetSlot(1);
+      }
+      if (this.image2Preview && this._input2IsVideo) {
+        this.resetSlot(2);
       }
     }
 
@@ -1307,6 +1309,20 @@ export class VideoComponent implements OnInit, AfterViewInit {
     }
 
     this.updateModeAndNotify();
+  }
+
+  /** Empties one slot, with none of clearInput's moving or mode switching. */
+  private resetSlot(imageNumber: NumPos) {
+    if (imageNumber === 1) {
+      this.startImageAssetId = null;
+      this.image1Preview = null;
+      this._input1IsVideo = false;
+    } else {
+      this.endImageAssetId = null;
+      this.image2Preview = null;
+      this._input2IsVideo = false;
+    }
+    this.clearSourceMediaItem(imageNumber);
   }
 
   clearVideo(imageNumber: NumPos) {

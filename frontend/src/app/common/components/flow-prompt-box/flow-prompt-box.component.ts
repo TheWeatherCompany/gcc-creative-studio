@@ -42,7 +42,7 @@ import {MatMenuModule} from '@angular/material/menu';
 import {MatTooltipModule} from '@angular/material/tooltip';
 import {FileDropDirective} from '../../upload/file-drop.directive';
 import {FilePasteDirective} from '../../upload/file-paste.directive';
-import {handleInfoSnackbar} from '../../../utils/handleMessageSnackbar';
+import {handleRejectedFilesSnackbar} from '../../../utils/handleMessageSnackbar';
 
 export type NumPos = 1 | 2;
 
@@ -370,10 +370,7 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   }
 
   onFilesRejected(files: File[]): void {
-    handleInfoSnackbar(
-      this.snackBar,
-      `Can't use ${files.map(f => f.name).join(', ')} here.`,
-    );
+    handleRejectedFilesSnackbar(this.snackBar, files);
   }
 
   // --- Menu Toggles ---
