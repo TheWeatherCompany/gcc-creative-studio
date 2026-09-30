@@ -411,29 +411,25 @@ export class VtoComponent implements OnInit, AfterViewInit {
     });
   }
 
-  onDrop(event: DragEvent) {
-    event.preventDefault();
-    const file = event.dataTransfer?.files[0];
-    if (file) {
-      this.isLoading = true;
-      this.uploadAsset(file)
-        .pipe(finalize(() => (this.isLoading = false)))
-        .subscribe({
-          next: asset => {
-            const uploadedModel: Model = {
-              id: 'uploaded',
-              name: asset.originalFilename,
-              imageUrl: asset.presignedUrl,
-              size: 'custom',
-              inputLink: {sourceAssetId: asset.id},
-            };
-            this.firstFormGroup.get('model')?.setValue(uploadedModel);
-          },
-          error: error => {
-            handleErrorSnackbar(this._snackBar, error, 'Image upload');
-          },
-        });
-    }
+  onModelFileAdded(file: File) {
+    this.isLoading = true;
+    this.uploadAsset(file)
+      .pipe(finalize(() => (this.isLoading = false)))
+      .subscribe({
+        next: asset => {
+          const uploadedModel: Model = {
+            id: 'uploaded',
+            name: asset.originalFilename,
+            imageUrl: asset.presignedUrl,
+            size: 'custom',
+            inputLink: {sourceAssetId: asset.id},
+          };
+          this.firstFormGroup.get('model')?.setValue(uploadedModel);
+        },
+        error: error => {
+          handleErrorSnackbar(this._snackBar, error, 'Image upload');
+        },
+      });
   }
 
   clearImage(event: MouseEvent) {

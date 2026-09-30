@@ -25,7 +25,10 @@ import {MatDialogModule} from '@angular/material/dialog';
 import {MatSnackBarModule} from '@angular/material/snack-bar';
 import {NoopAnimationsModule} from '@angular/platform-browser/animations';
 import {provideHttpClient} from '@angular/common/http';
-import {provideHttpClientTesting} from '@angular/common/http/testing';
+import {
+  HttpTestingController,
+  provideHttpClientTesting,
+} from '@angular/common/http/testing';
 import {provideRouter} from '@angular/router';
 import {CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
 import {of} from 'rxjs';
@@ -35,12 +38,17 @@ import {SearchService} from '../services/search/search.service';
 import {VtoStateService} from '../services/vto-state.service';
 import {WorkspaceStateService} from '../services/workspace/workspace-state.service';
 import {GalleryService} from '../gallery/gallery.service';
+import {SourceAssetService} from '../common/services/source-asset.service';
+import {FileDropDirective} from '../common/upload/file-drop.directive';
+import {FilePasteDirective} from '../common/upload/file-paste.directive';
 
 describe('VtoComponent', () => {
   let component: VtoComponent;
   let fixture: ComponentFixture<VtoComponent>;
+  let uploadAsset: jasmine.Spy;
 
   beforeEach(async () => {
+    uploadAsset = jasmine.createSpy('uploadAsset');
     await TestBed.configureTestingModule({
       declarations: [VtoComponent],
       imports: [
@@ -54,6 +62,8 @@ describe('VtoComponent', () => {
         MatDialogModule,
         MatSnackBarModule,
         NoopAnimationsModule,
+        FileDropDirective,
+        FilePasteDirective,
       ],
       providers: [
         provideHttpClient(),
@@ -83,6 +93,7 @@ describe('VtoComponent', () => {
             getActiveWorkspaceId: () => 1,
           },
         },
+        {provide: SourceAssetService, useValue: {uploadAsset}},
         {
           provide: GalleryService,
           useValue: {
@@ -96,9 +107,65 @@ describe('VtoComponent', () => {
     fixture = TestBed.createComponent(VtoComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
+    // Settle the initial asset load; `isLoading` also gates pasting.
+    TestBed.inject(HttpTestingController)
+      .expectOne(req => req.url.endsWith('/source_assets/vto-assets'))
+      .flush({
+        female_models: [],
+        male_models: [],
+        tops: [],
+        bottoms: [],
+        dresses: [],
+        shoes: [],
+      });
+    fixture.detectChanges();
   });
 
-  it('should create', () => {
-    expect(component).toBeTruthy();
+  it('uses a dropped or pasted photo as the uploaded model', () => {
+    uploadAsset.and.returnValue(
+      of({id: 7, originalFilename: 'me.png', presignedUrl: 'u'}),
+    );
+    component.onModelFileAdded(new File(['x'], 'me.png', {type: 'image/png'}));
+    expect(component.firstFormGroup.get('model')?.value).toEqual(
+      jasmine.objectContaining({id: 'uploaded', inputLink: {sourceAssetId: 7}}),
+    );
+    expect(component.isLoading).toBeFalse();
+  });
+
+  describe('pasting a photo', () => {
+    function paste(): void {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'image.png', {type: 'image/png'}));
+      document.dispatchEvent(
+        new ClipboardEvent('paste', {clipboardData: dt, cancelable: true}),
+      );
+    }
+
+    beforeEach(() => {
+      uploadAsset.and.returnValue(
+        of({id: 7, originalFilename: 'me.png', presignedUrl: 'u'}),
+      );
+    });
+
+    it('uploads it while the stepper is on the model step', () => {
+      paste();
+      expect(uploadAsset).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores it while another upload is in flight', () => {
+      component.isLoading = true;
+      fixture.detectChanges();
+      paste();
+      expect(uploadAsset).not.toHaveBeenCalled();
+    });
+
+    it('ignores it once the stepper has moved past the model step', () => {
+      component.firstFormGroup.get('model')?.setValue({id: 'f1'} as any);
+      component.stepper.next();
+      fixture.detectChanges();
+      expect(component.stepper.selectedIndex).toBe(1);
+      paste();
+      expect(uploadAsset).not.toHaveBeenCalled();
+    });
   });
 });
