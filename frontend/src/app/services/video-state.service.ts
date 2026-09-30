@@ -26,7 +26,9 @@ import {DEFAULT_OUTPUTS, MODEL_CONFIGS} from '../common/config/model-config';
 
 const STORAGE_KEY = 'video_state';
 
-interface VideoState {
+// Fork: exported so the feed's prompt bar can type the state it shares with
+// the video page.
+export interface VideoState {
   prompt: string;
   aspectRatio: string;
   resolution: '1K' | '2K' | '4K';
