@@ -20,7 +20,8 @@ import {
   MatDialog,
   MatDialogRef,
 } from '@angular/material/dialog';
-import {finalize, Observable} from 'rxjs';
+import {finalize, forkJoin, Observable} from 'rxjs';
+import {MatSnackBar} from '@angular/material/snack-bar';
 import {UserService} from '../../services/user.service';
 import {
   SourceAssetResponseDto,
@@ -30,6 +31,10 @@ import {AssetTypeEnum} from '../../../admin/source-assets-management/source-asse
 import {MediaItem} from '../../models/media-item.model';
 import {MediaGalleryComponent} from '../../../gallery/media-gallery/media-gallery.component';
 import {ImageCropperDialogComponent} from '../image-cropper-dialog/image-cropper-dialog.component';
+import {
+  handleErrorSnackbar,
+  handleInfoSnackbar,
+} from '../../../utils/handleMessageSnackbar';
 
 export interface MediaItemSelection {
   mediaItem: MediaItem;
@@ -44,7 +49,6 @@ export interface MediaItemSelection {
 })
 export class ImageSelectorComponent implements OnInit {
   isUploading = false;
-  isDragging = false;
   selectedMediaItems = new Map<string, any>();
   shouldCrop = false;
   currentUserEmail: string | null = null;
@@ -56,6 +60,7 @@ export class ImageSelectorComponent implements OnInit {
     private sourceAssetService: SourceAssetService,
     private dialog: MatDialog,
     private userService: UserService,
+    private snackBar: MatSnackBar,
     @Inject(MAT_DIALOG_DATA)
     public data: {
       mimeType:
@@ -113,10 +118,13 @@ export class ImageSelectorComponent implements OnInit {
         this.sourceAssetService
           .uploadAsset(file, {assetType: this.data.assetType})
           .pipe(finalize(() => (this.isUploading = false)))
-          .subscribe(asset => {
-            if (asset) {
-              this.dialogRef.close(asset);
-            }
+          .subscribe({
+            next: asset => {
+              if (asset) {
+                this.dialogRef.close(asset);
+              }
+            },
+            error: err => handleErrorSnackbar(this.snackBar, err, 'Upload'),
           });
       }
     } else if (isVideoOrAudio) {
@@ -124,11 +132,12 @@ export class ImageSelectorComponent implements OnInit {
       this.isUploading = true;
       this.uploadMediaDirectly(file)
         .pipe(finalize(() => (this.isUploading = false)))
-        .subscribe(asset => {
-          this.dialogRef.close(asset);
+        .subscribe({
+          next: asset => this.dialogRef.close(asset),
+          error: err => handleErrorSnackbar(this.snackBar, err, 'Upload'),
         });
     } else {
-      console.error('Unsupported file type selected.');
+      this.onFilesRejected([file]);
     }
   }
 
@@ -137,100 +146,83 @@ export class ImageSelectorComponent implements OnInit {
     return this.sourceAssetService.uploadAsset(file);
   }
 
-  // Keep for backwards compatibility
-  private uploadVideoDirectly(file: File): Observable<SourceAssetResponseDto> {
-    return this.uploadMediaDirectly(file);
-  }
-
-  // Update onFileSelected and onDrop to use the new handler
-  onFileSelected(event: Event): void {
-    const element = event.currentTarget as HTMLInputElement;
-    const fileList: FileList | null = element.files;
-    if (fileList && fileList[0]) {
-      this.handleFileSelect(fileList[0]);
+  /** Entry point for dropped, pasted and picked files. */
+  onFilesAdded(files: File[]): void {
+    if (this.isUploading || files.length === 0) return;
+    if (files.length === 1) {
+      this.handleFileSelect(files[0]);
+      return;
     }
+
+    const limit = this.data.maxSelection ?? files.length;
+    const batch = files.slice(0, limit);
+    if (files.length > limit) {
+      handleInfoSnackbar(
+        this.snackBar,
+        `Only the first ${limit} of ${files.length} files were added.`,
+      );
+    }
+    if (this.shouldCrop) {
+      handleInfoSnackbar(
+        this.snackBar,
+        'Edit before upload works on one file at a time, so these were uploaded as they are.',
+      );
+    }
+
+    this.isUploading = true;
+    // If one upload fails the others have already landed; retrying is safe
+    // because the backend dedupes by file hash.
+    forkJoin(batch.map(file => this.uploadFile(file)))
+      .pipe(finalize(() => (this.isUploading = false)))
+      .subscribe({
+        next: uploaded => this.dialogRef.close(uploaded),
+        error: err => handleErrorSnackbar(this.snackBar, err, 'Upload'),
+      });
   }
 
-  onDrop(event: DragEvent): void {
-    event.preventDefault();
-    event.stopPropagation();
-    this.isDragging = false;
+  onFilesRejected(files: File[]): void {
+    const names = files.map(f => f.name).join(', ');
+    handleInfoSnackbar(this.snackBar, `Can't use ${names} here.`);
+  }
+
+  /** Images dragged straight from another web page arrive as a URL. */
+  onUriDropped(url: string): void {
     if (this.isUploading) return;
+    this.isUploading = true;
+    fetch(url)
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.blob();
+      })
+      .then(blob => {
+        this.isUploading = false;
+        this.onFilesAdded([
+          new File([blob], 'downloaded_image', {type: blob.type}),
+        ]);
+      })
+      .catch(err => {
+        this.isUploading = false;
+        console.error('Failed to fetch dropped URL', url, err);
+        handleInfoSnackbar(
+          this.snackBar,
+          "That site doesn't allow its images to be downloaded directly. Save the image to your computer first, then drag or paste it here.",
+        );
+      });
+  }
 
-    let file: File | null = null;
-    const dt = event.dataTransfer;
+  onFileInputChange(event: Event): void {
+    const input = event.currentTarget as HTMLInputElement;
+    this.onFilesAdded(Array.from(input.files ?? []));
+    // Lets the user pick the same file twice in a row.
+    input.value = '';
+  }
 
-    // Debug logging synchronously before the event context is lost
-    const debugItems = dt?.items
-      ? Array.from(dt.items).map(i => ({kind: i.kind, type: i.type}))
-      : [];
-    const debugFiles = dt?.files ? dt.files.length : 0;
-
-    if (dt?.files && dt.files.length > 0) {
-      file = dt.files[0];
-    } else if (dt?.items) {
-      const items = Array.from(dt.items);
-      const fileItem = items.find(item => item.kind === 'file');
-      if (fileItem) {
-        file = fileItem.getAsFile();
-      } else {
-        // Try to handle dragging an image from another webpage
-        const uriItem = items.find(item => item.type === 'text/uri-list');
-        if (uriItem) {
-          this.isUploading = true;
-          uriItem.getAsString(uriList => {
-            // text/uri-list can have multiple lines, take the first valid URL
-            const url = uriList
-              .split('\n')
-              .find(line => line.trim() && !line.startsWith('#'))
-              ?.trim();
-            if (url) {
-              fetch(url)
-                .then(res => {
-                  if (!res.ok)
-                    throw new Error(`HTTP error! status: ${res.status}`);
-                  return res.blob();
-                })
-                .then(blob => {
-                  const fetchedFile = new File([blob], 'downloaded_image', {
-                    type: blob.type,
-                  });
-                  this.isUploading = false;
-                  this.handleFileSelect(fetchedFile);
-                })
-                .catch(err => {
-                  console.error(
-                    'Failed to fetch image from dropped URL',
-                    url,
-                    err,
-                  );
-                  this.isUploading = false;
-                  alert(
-                    'Could not download the dropped image directly from the browser due to cross-origin security restrictions (CORS). Please drag the image to your Desktop first, then drag it here.',
-                  );
-                });
-            } else {
-              this.isUploading = false;
-            }
-          });
-          return; // We are handling the upload asynchronously
-        }
-      }
-    }
-
-    if (file) {
-      this.handleFileSelect(file);
-    } else {
-      console.error(
-        'No valid file found in drop event. items:',
-        debugItems,
-        'files count:',
-        debugFiles,
-      );
-      alert(
-        'Could not read the dropped file. This happens if the file was dragged from an unsupported app. Try selecting it via the upload button instead.',
-      );
-    }
+  private uploadFile(file: File): Observable<SourceAssetResponseDto> {
+    const isImage = file.type.startsWith('image/');
+    return this.sourceAssetService.uploadAsset(
+      file,
+      isImage ? {assetType: this.data.assetType} : {},
+    );
   }
 
   onMediaSelected(selection: MediaItemSelection): void {
@@ -319,21 +311,6 @@ export class ImageSelectorComponent implements OnInit {
 
   onAssetSelected(asset: SourceAssetResponseDto): void {
     this.dialogRef.close(asset);
-  }
-
-  onDragOver(event: DragEvent) {
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = 'copy';
-    }
-    this.isDragging = true;
-  }
-
-  onDragLeave(event: DragEvent) {
-    event.preventDefault();
-    event.stopPropagation();
-    this.isDragging = false;
   }
 
   /**
