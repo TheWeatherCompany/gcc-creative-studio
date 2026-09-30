@@ -15,7 +15,14 @@
 -->
 
 <!-- MIXED MODE (Grid Layout) - NOW DEFAULT FOR ALL -->
-<div class="input-container-mixed">
+<div
+  class="input-container-mixed"
+  appFileDrop
+  appFileDropAccept="image/*"
+  [appFileDropMultiple]="true"
+  [appFileDropDisabled]="type !== 'image' || items.length >= maxItems"
+  (filesDropped)="onFilesAdded($event)"
+>
   <!-- Counter -->
   <div class="text-xs text-neutral-500 mb-2 font-medium">
     {{ items.length }}/{{ maxItems }} item{{ maxItems === 1 ? '' : 's' }} selected
