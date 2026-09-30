@@ -25,7 +25,7 @@
       (filesDropped)="setFile($event[0])"
       (filesRejected)="onFilesRejected($event)"
       appFilePaste
-      appFilePasteAccept="image/*"
+      appFilePasteAccept="image/*,video/*"
       [appFilePasteDisabled]="isUploading"
       (filesPasted)="setFile($event[0])"
     >

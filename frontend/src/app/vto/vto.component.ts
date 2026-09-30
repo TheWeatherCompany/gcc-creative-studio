@@ -51,7 +51,7 @@ import {GalleryService} from '../gallery/gallery.service';
 import {WorkspaceStateService} from '../services/workspace/workspace-state.service';
 import {
   handleErrorSnackbar,
-  handleInfoSnackbar,
+  handleRejectedFilesSnackbar,
   handleSuccessSnackbar,
 } from '../utils/handleMessageSnackbar';
 import {VtoInputLink, VtoRequest, VtoSourceMediaItemLink} from './vto.model';
@@ -434,8 +434,7 @@ export class VtoComponent implements OnInit, AfterViewInit {
   }
 
   onFilesRejected(files: File[]): void {
-    const names = files.map(f => f.name).join(', ');
-    handleInfoSnackbar(this._snackBar, `Can't use ${names} here.`);
+    handleRejectedFilesSnackbar(this._snackBar, files);
   }
 
   clearImage(event: MouseEvent) {

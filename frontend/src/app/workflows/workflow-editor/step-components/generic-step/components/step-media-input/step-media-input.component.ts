@@ -32,6 +32,7 @@ import {
 import {
   handleErrorSnackbar,
   handleInfoSnackbar,
+  handleRejectedFilesSnackbar,
 } from '../../../../../../utils/handleMessageSnackbar';
 import {StepOutputReference} from '../../../../../workflow.models';
 
@@ -163,8 +164,14 @@ export class StepMediaInputComponent implements OnInit {
 
   /** Dropped images fill the remaining slots; extras are ignored. */
   onFilesAdded(files: File[]) {
-    const remaining = this.maxItems - this.items.length;
-    files.slice(0, Math.max(0, remaining)).forEach(file => {
+    const remaining = Math.max(0, this.maxItems - this.items.length);
+    if (files.length > remaining) {
+      handleInfoSnackbar(
+        this.snackBar,
+        `Only the first ${remaining} of ${files.length} images were added.`,
+      );
+    }
+    files.slice(0, remaining).forEach(file => {
       this.sourceAssetService
         .uploadAsset(file, {
           aspectRatio: 'other',
@@ -192,8 +199,7 @@ export class StepMediaInputComponent implements OnInit {
   }
 
   onFilesRejected(files: File[]): void {
-    const names = files.map(f => f.name).join(', ');
-    handleInfoSnackbar(this.snackBar, `Can't use ${names} here.`);
+    handleRejectedFilesSnackbar(this.snackBar, files);
   }
 
   addLinkedOutput(outputValue: any) {

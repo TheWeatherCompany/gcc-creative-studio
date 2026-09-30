@@ -105,6 +105,10 @@ describe('StepMediaInputComponent', () => {
 
     expect(uploadAsset).toHaveBeenCalledTimes(2);
     expect(ids()).toEqual([100, 1, 2]);
+    expect(notifications.show.calls.mostRecent().args.slice(0, 2)).toEqual([
+      'Only the first 2 of 3 images were added.',
+      'info',
+    ]);
   });
 
   it('drops an upload that lands after the slots filled up', () => {
@@ -145,13 +149,14 @@ describe('StepMediaInputComponent', () => {
     expect(component.items).toEqual([]);
   });
 
-  it('takes dropped images', () => {
+  it('takes dropped images, without a warning when they all fit', () => {
     uploadAsset.and.returnValue(of(assetFor(1)));
-    setup({maxItems: 2});
+    setup({maxItems: 1});
 
     dropFiles([png()]);
 
     expect(ids()).toEqual([1]);
+    expect(notifications.show).not.toHaveBeenCalled();
   });
 
   it('says so when the dropped file is not an image', () => {

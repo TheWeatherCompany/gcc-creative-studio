@@ -178,13 +178,9 @@ describe('SourceAssetUploadFormComponent', () => {
       expect(opened.fileName).toMatch(/^pasted-.*\.png$/);
     });
 
-    it('ignores a pasted video, and says so', () => {
+    it('takes a pasted video, like a drop or the file dialog', () => {
       paste(file('clip.mp4', 'video/mp4'));
-      expect(opened.fileName).toBeNull();
-      expect(notifications.show.calls.mostRecent().args.slice(0, 2)).toEqual([
-        "Can't use clip.mp4 here.",
-        'info',
-      ]);
+      expect(opened.fileName).toBe('clip.mp4');
     });
 
     it('ignores a paste while an upload is in progress', () => {

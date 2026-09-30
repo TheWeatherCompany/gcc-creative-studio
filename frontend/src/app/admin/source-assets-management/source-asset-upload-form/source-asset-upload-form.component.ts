@@ -23,7 +23,7 @@ import {finalize} from 'rxjs';
 import {MatSnackBar} from '@angular/material/snack-bar';
 import {
   handleErrorSnackbar,
-  handleInfoSnackbar,
+  handleRejectedFilesSnackbar,
 } from '../../../utils/handleMessageSnackbar';
 
 @Component({
@@ -65,8 +65,7 @@ export class SourceAssetUploadFormComponent {
   }
 
   onFilesRejected(files: File[]): void {
-    const names = files.map(f => f.name).join(', ');
-    handleInfoSnackbar(this._snackBar, `Can't use ${names} here.`);
+    handleRejectedFilesSnackbar(this._snackBar, files);
   }
 
   onCancel(): void {

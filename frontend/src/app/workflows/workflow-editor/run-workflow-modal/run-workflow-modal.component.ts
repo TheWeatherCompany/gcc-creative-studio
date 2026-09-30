@@ -34,7 +34,7 @@ import {
 } from '../../../common/services/source-asset.service';
 import {
   handleErrorSnackbar,
-  handleInfoSnackbar,
+  handleRejectedFilesSnackbar,
 } from '../../../utils/handleMessageSnackbar';
 import {WorkflowStep} from '../../workflow.models';
 
@@ -164,8 +164,7 @@ export class RunWorkflowModalComponent implements OnInit {
   }
 
   onFilesRejected(files: File[]): void {
-    const names = files.map(f => f.name).join(', ');
-    handleInfoSnackbar(this.snackBar, `Can't use ${names} here.`);
+    handleRejectedFilesSnackbar(this.snackBar, files);
   }
 
   clearReferenceImage(inputName: string) {

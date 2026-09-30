@@ -30,7 +30,7 @@ import {AssetTypeEnum} from '../admin/source-assets-management/source-asset.mode
 import {MediaItem, JobStatus} from '../common/models/media-item.model';
 import {
   handleErrorSnackbar,
-  handleInfoSnackbar,
+  handleRejectedFilesSnackbar,
 } from '../utils/handleMessageSnackbar';
 import {downloadMedia} from '../utils/download-media';
 import {MatIconRegistry} from '@angular/material/icon';
@@ -242,8 +242,7 @@ export class UpscaleComponent implements OnInit, OnDestroy {
   }
 
   onFilesRejected(files: File[]): void {
-    const names = files.map(f => f.name).join(', ');
-    handleInfoSnackbar(this._snackBar, `Can't use ${names} here.`);
+    handleRejectedFilesSnackbar(this._snackBar, files);
   }
 
   startUpscale(): void {
