@@ -35,9 +35,16 @@ resource "google_cloud_run_v2_service" "this" {
   name             = var.service_name
   location         = var.gcp_region
   deletion_protection = false
+  ingress             = var.ingress
 
   template {
     service_account = google_service_account.run_sa.email
+
+    # Null leaves the live value alone: both attributes are Optional+Computed
+    # in the provider, so an unset value keeps whatever the service has.
+    max_instance_request_concurrency = var.max_instance_request_concurrency
+    timeout                          = var.request_timeout
+
     volumes {
       name = "cloudsql"
       cloud_sql_instance {
@@ -51,6 +58,7 @@ resource "google_cloud_run_v2_service" "this" {
           cpu    = var.cpu
           memory = var.memory
         }
+        cpu_idle = var.cpu_idle
       }
 
       env {
@@ -229,9 +237,16 @@ resource "google_service_account_iam_member" "run_sa_act_as_self" {
 # credentials, so this service must accept unauthenticated invocations.
 # Authorization is enforced in the application by backend/src/auth/auth_guard.py,
 # which verifies the Okta token and derives roles from its `groups` claim.
+# The worker sets allow_unauthenticated = false; only the job invoker may call it.
 resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
+  count    = var.allow_unauthenticated ? 1 : 0
   name     = google_cloud_run_v2_service.this.name
   location = google_cloud_run_v2_service.this.location
   role     = "roles/run.invoker"
   member   = "allUsers"
+}
+
+moved {
+  from = google_cloud_run_v2_service_iam_member.public_invoker
+  to   = google_cloud_run_v2_service_iam_member.public_invoker[0]
 }
