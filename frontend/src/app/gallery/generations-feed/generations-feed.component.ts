@@ -34,6 +34,7 @@ import {Router} from '@angular/router';
 import {
   EMPTY,
   Observable,
+  Subject,
   Subscription,
   firstValueFrom,
   forkJoin,
@@ -137,6 +138,9 @@ export class GenerationsFeedComponent
 
   /** The user's in-flight generations, in every workspace. */
   inFlight: InFlightJob[] = [];
+
+  // Asks for an in-flight read now rather than at the next tick.
+  private readonly pollNow$ = new Subject<void>();
 
   /** Detail responses by item id, for reference inputs and Reuse. */
   private details = new Map<number, GalleryItem>();
@@ -564,9 +568,11 @@ export class GenerationsFeedComponent
 
   /**
    * Re-reads the user's in-flight jobs while the tab is visible, and once
-   * straight away when it becomes visible again. Uses the endpoints the
-   * generator pages restore their job cards from, not a gallery search, which
-   * forces status=COMPLETED for non-admins. A failed poll keeps the last count.
+   * straight away when it becomes visible again. A submit from the prompt bar
+   * cancels any read in flight and restarts the cycle with a fresh read. Uses
+   * the endpoints the generator pages restore their job cards from, not a
+   * gallery search, which forces status=COMPLETED for non-admins. A failed
+   * poll keeps the last count.
    */
   private pollActiveJobs(): Subscription {
     return fromEvent(this.document, 'visibilitychange')
@@ -579,27 +585,46 @@ export class GenerationsFeedComponent
             this.missedPolls = true;
             return EMPTY;
           }
-          return timer(0, ACTIVE_JOBS_POLL_MS).pipe(
-            // A slow answer skips ticks rather than stacking requests.
-            exhaustMap(() =>
-              forkJoin([
-                this.searchService.listActiveImageJobs(),
-                this.searchService.listActiveVideoJobs(),
-              ]).pipe(
-                map(([images, videos]) => [
-                  ...(images ?? []),
-                  ...(videos ?? []),
-                ]),
-                catchError(err => {
-                  console.error('Could not read in-flight generations', err);
-                  return EMPTY;
-                }),
+          // A submit restarts the cycle instead of joining the timer: a read
+          // already out may have left before the backend wrote the new job's
+          // row, and exhaustMap would drop the request for a fresh one.
+          return this.pollNow$.pipe(
+            startWith(undefined),
+            switchMap(() =>
+              timer(0, ACTIVE_JOBS_POLL_MS).pipe(
+                // A slow answer skips ticks rather than stacking requests.
+                exhaustMap(() =>
+                  forkJoin([
+                    this.searchService.listActiveImageJobs(),
+                    this.searchService.listActiveVideoJobs(),
+                  ]).pipe(
+                    map(([images, videos]) => [
+                      ...(images ?? []),
+                      ...(videos ?? []),
+                    ]),
+                    catchError(err => {
+                      console.error(
+                        'Could not read in-flight generations',
+                        err,
+                      );
+                      return EMPTY;
+                    }),
+                  ),
+                ),
               ),
             ),
           );
         }),
       )
       .subscribe(jobs => this.onActiveJobs(jobs));
+  }
+
+  /**
+   * The prompt bar started a job. The backend has already written its row,
+   * so a read now shows it in the header instead of up to a poll later.
+   */
+  onComposerSubmitted(): void {
+    this.pollNow$.next();
   }
 
   private onActiveJobs(jobs: MediaItem[]): void {

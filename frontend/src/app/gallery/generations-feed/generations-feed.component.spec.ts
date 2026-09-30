@@ -14,7 +14,15 @@
  * limitations under the License.
  */
 
-import {CUSTOM_ELEMENTS_SCHEMA, Injector} from '@angular/core';
+import {
+  Component,
+  CUSTOM_ELEMENTS_SCHEMA,
+  ElementRef,
+  EventEmitter,
+  Injector,
+  Output,
+  inject,
+} from '@angular/core';
 import {
   ComponentFixture,
   TestBed,
@@ -31,17 +39,40 @@ import {
 import {MatDialog} from '@angular/material/dialog';
 import {MatMenuModule} from '@angular/material/menu';
 import {MatSnackBar} from '@angular/material/snack-bar';
+import {By} from '@angular/platform-browser';
 import {Router, provideRouter} from '@angular/router';
 import {of} from 'rxjs';
 import {environment} from '../../../environments/environment';
 import {AppInjector, setAppInjector} from '../../app-injector';
+import {MediaItem} from '../../common/models/media-item.model';
 import {GallerySearchDto} from '../../common/models/search.model';
 import {NotificationService} from '../../common/services/notification.service';
 import {WorkspaceStateService} from '../../services/workspace/workspace-state.service';
+import {FeedComposerComponent} from './feed-composer/feed-composer.component';
 import {
   ACTIVE_JOBS_POLL_MS,
   GenerationsFeedComponent,
 } from './generations-feed.component';
+
+/**
+ * Stands in for the prompt bar: the feed only listens for `submitted` and
+ * calls `focusPrompt`. `implements` ties it to the real component's members.
+ */
+@Component({
+  selector: 'app-feed-composer',
+  template: '<textarea></textarea>',
+  standalone: true,
+})
+class FeedComposerStub
+  implements Pick<FeedComposerComponent, 'submitted' | 'focusPrompt'>
+{
+  @Output() submitted = new EventEmitter<MediaItem>();
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+
+  focusPrompt(): void {
+    this.host.nativeElement.querySelector('textarea')!.focus();
+  }
+}
 
 /**
  * Stands in for IntersectionObserver so a test decides when the scroll
@@ -155,7 +186,7 @@ describe('GenerationsFeedComponent', () => {
     setAppInjector({get: () => notifications} as unknown as Injector);
 
     TestBed.configureTestingModule({
-      imports: [MatMenuModule],
+      imports: [MatMenuModule, FeedComposerStub],
       declarations: [GenerationsFeedComponent],
       providers: [
         provideHttpClient(),
@@ -261,6 +292,13 @@ describe('GenerationsFeedComponent', () => {
     visibility = state;
     document.dispatchEvent(new Event('visibilitychange'));
   }
+
+  const composer = () =>
+    fixture.debugElement.query(By.directive(FeedComposerStub));
+
+  /** The prompt bar reports a job it started. */
+  const submitFromBar = () =>
+    composer().componentInstance.submitted.emit({id: 101} as MediaItem);
 
   const inFlight = () =>
     el()
@@ -674,6 +712,44 @@ describe('GenerationsFeedComponent', () => {
     closeFeed();
   }));
 
+  describe('the prompt bar', () => {
+    const states = [
+      {name: 'loading', total: 3, answer: false, shows: 'Loading generations'},
+      {name: 'empty', total: 0, answer: true, shows: 'No generations in this'},
+    ];
+    for (const {name, total, answer, shows} of states) {
+      it(`is there while the feed is ${name}`, fakeAsync(() => {
+        const first = start();
+        if (answer) answerSearch(first, total);
+        fixture.detectChanges();
+
+        expect(el().textContent).toContain(shows);
+        expect(composer()).not.toBeNull();
+        if (!answer) answerSearch(first, total);
+        closeFeed();
+      }));
+    }
+
+    // The bar comes after every row in the tab order, and more rows load in
+    // before it as the user scrolls; the skip button is the way past them.
+    it('moves focus into the bar from the skip button', fakeAsync(() => {
+      answerSearch(start(), 3);
+      answerActive([], []);
+      fixture.detectChanges();
+
+      // Karma's frame is narrower than the md breakpoint, where the bar is
+      // hidden and cannot take focus.
+      el().querySelector<HTMLElement>('.feed-composer')!.style.display =
+        'block';
+      el()
+        .querySelector<HTMLElement>('[data-testid="feed-skip-to-prompt"]')!
+        .click();
+
+      expect(document.activeElement).toBe(el().querySelector('textarea'));
+      closeFeed();
+    }));
+  });
+
   describe('in-flight generations', () => {
     it('counts the image and video jobs together, and hides the count once none are left', fakeAsync(() => {
       answerSearch(start(), 3);
@@ -875,6 +951,39 @@ describe('GenerationsFeedComponent', () => {
       expect(rowIds()).toEqual(newest);
       closeFeed();
     }));
+
+    describe('when the prompt bar submits', () => {
+      // A read already out may have left before the backend wrote the new
+      // job's row, so it cannot be left to answer, and a tick still waiting
+      // on it must not swallow the request for a fresh one.
+      for (const readOut of [false, true]) {
+        it(`shows the new job at once, with ${readOut ? 'a' : 'no'} read out`, fakeAsync(() => {
+          answerSearch(start(), 3);
+          answerActive([], []);
+          const stale: TestRequest[] = [];
+          if (readOut) {
+            tick(ACTIVE_JOBS_POLL_MS);
+            stale.push(
+              httpMock.expectOne(activeImagesUrl),
+              httpMock.expectOne(activeVideosUrl),
+            );
+            tick(ACTIVE_JOBS_POLL_MS);
+            expect(pollRequests())
+              .withContext('a slow read should skip the next tick')
+              .toBe(0);
+          }
+
+          submitFromBar();
+          tick();
+          for (const read of stale) expect(read.cancelled).toBeTrue();
+          answerActive([activeJob(101)], []);
+          fixture.detectChanges();
+
+          expect(inFlight()).toBe('1 generating');
+          closeFeed();
+        }));
+      }
+    });
 
     describe('a long job that finishes below the first page', () => {
       // Rows are made a second apart; the search sorts by start time.
