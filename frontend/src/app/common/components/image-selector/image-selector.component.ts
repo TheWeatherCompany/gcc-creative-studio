@@ -20,7 +20,8 @@ import {
   MatDialog,
   MatDialogRef,
 } from '@angular/material/dialog';
-import {finalize, forkJoin, Observable} from 'rxjs';
+import {catchError, finalize, forkJoin, map, Observable, of} from 'rxjs';
+import {partitionByAccept, withInferredType} from '../../upload/upload-files';
 import {MatSnackBar} from '@angular/material/snack-bar';
 import {UserService} from '../../services/user.service';
 import {
@@ -149,10 +150,6 @@ export class ImageSelectorComponent implements OnInit {
   /** Entry point for dropped, pasted and picked files. */
   onFilesAdded(files: File[]): void {
     if (this.isUploading || files.length === 0) return;
-    if (files.length === 1) {
-      this.handleFileSelect(files[0]);
-      return;
-    }
 
     const limit = this.data.maxSelection ?? files.length;
     const batch = files.slice(0, limit);
@@ -162,6 +159,12 @@ export class ImageSelectorComponent implements OnInit {
         `Only the first ${limit} of ${files.length} files were added.`,
       );
     }
+    // A single file, including one left after the cap, keeps the existing
+    // path so Edit before upload still applies.
+    if (batch.length === 1) {
+      this.handleFileSelect(batch[0]);
+      return;
+    }
     if (this.shouldCrop) {
       handleInfoSnackbar(
         this.snackBar,
@@ -170,13 +173,37 @@ export class ImageSelectorComponent implements OnInit {
     }
 
     this.isUploading = true;
-    // If one upload fails the others have already landed; retrying is safe
-    // because the backend dedupes by file hash.
-    forkJoin(batch.map(file => this.uploadFile(file)))
+    // Each upload catches its own error so one failure cannot cancel the
+    // others; the dialog closes with whatever made it.
+    forkJoin(
+      batch.map(file =>
+        this.uploadFile(file).pipe(
+          map(asset => ({file, asset})),
+          catchError(error => of({file, error})),
+        ),
+      ),
+    )
       .pipe(finalize(() => (this.isUploading = false)))
-      .subscribe({
-        next: uploaded => this.dialogRef.close(uploaded),
-        error: err => handleErrorSnackbar(this.snackBar, err, 'Upload'),
+      .subscribe(results => {
+        const uploaded: SourceAssetResponseDto[] = [];
+        const failed: File[] = [];
+        for (const result of results) {
+          if ('asset' in result) {
+            uploaded.push(result.asset);
+          } else {
+            console.error('Upload failed for', result.file.name, result.error);
+            failed.push(result.file);
+          }
+        }
+        if (failed.length) {
+          const names = failed.map(f => f.name).join(', ');
+          handleErrorSnackbar(
+            this.snackBar,
+            new Error(`Couldn't upload ${names}.`),
+            'Upload',
+          );
+        }
+        if (uploaded.length) this.dialogRef.close(uploaded);
       });
   }
 
@@ -212,7 +239,14 @@ export class ImageSelectorComponent implements OnInit {
 
   onFileInputChange(event: Event): void {
     const input = event.currentTarget as HTMLInputElement;
-    this.onFilesAdded(Array.from(input.files ?? []));
+    // The input's accept attribute is only a hint (some pickers offer "All
+    // files"), so filter the same way drop and paste do.
+    const {accepted, rejected} = partitionByAccept(
+      Array.from(input.files ?? []).map(withInferredType),
+      this.getAcceptTypes(),
+    );
+    if (rejected.length) this.onFilesRejected(rejected);
+    this.onFilesAdded(accepted);
     // Lets the user pick the same file twice in a row.
     input.value = '';
   }

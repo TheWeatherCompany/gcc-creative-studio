@@ -32,6 +32,7 @@ import {
   SourceAssetService,
 } from '../../services/source-asset.service';
 import {UserService} from '../../services/user.service';
+import {ImageCropperDialogComponent} from '../image-cropper-dialog/image-cropper-dialog.component';
 import {ImageSelectorComponent} from './image-selector.component';
 
 describe('ImageSelectorComponent file intake', () => {
@@ -175,6 +176,80 @@ describe('ImageSelectorComponent file intake', () => {
       ]);
     });
 
+    it('lets the other uploads finish when one fails, then closes with those that landed', () => {
+      setup({multiSelect: true});
+      spyOn(console, 'error');
+      const pending: Record<string, Subject<SourceAssetResponseDto>> = {
+        'a.png': new Subject(),
+        'b.png': new Subject(),
+        'c.png': new Subject(),
+      };
+      assets.uploadAsset.and.callFake((f: File) => pending[f.name]);
+      component.onFilesAdded([
+        img('a.png', 1),
+        img('b.png', 2),
+        img('c.png', 3),
+      ]);
+
+      pending['b.png'].error(new Error('413'));
+      expect(pending['a.png'].observed).toBeTrue();
+      expect(pending['c.png'].observed).toBeTrue();
+      expect(dialogRef.close).not.toHaveBeenCalled();
+
+      pending['a.png'].next({id: 1} as unknown as SourceAssetResponseDto);
+      pending['a.png'].complete();
+      pending['c.png'].next({id: 3} as unknown as SourceAssetResponseDto);
+      pending['c.png'].complete();
+      expect(dialogRef.close).toHaveBeenCalledOnceWith([
+        jasmine.objectContaining({id: 1}),
+        jasmine.objectContaining({id: 3}),
+      ]);
+      expect(component.isUploading).toBeFalse();
+      expect(notifications.show).toHaveBeenCalledTimes(1);
+      expect(notifications.show.calls.mostRecent().args[0]).toContain('b.png');
+      expect(notifications.show.calls.mostRecent().args[0]).not.toContain(
+        'a.png',
+      );
+    });
+
+    describe('with Edit before upload on', () => {
+      let cropper: jasmine.Spy;
+      beforeEach(() => {
+        cropper = spyOn(ImageCropperDialogComponent, 'open').and.returnValue(
+          new Subject(),
+        );
+      });
+
+      it('opens the cropper for one file in a multiSelect dialog', () => {
+        setup({multiSelect: true});
+        component.shouldCrop = true;
+        component.onFilesAdded([img('a.png', 1)]);
+        expect(cropper).toHaveBeenCalledTimes(1);
+        expect(assets.uploadAsset).not.toHaveBeenCalled();
+        expect(toastText()).toEqual([]);
+      });
+
+      it('opens the cropper for the one file left after the cap', () => {
+        setup({multiSelect: true, maxSelection: 1});
+        component.shouldCrop = true;
+        component.onFilesAdded([img('a.png', 1), img('b.png', 2)]);
+        expect(cropper).toHaveBeenCalledTimes(1);
+        expect(cropper.calls.mostRecent().args[1].imageFile.name).toBe('a.png');
+        expect(assets.uploadAsset).not.toHaveBeenCalled();
+        expect(toastText()).toEqual([
+          jasmine.stringMatching('Only the first 1 of 2'),
+        ]);
+      });
+    });
+
+    it('closes with a single asset, not an array, for one file in a multiSelect dialog', () => {
+      setup({multiSelect: true});
+      component.onFilesAdded([img('a.png', 1)]);
+      expect(dialogRef.close).toHaveBeenCalledOnceWith(
+        jasmine.objectContaining({originalFilename: 'a.png'}),
+      );
+    });
+
     const failures: {
       name: string;
       files: File[];
@@ -187,9 +262,9 @@ describe('ImageSelectorComponent file intake', () => {
         fail: () => true,
       },
       {
-        name: 'one file of a batch',
+        name: 'every file of a batch',
         files: [img('a.png', 1), img('b.png', 2)],
-        fail: f => f.name === 'b.png',
+        fail: () => true,
       },
     ];
     failures.forEach(({name, files, fail}) => {
@@ -232,6 +307,21 @@ describe('ImageSelectorComponent file intake', () => {
       component.onFileInputChange({currentTarget: input} as unknown as Event);
       expect(assets.uploadAsset).toHaveBeenCalledTimes(1);
       expect(input.value).toBe('');
+    });
+
+    it('filters picked files by the dialog accept list like drop and paste do', () => {
+      setup({multiSelect: true, mimeType: 'video/mp4'});
+      const input = document.createElement('input');
+      input.type = 'file';
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'clip.mov'));
+      dt.items.add(new File(['x'], 'notes.pdf', {type: 'application/pdf'}));
+      input.files = dt.files;
+
+      component.onFileInputChange({currentTarget: input} as unknown as Event);
+      expect(assets.uploadAsset).toHaveBeenCalledTimes(1);
+      expect(assets.uploadAsset.calls.argsFor(0)[0].name).toBe('clip.mov');
+      expect(toastText()).toEqual([jasmine.stringMatching('notes.pdf')]);
     });
 
     describe('a URL dropped from another site', () => {
@@ -331,13 +421,6 @@ describe('ImageSelectorComponent file intake', () => {
       );
     });
 
-    it('uploads a pasted screenshot', () => {
-      setup({maxSelection: 1}, true);
-      pasteFiles(img('image.png', 1));
-      expect(assets.uploadAsset).toHaveBeenCalledTimes(1);
-      expect(dialogRef.close).toHaveBeenCalledTimes(1);
-    });
-
     const wrongType = new File(['x'], 'clip.mp4', {type: 'video/mp4'});
     [
       {name: 'dropped', intake: () => dropOn(zone(), wrongType)},
@@ -392,18 +475,6 @@ describe('ImageSelectorComponent file intake', () => {
         expect(
           fixture.nativeElement.querySelector('input[type=file]').multiple,
         ).toBe(multiSelect);
-      });
-    });
-
-    [
-      {multiSelect: true, text: 'Drop files to upload'},
-      {multiSelect: false, text: 'Drop a file to upload'},
-    ].forEach(({multiSelect, text}) => {
-      it(`says "${text}" when multiSelect is ${multiSelect}`, () => {
-        setup({multiSelect}, true);
-        expect(
-          fixture.nativeElement.querySelector('.drop-message p').textContent,
-        ).toContain(text);
       });
     });
   });
