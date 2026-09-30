@@ -48,4 +48,40 @@ describe('AppComponent', () => {
     const app = fixture.componentInstance;
     expect(app.title).toEqual('creative-studio');
   });
+
+  describe('stray file drops', () => {
+    function dispatchOnWindow(type: string, dt: DataTransfer): DragEvent {
+      const event = new DragEvent(type, {
+        dataTransfer: dt,
+        bubbles: true,
+        cancelable: true,
+      });
+      window.dispatchEvent(event);
+      return event;
+    }
+
+    function fileTransfer(): DataTransfer {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'a.png', {type: 'image/png'}));
+      return dt;
+    }
+
+    it('stops the browser opening a file dropped outside every zone', () => {
+      TestBed.createComponent(AppComponent);
+      expect(
+        dispatchOnWindow('dragover', fileTransfer()).defaultPrevented,
+      ).toBeTrue();
+      expect(
+        dispatchOnWindow('drop', fileTransfer()).defaultPrevented,
+      ).toBeTrue();
+    });
+
+    it('leaves drags without files alone', () => {
+      TestBed.createComponent(AppComponent);
+      const dt = new DataTransfer();
+      dt.setData('application/json', '{"mediaItemIds":[1]}');
+      expect(dispatchOnWindow('dragover', dt).defaultPrevented).toBeFalse();
+      expect(dispatchOnWindow('drop', dt).defaultPrevented).toBeFalse();
+    });
+  });
 });

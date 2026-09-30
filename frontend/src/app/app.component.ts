@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {Component} from '@angular/core';
+import {Component, HostListener} from '@angular/core';
 import {Router, NavigationEnd, Event as NavigationEvent} from '@angular/router';
 import {trigger, transition, style, query, animate} from '@angular/animations';
 import {LoadingService} from './common/services/loading.service';
@@ -75,5 +75,15 @@ export class AppComponent {
         }
       }
     });
+  }
+
+  // A file dropped outside every drop zone would otherwise replace the app
+  // with the file, losing whatever the user had typed.
+  @HostListener('window:dragover', ['$event'])
+  @HostListener('window:drop', ['$event'])
+  preventStrayFileDrop(event: DragEvent): void {
+    if (event.dataTransfer?.types.includes('Files')) {
+      event.preventDefault();
+    }
   }
 }
