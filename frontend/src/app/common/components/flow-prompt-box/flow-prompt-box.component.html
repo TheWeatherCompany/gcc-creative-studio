@@ -178,80 +178,62 @@
         <ng-container
           *ngIf="isFramesToVideo() || isConcatenateVideo() || isExtendVideo()"
         >
-          <!-- Slot 1: Always shown for these modes -->
-          <div
-            class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
-            data-testid="frame-slot-1"
-            (click)="openImageSelector.emit(1)"
-            appFileDrop
-            [appFileDropAccept]="slotAccept"
-            (filesDropped)="slotFileAdded.emit({num: 1, file: $event[0]})"
-            (filesRejected)="onFilesRejected($event)"
-          >
-            <ng-container *ngIf="!image1Preview">
-              <mat-icon class="text-neutral-500">add</mat-icon>
-            </ng-container>
-            <ng-container *ngIf="image1Preview">
-              <div class="group absolute inset-0 rounded-lg overflow-hidden">
-                <img [src]="image1Preview" class="h-full w-full object-cover" />
-                <ng-container *ngIf="canEditImgSlot()">
-                  <ng-container
-                    *ngTemplateOutlet="editOverlay; context: {num: 1}"
-                  ></ng-container>
-                </ng-container>
-              </div>
-              <button
-                (click)="
-                  $event.stopPropagation();
-                  clearImage.emit({num: 1, event: $event})
-                "
-                class="absolute -right-2 -top-2 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white"
+          <!-- Slot 1 always; the arrow and slot 2 except in Extend Video -->
+          @for (num of frameSlots(); track num) {
+            @if (num === 2) {
+              <mat-icon class="text-neutral-500">compare_arrows</mat-icon>
+            }
+            <!-- Only a host that takes the file gets the drop -->
+            @if (slotFileAdded.observed) {
+              <div
+                class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
+                [attr.data-testid]="'frame-slot-' + num"
+                (click)="openImageSelector.emit(num)"
+                appFileDrop
+                [appFileDropAccept]="slotAccept"
+                (filesDropped)="slotFileAdded.emit({num, file: $event[0]})"
+                (filesRejected)="onFilesRejected($event)"
               >
-                <mat-icon class="!h-4 !w-4 text-sm">close</mat-icon>
-              </button>
-            </ng-container>
-          </div>
-
-          <!-- Arrow: Shown only if we have a second slot -->
-          <mat-icon *ngIf="!isExtendVideo()" class="text-neutral-500"
-            >compare_arrows</mat-icon
-          >
-
-          <!-- Slot 2: Shown for Frames to Video and Concatenate Video -->
-          <div
-            *ngIf="mode !== 'Extend Video'"
-            class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
-            data-testid="frame-slot-2"
-            (click)="openImageSelector.emit(2)"
-            appFileDrop
-            [appFileDropAccept]="slotAccept"
-            (filesDropped)="slotFileAdded.emit({num: 2, file: $event[0]})"
-            (filesRejected)="onFilesRejected($event)"
-          >
-            <ng-container *ngIf="!image2Preview">
-              <mat-icon class="text-neutral-500">add</mat-icon>
-            </ng-container>
-            <ng-container *ngIf="image2Preview">
-              <div class="group absolute inset-0 rounded-lg overflow-hidden">
-                <img [src]="image2Preview" class="h-full w-full object-cover" />
-                <ng-container *ngIf="canEditImgSlot()">
-                  <ng-container
-                    *ngTemplateOutlet="editOverlay; context: {num: 2}"
-                  ></ng-container>
-                </ng-container>
+                <ng-container
+                  *ngTemplateOutlet="frameSlotContent; context: {num}"
+                ></ng-container>
               </div>
-              <button
-                (click)="
-                  $event.stopPropagation();
-                  clearImage.emit({num: 2, event: $event})
-                "
-                class="absolute -right-2 -top-2 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white"
+            } @else {
+              <div
+                class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
+                [attr.data-testid]="'frame-slot-' + num"
+                (click)="openImageSelector.emit(num)"
               >
-                <mat-icon class="!h-4 !w-4 text-sm">close</mat-icon>
-              </button>
-            </ng-container>
-          </div>
+                <ng-container
+                  *ngTemplateOutlet="frameSlotContent; context: {num}"
+                ></ng-container>
+              </div>
+            }
+          }
         </ng-container>
+
+        <ng-template #frameSlotContent let-num="num">
+          @let preview = num === 1 ? image1Preview : image2Preview;
+          <ng-container *ngIf="!preview">
+            <mat-icon class="text-neutral-500">add</mat-icon>
+          </ng-container>
+          <ng-container *ngIf="preview">
+            <div class="group absolute inset-0 rounded-lg overflow-hidden">
+              <img [src]="preview" class="h-full w-full object-cover" />
+              <ng-container *ngIf="canEditImgSlot()">
+                <ng-container
+                  *ngTemplateOutlet="editOverlay; context: {num}"
+                ></ng-container>
+              </ng-container>
+            </div>
+            <button
+              (click)="$event.stopPropagation(); clearImage.emit({num, event: $event})"
+              class="absolute -right-2 -top-2 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white"
+            >
+              <mat-icon class="!h-4 !w-4 text-sm">close</mat-icon>
+            </button>
+          </ng-container>
+        </ng-template>
 
         <!-- Unified Ingredients Mode Inputs -->
         <ng-container
@@ -260,33 +242,57 @@
           "
         >
           <ng-container *ngIf="getSelectedModelObject() as model">
-            <div
-              class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
-              [class.opacity-50]="
-                referenceImages.length >= model.capabilities.maxReferenceImages
-              "
-              (click)="
-                referenceImages.length <
-                  model.capabilities.maxReferenceImages &&
-                  openImageSelectorForReference.emit()
-              "
-              data-testid="reference-drop-zone"
-              appFileDrop
-              appFileDropAccept="image/*"
-              [appFileDropMultiple]="true"
-              [appFileDropDisabled]="
-                referenceImages.length >= model.capabilities.maxReferenceImages
-              "
-              (filesDropped)="referenceFilesAdded.emit($event)"
-              (filesRejected)="onFilesRejected($event)"
-            >
+            @if (referenceFilesAdded.observed) {
+              <div
+                class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
+                [class.opacity-50]="
+                  referenceImages.length >= model.capabilities.maxReferenceImages
+                "
+                (click)="
+                  referenceImages.length <
+                    model.capabilities.maxReferenceImages &&
+                    openImageSelectorForReference.emit()
+                "
+                data-testid="reference-drop-zone"
+                appFileDrop
+                appFileDropAccept="image/*"
+                [appFileDropMultiple]="true"
+                [appFileDropDisabled]="
+                  referenceImages.length >= model.capabilities.maxReferenceImages
+                "
+                (filesDropped)="referenceFilesAdded.emit($event)"
+                (filesRejected)="onFilesRejected($event)"
+              >
+                <ng-container
+                  *ngTemplateOutlet="referenceZoneContent; context: {model}"
+                ></ng-container>
+              </div>
+            } @else {
+              <div
+                class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
+                [class.opacity-50]="
+                  referenceImages.length >= model.capabilities.maxReferenceImages
+                "
+                (click)="
+                  referenceImages.length <
+                    model.capabilities.maxReferenceImages &&
+                    openImageSelectorForReference.emit()
+                "
+                data-testid="reference-drop-zone"
+              >
+                <ng-container
+                  *ngTemplateOutlet="referenceZoneContent; context: {model}"
+                ></ng-container>
+              </div>
+            }
+            <ng-template #referenceZoneContent let-model="model">
               <mat-icon class="text-neutral-500">add</mat-icon>
               <span class="absolute bottom-0 text-[10px] text-neutral-500"
                 >{{ referenceImages.length }}/{{
                   model.capabilities.maxReferenceImages
                 }}</span
               >
-            </div>
+            </ng-template>
             <!-- Show small previews of reference images -->
             <div class="flex flex-wrap gap-1">
               <div

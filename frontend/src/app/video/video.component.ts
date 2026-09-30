@@ -76,6 +76,10 @@ import {
   handleSuccessSnackbar,
 } from '../utils/handleMessageSnackbar';
 import {NumPos} from '../common/components/flow-prompt-box/flow-prompt-box.component';
+import {
+  PendingUploads,
+  uploadReferenceFiles,
+} from '../common/components/flow-prompt-box/prompt-box-uploads';
 
 @Component({
   selector: 'app-video',
@@ -106,6 +110,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
   // --- Component State ---
   videoDocuments: MediaItem | null = null;
   isLoading = false;
+  /** Slot and reference uploads from a drop or paste; Generate waits for them. */
+  private uploads = new PendingUploads();
   isAudioGenerationDisabled = false;
   startImageAssetId: number | null = null;
   endImageAssetId: number | null = null;
@@ -664,12 +670,13 @@ export class VideoComponent implements OnInit, AfterViewInit {
     }
 
     // If we are entering Frames to Video mode, ensure we only keep image inputs.
+    // Slot 2 first: clearing slot 1 moves a video in slot 2 into slot 1.
     if (mode === 'Frames to Video') {
-      if (this.image1Preview && this._input1IsVideo) {
-        this.clearVideo(1);
-      }
       if (this.image2Preview && this._input2IsVideo) {
         this.clearVideo(2);
+      }
+      if (this.image1Preview && this._input1IsVideo) {
+        this.clearVideo(1);
       }
     }
 
@@ -696,6 +703,13 @@ export class VideoComponent implements OnInit, AfterViewInit {
   }
 
   searchTerm() {
+    if (this.uploads.any) {
+      handleInfoSnackbar(
+        this._snackBar,
+        'Wait for the upload to finish, then generate.',
+      );
+      return;
+    }
     const activeWorkspaceId = this.workspaceStateService.getActiveWorkspaceId();
     if (!activeWorkspaceId) {
       handleErrorSnackbar(
@@ -1191,8 +1205,12 @@ export class VideoComponent implements OnInit, AfterViewInit {
 
   uploadImageDirectly(file: File, imageNumber: NumPos) {
     this.isLoading = true;
-    this.sourceAssetService
-      .uploadAsset(file, {assetType: AssetTypeEnum.GENERIC_IMAGE})
+    this.uploads
+      .track(
+        this.sourceAssetService.uploadAsset(file, {
+          assetType: AssetTypeEnum.GENERIC_IMAGE,
+        }),
+      )
       .pipe(finalize(() => (this.isLoading = false)))
       .subscribe({
         next: (asset: SourceAssetResponseDto) => {
@@ -1245,8 +1263,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
   uploadVideoDirectly(file: File, imageNumber: NumPos) {
     this.isLoading = true;
     // No aspectRatio is sent for videos, so we don't pass the second argument
-    this.sourceAssetService
-      .uploadAsset(file)
+    this.uploads
+      .track(this.sourceAssetService.uploadAsset(file))
       .pipe(finalize(() => (this.isLoading = false)))
       .subscribe({
         next: (asset: SourceAssetResponseDto) => {
@@ -1780,36 +1798,30 @@ export class VideoComponent implements OnInit, AfterViewInit {
    * straight away; the edit overlay on each thumbnail opens the cropper.
    */
   onReferenceFilesAdded(files: File[]): void {
-    // Read on each use: adding the first reference can switch the model.
-    const max = () =>
-      this.currentModelConfig()?.capabilities.maxReferenceImages ?? 3;
-    const remaining = max() - this.referenceImages.length;
-    if (remaining <= 0) return;
-    if (files.length > remaining) {
-      handleInfoSnackbar(
-        this._snackBar,
-        `Only the first ${remaining} of ${files.length} images were added.`,
-      );
-    }
-    files.slice(0, remaining).forEach(file => {
-      this.sourceAssetService
-        .uploadAsset(file, {assetType: AssetTypeEnum.GENERIC_IMAGE})
-        .subscribe({
-          next: asset => {
-            // Uploads land in any order, and a second paste can start
-            // before the first lands.
-            if (!asset?.id || this.referenceImages.length >= max()) return;
-            this.referenceImages.push({
-              sourceAssetId: asset.id,
-              previewUrl: asset.presignedUrl || '',
-            });
-            this.handleReferenceImageAdded();
-            this.saveState();
-          },
-          error: err =>
-            handleErrorSnackbar(this._snackBar, err, 'Image upload'),
-        });
-    });
+    uploadReferenceFiles(
+      files,
+      {
+        maxReferences: () =>
+          this.currentModelConfig()?.capabilities.maxReferenceImages ?? 3,
+        referenceCount: () => this.referenceImages.length,
+        takesReferences: () => this.currentMode === 'Ingredients to Video',
+        upload: file =>
+          this.uploads.track(
+            this.sourceAssetService.uploadAsset(file, {
+              assetType: AssetTypeEnum.GENERIC_IMAGE,
+            }),
+          ),
+        add: asset => {
+          this.referenceImages.push({
+            sourceAssetId: asset.id,
+            previewUrl: asset.presignedUrl || '',
+          });
+          this.handleReferenceImageAdded();
+          this.saveState();
+        },
+      },
+      this._snackBar,
+    );
   }
 
   private handleReferenceImageAdded(): void {

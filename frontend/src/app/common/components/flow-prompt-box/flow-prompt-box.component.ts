@@ -255,6 +255,7 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   isIngredientsMode = computed(() =>
     this.selectedMode().startsWith('Ingredients to'),
   );
+  frameSlots = computed<NumPos[]>(() => (this.isExtendVideo() ? [1] : [1, 2]));
   canEditImgSlot = computed(
     () => !this.isExtendVideo() && !this.isConcatenateVideo(),
   );
@@ -325,9 +326,16 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     return this.referenceFilesAdded.observed || this.slotFileAdded.observed;
   }
 
-  /** Paste takes images in image and ingredients modes, else whatever the slots take. */
+  /**
+   * Paste takes images in image, ingredients and text-only modes, else
+   * whatever the slots take. In Text to Video, `slotAccept` reflects inputs
+   * left over from an earlier mode, and a pasted video would move the page
+   * on to Extend Video and clear the prompt.
+   */
   pasteAccept(): string {
-    return this.isImageMode() || this.isIngredientsMode()
+    return this.isImageMode() ||
+      this.isIngredientsMode() ||
+      this.isTextToVideo()
       ? 'image/*'
       : this.slotAccept;
   }

@@ -396,6 +396,7 @@ describe('FlowPromptBoxComponent', () => {
         slot?: number;
         switchTo?: string;
         rejected?: boolean;
+        slotAccept?: string;
       }[] = [
         {
           name: 'Ingredients to Image adds every image as a reference',
@@ -463,9 +464,18 @@ describe('FlowPromptBoxComponent', () => {
           slot: 1,
         },
         {
-          name: 'Text to Video hands a video to the start slot too',
+          // A video would move the page on to Extend Video and clear the
+          // prompt the user typed.
+          name: 'Text to Video takes no video',
           mode: 'Text to Video',
           files: [mp4],
+          rejected: true,
+        },
+        {
+          name: 'Text to Video takes an image even when leftover inputs narrow the slots',
+          mode: 'Text to Video',
+          slotAccept: 'video/mp4',
+          files: [png()],
           switchTo: 'Frames to Video',
           slot: 1,
         },
@@ -491,6 +501,7 @@ describe('FlowPromptBoxComponent', () => {
       for (const c of cases) {
         it(c.name, () => {
           bindFileOutputs();
+          if (c.slotAccept) component.slotAccept = c.slotAccept;
           show(c.mode, {start: c.start});
           if (c.offered) {
             component.modes = allModes.filter(m =>
@@ -540,6 +551,84 @@ describe('FlowPromptBoxComponent', () => {
           show('Frames to Video');
           expect(paste(png()).defaultPrevented).toBeTrue();
         });
+      }
+    });
+
+    // As with paste, a host that takes no files (the feed composer) leaves
+    // the drag alone: no highlight, and nothing claims the drop.
+    describe('drop zones', () => {
+      const flashImage = MODEL_CONFIGS.find(
+        m => m.value === 'gemini-2.5-flash-image',
+      )!;
+      const zones: {zone: string; mode: string; own: 'slot' | 'refs'}[] = [
+        {zone: 'frame-slot-1', mode: 'Frames to Video', own: 'slot'},
+        {zone: 'frame-slot-2', mode: 'Frames to Video', own: 'slot'},
+        {
+          zone: 'reference-drop-zone',
+          mode: 'Ingredients to Image',
+          own: 'refs',
+        },
+      ];
+      const binds = ['nothing', 'only the other output', 'its output'] as const;
+
+      for (const {zone, mode, own} of zones) {
+        for (const bound of binds) {
+          const takes = bound === 'its output';
+          it(`${zone} ${takes ? 'takes' : 'leaves'} a file drag when the host binds ${bound}`, () => {
+            component.generationModels = MODEL_CONFIGS;
+            component.selectedGenerationModel = flashImage.viewValue;
+            const other = own === 'slot' ? 'refs' : 'slot';
+            const output = {
+              slot: component.slotFileAdded,
+              refs: component.referenceFilesAdded,
+            } as const;
+            if (bound === 'its output') output[own].subscribe();
+            if (bound === 'only the other output') output[other].subscribe();
+            show(mode);
+            const el = (fixture.nativeElement as HTMLElement).querySelector(
+              `[data-testid="${zone}"]`,
+            )!;
+            const dt = new DataTransfer();
+            dt.items.add(png());
+            const drag = (type: string) => {
+              const e = new DragEvent(type, {
+                dataTransfer: dt,
+                bubbles: true,
+                cancelable: true,
+              });
+              el.dispatchEvent(e);
+              return e;
+            };
+
+            drag('dragenter');
+            fixture.detectChanges();
+            expect(el.classList.contains('file-drop-active'))
+              .withContext('highlight')
+              .toBe(takes);
+            expect(drag('drop').defaultPrevented)
+              .withContext('drop claimed')
+              .toBe(takes);
+          });
+        }
+      }
+    });
+
+    it('shows the second slot everywhere but Extend Video', () => {
+      bindFileOutputs();
+      for (const [mode, slots] of [
+        ['Frames to Video', ['frame-slot-1', 'frame-slot-2']],
+        ['Concatenate Video', ['frame-slot-1', 'frame-slot-2']],
+        ['Extend Video', ['frame-slot-1']],
+      ] as const) {
+        show(mode);
+        const shown = Array.from(
+          (fixture.nativeElement as HTMLElement).querySelectorAll(
+            '[data-testid^="frame-slot-"]',
+          ),
+        ).map(el => el.getAttribute('data-testid'));
+        expect(shown)
+          .withContext(mode)
+          .toEqual([...slots]);
       }
     });
 
