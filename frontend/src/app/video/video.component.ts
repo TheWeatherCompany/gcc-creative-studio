@@ -1260,24 +1260,9 @@ export class VideoComponent implements OnInit, AfterViewInit {
       });
   }
 
-  onDrop(event: DragEvent, imageNumber: NumPos) {
-    event.preventDefault();
-    const file = event.dataTransfer?.files[0];
-    if (file) {
-      if (file.type.startsWith('image/')) {
-        // If it's an IMAGE, upload it directly
-        this.uploadImageDirectly(file, imageNumber);
-      } else if (file.type.startsWith('video/')) {
-        // If it's a VIDEO, upload it directly
-        this.uploadVideoDirectly(file, imageNumber);
-      } else {
-        handleErrorSnackbar(
-          this._snackBar,
-          {message: 'Unsupported file type.'},
-          'File Upload',
-        );
-      }
-    }
+  /** A file dropped or pasted onto a start/end slot of the prompt box. */
+  onSlotFileAdded({num, file}: {num: NumPos; file: File}) {
+    this.handleFileUpload(file, num);
   }
 
   clearInput(imageNumber: NumPos) {
@@ -1448,6 +1433,11 @@ export class VideoComponent implements OnInit, AfterViewInit {
 
     // If any slot has something, restrict to that type's mimeType.
     return anyInputIsVideo ? 'video/mp4' : 'image/*';
+  }
+
+  /** What the prompt box's start/end slots accept from a drop or paste. */
+  get slotAcceptTypes(): string {
+    return this.getMimeTypeForSelector() ?? 'image/*,video/*';
   }
 
   private applyRemixState(remixState: {
@@ -1785,26 +1775,41 @@ export class VideoComponent implements OnInit, AfterViewInit {
     });
   }
 
-  // Called when DROPPING a file on the new drop zone
-  onReferenceImageDrop(event: DragEvent) {
-    event.preventDefault();
-    if (this.referenceImages.length >= 3) return;
-    const file = event.dataTransfer?.files[0];
-    if (file && file.type.startsWith('image/')) {
-      // For a direct drop, go straight to the cropper
-      ImageCropperDialogComponent.open(this.dialog, {
-        imageFile: file,
-      }).subscribe(result => {
-        if (result && result.id) {
-          this.referenceImages.push({
-            sourceAssetId: result.id,
-            previewUrl: result.presignedUrl || '',
-          });
-          this.handleReferenceImageAdded();
-          this.saveState();
-        }
-      });
+  /**
+   * Reference images dropped or pasted onto the prompt box. They upload
+   * straight away; the edit overlay on each thumbnail opens the cropper.
+   */
+  onReferenceFilesAdded(files: File[]): void {
+    // Read on each use: adding the first reference can switch the model.
+    const max = () =>
+      this.currentModelConfig()?.capabilities.maxReferenceImages ?? 3;
+    const remaining = max() - this.referenceImages.length;
+    if (remaining <= 0) return;
+    if (files.length > remaining) {
+      handleInfoSnackbar(
+        this._snackBar,
+        `Only the first ${remaining} of ${files.length} images were added.`,
+      );
     }
+    files.slice(0, remaining).forEach(file => {
+      this.sourceAssetService
+        .uploadAsset(file, {assetType: AssetTypeEnum.GENERIC_IMAGE})
+        .subscribe({
+          next: asset => {
+            // Uploads land in any order, and a second paste can start
+            // before the first lands.
+            if (!asset?.id || this.referenceImages.length >= max()) return;
+            this.referenceImages.push({
+              sourceAssetId: asset.id,
+              previewUrl: asset.presignedUrl || '',
+            });
+            this.handleReferenceImageAdded();
+            this.saveState();
+          },
+          error: err =>
+            handleErrorSnackbar(this._snackBar, err, 'Image upload'),
+        });
+    });
   }
 
   private handleReferenceImageAdded(): void {

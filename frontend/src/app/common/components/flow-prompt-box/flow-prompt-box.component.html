@@ -14,7 +14,15 @@
  limitations under the License.
 -->
 <!-- Container to manage relative positioning of menus -->
-<div class="relative w-full max-w-2xl">
+<div
+  class="relative w-full max-w-2xl"
+  appFilePaste
+  [appFilePasteAccept]="pasteAccept()"
+  [appFilePasteMultiple]="isIngredientsMode()"
+  [appFilePasteDisabled]="isLoading || !takesFiles"
+  (filesPasted)="onFilesPasted($event)"
+  (filesRejected)="onFilesRejected($event)"
+>
   <!-- ============================================= -->
   <!-- 1. Main Prompt Card                         -->
   <!-- ============================================= -->
@@ -156,7 +164,7 @@
           isConcatenateVideo()
             ? 'Prompt not needed for concatenation'
             : isImageMode()
-              ? 'Generate an image with text...'
+              ? 'Generate an image with text, or paste an image...'
               : 'Generate a video with text...'
         "
       ></textarea>
@@ -173,9 +181,12 @@
           <!-- Slot 1: Always shown for these modes -->
           <div
             class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
+            data-testid="frame-slot-1"
             (click)="openImageSelector.emit(1)"
-            (dragover)="$event.preventDefault()"
-            (drop)="$event.preventDefault(); openImageSelector.emit(1)"
+            appFileDrop
+            [appFileDropAccept]="slotAccept"
+            (filesDropped)="slotFileAdded.emit({num: 1, file: $event[0]})"
+            (filesRejected)="onFilesRejected($event)"
           >
             <ng-container *ngIf="!image1Preview">
               <mat-icon class="text-neutral-500">add</mat-icon>
@@ -210,9 +221,12 @@
           <div
             *ngIf="mode !== 'Extend Video'"
             class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
+            data-testid="frame-slot-2"
             (click)="openImageSelector.emit(2)"
-            (dragover)="$event.preventDefault()"
-            (drop)="$event.preventDefault(); openImageSelector.emit(2)"
+            appFileDrop
+            [appFileDropAccept]="slotAccept"
+            (filesDropped)="slotFileAdded.emit({num: 2, file: $event[0]})"
+            (filesRejected)="onFilesRejected($event)"
           >
             <ng-container *ngIf="!image2Preview">
               <mat-icon class="text-neutral-500">add</mat-icon>
@@ -256,10 +270,15 @@
                   model.capabilities.maxReferenceImages &&
                   openImageSelectorForReference.emit()
               "
-              (dragover)="$event.preventDefault()"
-              (drop)="
-                $event.preventDefault(); onReferenceImageDrop.emit($event)
+              data-testid="reference-drop-zone"
+              appFileDrop
+              appFileDropAccept="image/*"
+              [appFileDropMultiple]="true"
+              [appFileDropDisabled]="
+                referenceImages.length >= model.capabilities.maxReferenceImages
               "
+              (filesDropped)="referenceFilesAdded.emit($event)"
+              (filesRejected)="onFilesRejected($event)"
             >
               <mat-icon class="text-neutral-500">add</mat-icon>
               <span class="absolute bottom-0 text-[10px] text-neutral-500"

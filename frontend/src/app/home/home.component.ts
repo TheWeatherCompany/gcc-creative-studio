@@ -725,10 +725,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     this.clearImage(data.index, data.event as MouseEvent);
   }
 
-  onReferenceImageDrop(event: DragEvent) {
-    this.onDrop(event);
-  }
-
   onPromptChanged(prompt: string) {
     this.searchRequest.prompt = prompt;
     this.service.imagePrompt = prompt;
@@ -1215,27 +1211,38 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  onDrop(event: DragEvent, index?: number) {
-    event.preventDefault();
-    const files = event.dataTransfer?.files;
-    if (files && files.length > 0) {
-      // Handle multiple files if dropped
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        if (file.type.startsWith('image/')) {
-          this.sourceAssetService
-            .uploadAsset(file, {assetType: AssetTypeEnum.GENERIC_IMAGE})
-            .subscribe((result: SourceAssetResponseDto) => {
-              if (result && result.id) {
-                this.processInput(
-                  result,
-                  index !== undefined ? index + i : undefined,
-                );
-              }
-            });
-        }
-      }
+  /** Reference images dropped or pasted onto the prompt box. */
+  onReferenceFilesAdded(files: File[]) {
+    const maxRefs = () =>
+      this.selectedGenerationModelObject?.capabilities.maxReferenceImages ?? 10;
+    const remaining = maxRefs() - this.referenceImages.length;
+    if (remaining <= 0) {
+      handleInfoSnackbar(
+        this._snackBar,
+        `You can only add up to ${maxRefs()} reference images for this model.`,
+      );
+      return;
     }
+    if (files.length > remaining) {
+      handleInfoSnackbar(
+        this._snackBar,
+        `Only the first ${remaining} of ${files.length} images were added.`,
+      );
+    }
+    files.slice(0, remaining).forEach(file => {
+      this.sourceAssetService
+        .uploadAsset(file, {assetType: AssetTypeEnum.GENERIC_IMAGE})
+        .subscribe({
+          next: asset => {
+            // A second paste can start before the first lands, so the
+            // count checked above may be stale by now.
+            if (!asset?.id || this.referenceImages.length >= maxRefs()) return;
+            this.processInput(asset);
+          },
+          error: err =>
+            handleErrorSnackbar(this._snackBar, err, 'Image upload'),
+        });
+    });
   }
 
   clearImage(index: number, event: MouseEvent) {

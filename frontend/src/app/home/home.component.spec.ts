@@ -40,6 +40,10 @@ import {
   GenerationModelConfig,
   MODEL_CONFIGS,
 } from '../common/config/model-config';
+import {
+  SourceAssetResponseDto,
+  SourceAssetService,
+} from '../common/services/source-asset.service';
 
 describe('HomeComponent', () => {
   let component: HomeComponent;
@@ -468,5 +472,83 @@ describe('HomeComponent', () => {
     component.clearImage(0, event);
     expect(component.referenceImages.length).toBe(0);
     expect(event.stopPropagation).toHaveBeenCalled();
+  });
+
+  describe('dropped or pasted reference files', () => {
+    // Nano Banana (Gemini 2.5 Flash Image) takes two references.
+    const twoRefModel = MODEL_CONFIGS.find(
+      m => m.value === 'gemini-2.5-flash-image',
+    )!;
+    const png = (n: number) => new File(['x'], `${n}.png`, {type: 'image/png'});
+    const asset = (n: number) =>
+      ({
+        id: n,
+        gcsUri: `gs://bucket/${n}.png`,
+        presignedUrl: `https://storage.test/${n}.png`,
+      }) as SourceAssetResponseDto;
+    let uploadAsset: jasmine.Spy;
+    const toasts = () =>
+      mockNotificationService.show.calls.allArgs().map(a => [a[1], a[0]]);
+
+    beforeEach(() => {
+      component.selectedGenerationModelObject = twoRefModel;
+      component.referenceImages = [];
+      uploadAsset = spyOn(TestBed.inject(SourceAssetService), 'uploadAsset');
+      mockNotificationService.show.calls.reset();
+    });
+
+    it('uploads only as many as the model has room for', () => {
+      uploadAsset.and.callFake((f: File) => of(asset(parseInt(f.name))));
+      component.referenceImages = [{previewUrl: 'existing'}];
+
+      component.onReferenceFilesAdded([png(1), png(2), png(3)]);
+
+      expect(uploadAsset).toHaveBeenCalledTimes(1);
+      expect(component.referenceImages.map(r => r.previewUrl)).toEqual([
+        'existing',
+        'https://storage.test/1.png',
+      ]);
+      expect(toasts()).toEqual([
+        ['info', 'Only the first 1 of 3 images were added.'],
+      ]);
+    });
+
+    it('uploads nothing and says why when the model is full', () => {
+      component.referenceImages = [{previewUrl: 'a'}, {previewUrl: 'b'}];
+
+      component.onReferenceFilesAdded([png(1)]);
+
+      expect(uploadAsset).not.toHaveBeenCalled();
+      expect(toasts()).toEqual([
+        ['info', 'You can only add up to 2 reference images for this model.'],
+      ]);
+    });
+
+    // Two quick pastes each see both slots free before either upload lands.
+    it('stops at the limit when uploads from two pastes land together', () => {
+      const pending = new Map<string, Subject<SourceAssetResponseDto>>();
+      uploadAsset.and.callFake((f: File) => {
+        const s = new Subject<SourceAssetResponseDto>();
+        pending.set(f.name, s);
+        return s;
+      });
+
+      component.onReferenceFilesAdded([png(1)]);
+      component.onReferenceFilesAdded([png(2), png(3)]);
+      for (const [name, s] of pending) s.next(asset(parseInt(name)));
+
+      expect(component.referenceImages.length).toBe(2);
+    });
+
+    it('says the upload failed', () => {
+      uploadAsset.and.returnValue(
+        throwError(() => ({error: {detail: 'File too large'}})),
+      );
+
+      component.onReferenceFilesAdded([png(1)]);
+
+      expect(component.referenceImages).toEqual([]);
+      expect(toasts()).toEqual([['error', 'File too large']]);
+    });
   });
 });

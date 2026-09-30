@@ -40,6 +40,9 @@ import {FormsModule} from '@angular/forms';
 import {MatButtonModule} from '@angular/material/button';
 import {MatMenuModule} from '@angular/material/menu';
 import {MatTooltipModule} from '@angular/material/tooltip';
+import {FileDropDirective} from '../../upload/file-drop.directive';
+import {FilePasteDirective} from '../../upload/file-paste.directive';
+import {handleInfoSnackbar} from '../../../utils/handleMessageSnackbar';
 
 export type NumPos = 1 | 2;
 
@@ -54,6 +57,8 @@ export type NumPos = 1 | 2;
     MatButtonModule,
     MatMenuModule,
     MatTooltipModule,
+    FileDropDirective,
+    FilePasteDirective,
   ],
 })
 export class FlowPromptBoxComponent implements OnInit, OnDestroy {
@@ -147,7 +152,10 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   @Output() editImage = new EventEmitter<{num: NumPos}>();
   @Output() clearImage = new EventEmitter<{num: NumPos; event: Event}>();
   @Output() openImageSelectorForReference = new EventEmitter<void>();
-  @Output() onReferenceImageDrop = new EventEmitter<DragEvent>();
+  @Output() referenceFilesAdded = new EventEmitter<File[]>();
+  @Output() slotFileAdded = new EventEmitter<{num: NumPos; file: File}>();
+  /** What the start/end slots take right now; the host knows the mode rules. */
+  @Input() slotAccept = 'image/*,video/*';
   @Output() editReferenceImage = new EventEmitter<{
     index: number;
     ref: ReferenceImage;
@@ -244,6 +252,9 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   isTextToVideo = computed(() => this.selectedMode() === 'Text to Video');
   isVideoToImage = computed(() => this.selectedMode() === 'Video to Image');
   isImageMode = computed(() => this.selectedMode().includes('Image'));
+  isIngredientsMode = computed(() =>
+    this.selectedMode().startsWith('Ingredients to'),
+  );
   canEditImgSlot = computed(
     () => !this.isExtendVideo() && !this.isConcatenateVideo(),
   );
@@ -304,6 +315,57 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     } else if (index !== undefined && ref) {
       this.editReferenceImage.emit({index, ref});
     }
+  }
+
+  /**
+   * Hosts that bind neither file output (the feed composer) keep the
+   * browser's own paste instead of having it swallowed.
+   */
+  get takesFiles(): boolean {
+    return this.referenceFilesAdded.observed || this.slotFileAdded.observed;
+  }
+
+  /** Paste takes images in image and ingredients modes, else whatever the slots take. */
+  pasteAccept(): string {
+    return this.isImageMode() || this.isIngredientsMode()
+      ? 'image/*'
+      : this.slotAccept;
+  }
+
+  onFilesPasted(files: File[]): void {
+    if (this.isIngredientsMode()) {
+      this.referenceFilesAdded.emit(files);
+      return;
+    }
+    if (
+      this.isFramesToVideo() ||
+      this.isConcatenateVideo() ||
+      this.isExtendVideo()
+    ) {
+      const num: NumPos = this.image1Preview && !this.isExtendVideo() ? 2 : 1;
+      this.slotFileAdded.emit({num, file: files[0]});
+      return;
+    }
+    // A text-only mode moves to the mode that takes this input, as if the
+    // user had picked it from the menu.
+    const offered = (mode: string) => this.modes.some(m => m.value === mode);
+    if (
+      this.selectedMode() === 'Text to Image' &&
+      offered('Ingredients to Image')
+    ) {
+      this.selectMode('Ingredients to Image');
+      this.referenceFilesAdded.emit(files);
+    } else if (this.isTextToVideo() && offered('Frames to Video')) {
+      this.selectMode('Frames to Video');
+      this.slotFileAdded.emit({num: 1, file: files[0]});
+    }
+  }
+
+  onFilesRejected(files: File[]): void {
+    handleInfoSnackbar(
+      this.snackBar,
+      `Can't use ${files.map(f => f.name).join(', ')} here.`,
+    );
   }
 
   // --- Menu Toggles ---

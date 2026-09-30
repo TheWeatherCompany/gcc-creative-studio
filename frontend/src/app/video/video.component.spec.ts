@@ -35,9 +35,19 @@ import {NoopAnimationsModule} from '@angular/platform-browser/animations';
 import {provideHttpClient} from '@angular/common/http';
 import {provideHttpClientTesting} from '@angular/common/http/testing';
 import {provideRouter} from '@angular/router';
-import {CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
-import {of} from 'rxjs';
-import {MODEL_CONFIGS} from '../common/config/model-config';
+import {CUSTOM_ELEMENTS_SCHEMA, Injector} from '@angular/core';
+import {of, Subject, throwError} from 'rxjs';
+import {
+  GenerationModelConfig,
+  MODEL_CONFIGS,
+} from '../common/config/model-config';
+import {
+  SourceAssetResponseDto,
+  SourceAssetService,
+} from '../common/services/source-asset.service';
+import {NotificationService} from '../common/services/notification.service';
+import {setAppInjector} from '../app-injector';
+import {AssetTypeEnum} from '../admin/source-assets-management/source-asset.model';
 
 import {VideoComponent} from './video.component';
 import {SearchService} from '../services/search/search.service';
@@ -289,5 +299,159 @@ describe('VideoComponent', () => {
         endImageAssetId: {id: 12, type: 'source_asset'},
       }),
     );
+  });
+
+  describe('dropped and pasted files', () => {
+    const veo = MODEL_CONFIGS.find(m => m.value === 'veo-3.1-generate-001')!;
+    const file = (name: string, type = 'image/png') =>
+      new File(['x'], name, {type});
+    const asset = (f: File) =>
+      ({
+        id: parseInt(f.name),
+        gcsUri: `gs://bucket/${f.name}`,
+        mimeType: f.type,
+        presignedUrl: `https://storage.test/${f.name}`,
+      }) as SourceAssetResponseDto;
+    const pngs = (n: number, from = 1) =>
+      Array.from({length: n}, (_, i) => file(`${from + i}.png`));
+    let uploadAsset: jasmine.Spy;
+    let notices: jasmine.Spy;
+    const toasts = () =>
+      notices.calls.allArgs().map(a => [a[1], a[0]] as [string, string]);
+
+    beforeEach(() => {
+      setAppInjector(TestBed.inject(Injector));
+      notices = spyOn(TestBed.inject(NotificationService), 'show');
+      uploadAsset = spyOn(
+        TestBed.inject(SourceAssetService),
+        'uploadAsset',
+      ).and.callFake((f: File) => of(asset(f)));
+    });
+
+    describe('as reference images', () => {
+      beforeEach(() => {
+        component.selectModel(veo);
+        component.onModeChanged('Ingredients to Video');
+        notices.calls.reset();
+      });
+
+      // Every video model ships with a cap of 3, so a model with another
+      // cap is the only way to tell the model's limit from a fixed 3.
+      it('stop at the model limit, not a fixed 3', () => {
+        const fiveRefs: GenerationModelConfig = {
+          ...veo,
+          value: 'five-refs',
+          viewValue: 'Five Refs',
+          capabilities: {...veo.capabilities, maxReferenceImages: 5},
+        };
+        component.generationModels = [...component.generationModels, fiveRefs];
+        component.selectModel(fiveRefs);
+
+        component.onReferenceFilesAdded(pngs(7));
+
+        expect(uploadAsset).toHaveBeenCalledTimes(5);
+        expect(component.referenceImages.map(r => r.sourceAssetId)).toEqual([
+          1, 2, 3, 4, 5,
+        ]);
+        expect(toasts()).toEqual([
+          ['info', 'Only the first 5 of 7 images were added.'],
+        ]);
+      });
+
+      it('upload nothing once the model is full', () => {
+        component.onReferenceFilesAdded(pngs(3));
+        uploadAsset.calls.reset();
+        notices.calls.reset();
+
+        component.onReferenceFilesAdded(pngs(1, 4));
+
+        expect(uploadAsset).not.toHaveBeenCalled();
+        expect(toasts()).toEqual([]);
+      });
+
+      // Two quick pastes each see all three slots free before either lands.
+      it('stop at the limit when uploads from two pastes land together', () => {
+        const pending: [File, Subject<SourceAssetResponseDto>][] = [];
+        uploadAsset.and.callFake((f: File) => {
+          const upload = new Subject<SourceAssetResponseDto>();
+          pending.push([f, upload]);
+          return upload;
+        });
+
+        component.onReferenceFilesAdded(pngs(1));
+        component.onReferenceFilesAdded(pngs(3, 2));
+        for (const [f, upload] of pending) upload.next(asset(f));
+
+        expect(pending.length).withContext('uploads started').toBe(4);
+        expect(component.referenceImages.length).toBe(3);
+      });
+
+      it('clear the frames and save, as a picked reference does', () => {
+        component.image1Preview = 'https://storage.test/start.png';
+        const updateState = TestBed.inject(VideoStateService)
+          .updateState as jasmine.Spy;
+        updateState.calls.reset();
+
+        component.onReferenceFilesAdded(pngs(1));
+
+        expect(component.image1Preview).toBeNull();
+        expect(updateState).toHaveBeenCalledWith(
+          jasmine.objectContaining({
+            referenceImages: [
+              {sourceAssetId: 1, previewUrl: 'https://storage.test/1.png'},
+            ],
+          }),
+        );
+      });
+
+      it('say the upload failed', () => {
+        uploadAsset.and.returnValue(
+          throwError(() => ({error: {detail: 'File too large'}})),
+        );
+
+        component.onReferenceFilesAdded(pngs(1));
+
+        expect(component.referenceImages).toEqual([]);
+        expect(toasts()).toEqual([['error', 'File too large']]);
+      });
+    });
+
+    describe('on a start or end slot', () => {
+      it('upload an image into the slot it landed on', () => {
+        component.onModeChanged('Frames to Video');
+
+        component.onSlotFileAdded({num: 2, file: file('9.png')});
+
+        expect(uploadAsset).toHaveBeenCalledOnceWith(jasmine.any(File), {
+          assetType: AssetTypeEnum.GENERIC_IMAGE,
+        });
+        expect(component.image1Preview).toBeNull();
+        expect(component.image2Preview).toBe('https://storage.test/9.png');
+      });
+
+      // A video pasted in Text to Video lands in the start slot of Frames to
+      // Video, then moves the page on to Extend Video.
+      it('move a video on to Extend Video', () => {
+        component.onModeChanged('Frames to Video');
+
+        component.onSlotFileAdded({num: 1, file: file('4.mp4', 'video/mp4')});
+
+        expect(component.currentMode).toBe('Extend Video');
+        expect(component.image1Preview).toBe('https://storage.test/4.mp4');
+      });
+    });
+
+    it('tell the slots what they take in each mode', () => {
+      const cases: [string, string][] = [
+        ['Text to Video', 'image/*,video/*'],
+        ['Frames to Video', 'image/*'],
+        ['Extend Video', 'video/mp4'],
+        ['Concatenate Video', 'video/mp4'],
+      ];
+      for (const [mode, accept] of cases) {
+        component.onModeChanged(mode);
+        expect(component.slotAcceptTypes).withContext(mode).toBe(accept);
+      }
+    });
   });
 });
