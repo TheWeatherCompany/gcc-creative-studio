@@ -336,8 +336,11 @@ module "worker_service" {
   ingress                          = "INGRESS_TRAFFIC_INTERNAL_ONLY"
   max_instance_request_concurrency = var.worker_max_request_concurrency
   request_timeout                  = "900s"
-  # Jobs run inside requests, so CPU is only needed while one is open.
-  cpu_idle = true
+  # Always-on CPU. Every process runs migrations at startup under a shared
+  # advisory lock; with request-based CPU an instance whose request has
+  # finished runs them at a crawl while holding the lock, and new worker and
+  # API instances queue behind it (2026-09-30: a 6s image took 406s).
+  cpu_idle = false
 }
 
 resource "google_cloud_run_v2_service_iam_member" "job_invoker_can_invoke_worker" {
