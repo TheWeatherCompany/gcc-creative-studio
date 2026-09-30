@@ -74,6 +74,21 @@ function fire(target: Element, type: string, dt: DataTransfer): DragEvent {
   return event;
 }
 
+/**
+ * A synthetic DataTransfer ignores dropEffect writes in Chrome, so cursor
+ * feedback is observed through a stand-in attached to the event.
+ */
+function dragoverWithEffect(target: Element): {
+  event: DragEvent;
+  transfer: {types: string[]; dropEffect: string};
+} {
+  const event = new DragEvent('dragover', {bubbles: true, cancelable: true});
+  const transfer = {types: ['Files'], dropEffect: 'move'};
+  Object.defineProperty(event, 'dataTransfer', {value: transfer});
+  target.dispatchEvent(event);
+  return {event, transfer};
+}
+
 describe('FileDropDirective', () => {
   let fixture: ComponentFixture<HostComponent>;
   let host: HostComponent;
@@ -141,6 +156,14 @@ describe('FileDropDirective', () => {
     host.disabled = true;
     fixture.detectChanges();
     expect(fire(zone, 'dragover', transferOf(png)).defaultPrevented).toBeTrue();
+  });
+
+  it('shows a copy cursor over an enabled zone and none over a disabled one', () => {
+    expect(dragoverWithEffect(zone).transfer.dropEffect).toBe('copy');
+
+    host.disabled = true;
+    fixture.detectChanges();
+    expect(dragoverWithEffect(zone).transfer.dropEffect).toBe('none');
   });
 
   it('emits only the first accepted file unless multiple', () => {

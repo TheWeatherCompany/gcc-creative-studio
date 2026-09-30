@@ -26,8 +26,12 @@ import {extractFiles, extractUri, partitionByAccept} from './upload-files';
 
 /**
  * Turns the host into a drop target for files from outside the app.
- * Drags that carry no files (gallery cards, folder cards) pass straight
- * through, so the host's own drop handlers for those still fire.
+ * Drags that carry neither files nor (when `uriDropped` is subscribed) a URL,
+ * such as gallery and folder card drags, pass straight through, so the host's
+ * own drop handlers for those still fire. Every drop that is claimed is
+ * prevented, even when disabled or fully rejected, because the browser would
+ * otherwise open the file in the tab. Feedback for `filesRejected` is up to
+ * the host.
  */
 @Directive({
   selector: '[appFileDrop]',

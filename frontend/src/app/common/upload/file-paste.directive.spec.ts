@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {Component} from '@angular/core';
+import {Component, Type} from '@angular/core';
 import {TestBed} from '@angular/core/testing';
 import {MatDialog, MatDialogRef} from '@angular/material/dialog';
 import {FilePasteDirective} from './file-paste.directive';
@@ -30,6 +30,8 @@ import {FilePasteDirective} from './file-paste.directive';
       (filesRejected)="rejected = $event"
     >
       <textarea class="prompt"></textarea>
+      <input class="single-line" type="text" />
+      <div class="editor" contenteditable="true"></div>
     </div>
   `,
   imports: [FilePasteDirective],
@@ -39,6 +41,21 @@ class HostComponent {
   disabled = false;
   pasted: File[] | null = null;
   rejected: File[] | null = null;
+}
+
+@Component({
+  template: `
+    <div
+      appFilePaste
+      appFilePasteAccept="image/*"
+      [appFilePasteMultiple]="true"
+      (filesPasted)="pasted = $event"
+    ></div>
+  `,
+  imports: [FilePasteDirective],
+})
+class NoRejectHostComponent {
+  pasted: File[] | null = null;
 }
 
 function paste(target: EventTarget, dt: DataTransfer): ClipboardEvent {
@@ -61,7 +78,10 @@ describe('FilePasteDirective', () => {
   const dialogRef = {} as MatDialogRef<unknown>;
   let openDialogs: MatDialogRef<unknown>[];
 
-  function create(inDialog: boolean) {
+  function create<T = HostComponent>(
+    inDialog: boolean,
+    component: Type<T> = HostComponent as Type<T>,
+  ) {
     openDialogs = [];
     TestBed.configureTestingModule({
       providers: [
@@ -76,7 +96,7 @@ describe('FilePasteDirective', () => {
         ...(inDialog ? [{provide: MatDialogRef, useValue: dialogRef}] : []),
       ],
     });
-    const fixture = TestBed.createComponent(HostComponent);
+    const fixture = TestBed.createComponent(component);
     fixture.detectChanges();
     return fixture;
   }
@@ -90,15 +110,17 @@ describe('FilePasteDirective', () => {
     );
   });
 
-  it('lets a text field paste text when the clipboard has text too', () => {
-    const fixture = create(false);
-    const dt = screenshot();
-    dt.setData('text/plain', 'A1\tB1');
-    const textarea = fixture.nativeElement.querySelector('.prompt');
-    const event = paste(textarea, dt);
-    expect(event.defaultPrevented).toBeFalse();
-    expect(fixture.componentInstance.pasted).toBeNull();
-  });
+  for (const selector of ['.prompt', '.single-line', '.editor']) {
+    it(`lets ${selector} paste text when the clipboard has text too`, () => {
+      const fixture = create(false);
+      const dt = screenshot();
+      dt.setData('text/plain', 'A1\tB1');
+      const field = fixture.nativeElement.querySelector(selector);
+      const event = paste(field, dt);
+      expect(event.defaultPrevented).toBeFalse();
+      expect(fixture.componentInstance.pasted).toBeNull();
+    });
+  }
 
   it('takes an image that arrives with text when no text field is focused', () => {
     const fixture = create(false);
@@ -172,6 +194,24 @@ describe('FilePasteDirective', () => {
     expect(fixture.componentInstance.rejected?.map(f => f.name)).toEqual([
       'clip.mp4',
     ]);
+  });
+
+  it('leaves a fully refused paste to the browser when nothing listens for rejects', () => {
+    const fixture = create(false, NoRejectHostComponent);
+    const dt = new DataTransfer();
+    dt.items.add(new File(['x'], 'clip.mp4', {type: 'video/mp4'}));
+    const event = paste(document.body, dt);
+    expect(event.defaultPrevented).toBeFalse();
+    expect(fixture.componentInstance.pasted).toBeNull();
+  });
+
+  it('still claims a mixed paste when nothing listens for rejects', () => {
+    const fixture = create(false, NoRejectHostComponent);
+    const dt = screenshot();
+    dt.items.add(new File(['x'], 'clip.mp4', {type: 'video/mp4'}));
+    const event = paste(document.body, dt);
+    expect(event.defaultPrevented).toBeTrue();
+    expect(fixture.componentInstance.pasted?.length).toBe(1);
   });
 
   it('emits only the first pasted file unless multiple', () => {

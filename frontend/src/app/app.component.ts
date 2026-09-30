@@ -78,11 +78,16 @@ export class AppComponent {
   }
 
   // A file dropped outside every drop zone would otherwise replace the app
-  // with the file, losing whatever the user had typed.
+  // with the file, losing whatever the user had typed. A zone has already
+  // prevented its own dragover by the time it bubbles here, so only a stray
+  // drag gets the "not allowed" cursor.
   @HostListener('window:dragover', ['$event'])
   @HostListener('window:drop', ['$event'])
   preventStrayFileDrop(event: DragEvent): void {
     if (event.dataTransfer?.types.includes('Files')) {
+      if (event.type === 'dragover' && !event.defaultPrevented) {
+        event.dataTransfer.dropEffect = 'none';
+      }
       event.preventDefault();
     }
   }

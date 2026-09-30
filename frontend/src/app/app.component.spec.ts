@@ -76,6 +76,26 @@ describe('AppComponent', () => {
       ).toBeTrue();
     });
 
+    it('shows a not-allowed cursor over a stray file drag, but keeps a zone copy cursor', () => {
+      TestBed.createComponent(AppComponent);
+      const dragover = (prevented: boolean) => {
+        const event = new DragEvent('dragover', {
+          bubbles: true,
+          cancelable: true,
+        });
+        const transfer = {types: ['Files'], dropEffect: 'copy'};
+        Object.defineProperty(event, 'dataTransfer', {value: transfer});
+        if (prevented)
+          document.body.addEventListener('dragover', e => e.preventDefault(), {
+            once: true,
+          });
+        document.body.dispatchEvent(event);
+        return transfer.dropEffect;
+      };
+      expect(dragover(false)).toBe('none');
+      expect(dragover(true)).toBe('copy');
+    });
+
     it('leaves drags without files alone', () => {
       TestBed.createComponent(AppComponent);
       const dt = new DataTransfer();

@@ -43,6 +43,11 @@ function isTextField(target: EventTarget | null): boolean {
  * Only one instance should react to a given paste: one inside a dialog
  * handles it while that dialog is topmost, one on a page handles it while
  * no dialog is open.
+ *
+ * A paste whose files are all refused by `accept` is only claimed when the
+ * host listens to `filesRejected`; otherwise it is left to the browser, so a
+ * host that gives no feedback does not swallow the paste. (A drop, unlike a
+ * paste, is always claimed, because the browser would open the file.)
  */
 @Directive({
   selector: '[appFilePaste]',
@@ -71,11 +76,12 @@ export class FilePasteDirective {
     // text; in a text field the text is what the user meant.
     if (isTextField(event.target) && dt?.types.includes('text/plain')) return;
 
-    event.preventDefault();
     const {accepted, rejected} = partitionByAccept(
       files.map(f => nameClipboardFile(f)),
       this.appFilePasteAccept,
     );
+    if (accepted.length === 0 && !this.filesRejected.observed) return;
+    event.preventDefault();
     if (rejected.length) this.filesRejected.emit(rejected);
     if (accepted.length) {
       this.filesPasted.emit(

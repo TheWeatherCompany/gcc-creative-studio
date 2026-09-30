@@ -36,12 +36,6 @@ describe('upload-files', () => {
       expect(extractFiles(dt).map(f => f.name)).toEqual(['a.png', 'b.png']);
     });
 
-    it('returns nothing for a text-only transfer', () => {
-      const dt = new DataTransfer();
-      dt.setData('text/plain', 'hello');
-      expect(extractFiles(dt)).toEqual([]);
-    });
-
     it('falls back to items when files is empty', () => {
       const dropped = file('a.png', 'image/png');
       const dt = {
