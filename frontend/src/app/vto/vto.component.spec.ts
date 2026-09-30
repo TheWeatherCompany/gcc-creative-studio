@@ -160,7 +160,7 @@ describe('VtoComponent', () => {
     });
 
     it('ignores it once the stepper has moved past the model step', () => {
-      component.firstFormGroup.get('model')?.setValue({id: 'f1'} as any);
+      component.firstFormGroup.get('model')?.setValue({id: 'f1'});
       component.stepper.next();
       fixture.detectChanges();
       expect(component.stepper.selectedIndex).toBe(1);

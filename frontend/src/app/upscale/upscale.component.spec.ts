@@ -82,7 +82,7 @@ describe('UpscaleComponent', () => {
     expect(uploadAsset.calls.mostRecent().args[1]).toEqual(
       jasmine.objectContaining({assetType: component.assetType}),
     );
-    expect(component.selectedAsset).toBe(asset as any);
+    expect(component.selectedAsset?.id).toBe(5);
     expect(component.assetPair.original).toEqual({
       name: 'shot.png',
       url: 'https://example.test/shot.png',
