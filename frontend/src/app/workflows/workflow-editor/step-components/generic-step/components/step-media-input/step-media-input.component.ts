@@ -29,7 +29,10 @@ import {
   SourceAssetResponseDto,
   SourceAssetService,
 } from '../../../../../../common/services/source-asset.service';
-import {handleErrorSnackbar} from '../../../../../../utils/handleMessageSnackbar';
+import {
+  handleErrorSnackbar,
+  handleInfoSnackbar,
+} from '../../../../../../utils/handleMessageSnackbar';
 import {StepOutputReference} from '../../../../../workflow.models';
 
 @Component({
@@ -170,16 +173,27 @@ export class StepMediaInputComponent implements OnInit {
         .subscribe({
           next: (result: SourceAssetResponseDto) => {
             // Another upload may have filled the slot while this one ran.
-            if (result?.id && this.items.length < this.maxItems) {
-              this.addItem({
-                sourceAssetId: result.id,
-                previewUrl: result.presignedUrl || '',
-              });
+            if (!result?.id) return;
+            if (this.items.length >= this.maxItems) {
+              handleInfoSnackbar(
+                this.snackBar,
+                `${file.name} was not added because the input is full. It is still in My Uploaded Assets.`,
+              );
+              return;
             }
+            this.addItem({
+              sourceAssetId: result.id,
+              previewUrl: result.presignedUrl || '',
+            });
           },
           error: err => handleErrorSnackbar(this.snackBar, err, 'Image upload'),
         });
     });
+  }
+
+  onFilesRejected(files: File[]): void {
+    const names = files.map(f => f.name).join(', ');
+    handleInfoSnackbar(this.snackBar, `Can't use ${names} here.`);
   }
 
   addLinkedOutput(outputValue: any) {

@@ -17,14 +17,17 @@
 import {CommonModule} from '@angular/common';
 import {Injector, NO_ERRORS_SCHEMA} from '@angular/core';
 import {ComponentFixture, TestBed} from '@angular/core/testing';
-import {MatDialogModule} from '@angular/material/dialog';
+import {MatDialog, MatDialogModule} from '@angular/material/dialog';
 import {MatSnackBarModule} from '@angular/material/snack-bar';
 import {provideRouter} from '@angular/router';
 import {of, Subject, throwError} from 'rxjs';
 
 import {setAppInjector} from '../app-injector';
 import {NotificationService} from '../common/services/notification.service';
-import {SourceAssetService} from '../common/services/source-asset.service';
+import {
+  SourceAssetResponseDto,
+  SourceAssetService,
+} from '../common/services/source-asset.service';
 import {FileDropDirective} from '../common/upload/file-drop.directive';
 import {FilePasteDirective} from '../common/upload/file-paste.directive';
 import {GalleryService} from '../gallery/gallery.service';
@@ -109,6 +112,28 @@ describe('UpscaleComponent', () => {
     expect(component.selectedAsset).toBeNull();
   });
 
+  describe('while the source image is uploading', () => {
+    beforeEach(() => {
+      uploadAsset.and.returnValue(new Subject());
+      component.onFileAdded(png());
+      component.selectedAsset = asset as SourceAssetResponseDto;
+      fixture.detectChanges();
+    });
+
+    it('does not let the previous selection be upscaled', () => {
+      const button: HTMLButtonElement = Array.from<HTMLButtonElement>(
+        fixture.nativeElement.querySelectorAll('button'),
+      ).find(b => b.textContent?.includes('Upscale'))!;
+      expect(button.disabled).toBeTrue();
+    });
+
+    it('does not open the picker from the drop zone', () => {
+      const open = spyOn(TestBed.inject(MatDialog), 'open');
+      fixture.nativeElement.querySelector('.drop-zone-upscaler').click();
+      expect(open).not.toHaveBeenCalled();
+    });
+  });
+
   describe('dropping or pasting onto the zone', () => {
     function drop(): void {
       const dt = new DataTransfer();
@@ -129,6 +154,24 @@ describe('UpscaleComponent', () => {
         new ClipboardEvent('paste', {clipboardData: dt, cancelable: true}),
       );
     }
+
+    it('says so when the file is not an image', () => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'notes.pdf', {type: 'application/pdf'}));
+      fixture.nativeElement.querySelector('.drop-zone-upscaler').dispatchEvent(
+        new DragEvent('drop', {
+          dataTransfer: dt,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      expect(uploadAsset).not.toHaveBeenCalled();
+      expect(notifications.show.calls.mostRecent().args.slice(0, 2)).toEqual([
+        "Can't use notes.pdf here.",
+        'info',
+      ]);
+    });
 
     for (const [name, act] of [
       ['drop', drop],

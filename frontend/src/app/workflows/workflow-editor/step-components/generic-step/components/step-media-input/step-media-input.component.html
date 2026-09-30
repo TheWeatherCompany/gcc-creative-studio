@@ -22,6 +22,7 @@
   [appFileDropMultiple]="true"
   [appFileDropDisabled]="type !== 'image' || items.length >= maxItems"
   (filesDropped)="onFilesAdded($event)"
+  (filesRejected)="onFilesRejected($event)"
 >
   <!-- Counter -->
   <div class="text-xs text-neutral-500 mb-2 font-medium">

@@ -24,7 +24,11 @@ import {of, Subject, throwError} from 'rxjs';
 
 import {setAppInjector} from '../../../../../../app-injector';
 import {NotificationService} from '../../../../../../common/services/notification.service';
-import {SourceAssetService} from '../../../../../../common/services/source-asset.service';
+import {ReferenceImage} from '../../../../../../common/models/search.model';
+import {
+  SourceAssetResponseDto,
+  SourceAssetService,
+} from '../../../../../../common/services/source-asset.service';
 import {FileDropDirective} from '../../../../../../common/upload/file-drop.directive';
 import {StepMediaInputComponent} from './step-media-input.component';
 
@@ -35,12 +39,13 @@ describe('StepMediaInputComponent', () => {
   let notifications: jasmine.SpyObj<NotificationService>;
 
   const png = (name = 'in.png') => new File(['x'], name, {type: 'image/png'});
-  const assetFor = (id: number) => ({
-    id,
-    presignedUrl: `https://example.test/${id}.png`,
-  });
+  const assetFor = (id: number) =>
+    ({
+      id,
+      presignedUrl: `https://example.test/${id}.png`,
+    }) as SourceAssetResponseDto;
   const ids = () =>
-    (component.control.value ?? []).map((i: any) => i.sourceAssetId);
+    (component.control.value ?? []).map((i: ReferenceImage) => i.sourceAssetId);
 
   function dropFiles(files: File[]): void {
     const dt = new DataTransfer();
@@ -55,7 +60,11 @@ describe('StepMediaInputComponent', () => {
   }
 
   function setup(
-    inputs: {maxItems?: number; type?: 'image' | 'video'; value?: any} = {},
+    inputs: {
+      maxItems?: number;
+      type?: 'image' | 'video';
+      value?: ReferenceImage[];
+    } = {},
   ): void {
     component.control = new FormControl(inputs.value ?? null);
     component.maxItems = inputs.maxItems ?? 1;
@@ -99,8 +108,8 @@ describe('StepMediaInputComponent', () => {
   });
 
   it('drops an upload that lands after the slots filled up', () => {
-    const first = new Subject<any>();
-    const second = new Subject<any>();
+    const first = new Subject<SourceAssetResponseDto>();
+    const second = new Subject<SourceAssetResponseDto>();
     uploadAsset.and.returnValues(first, second);
     setup({maxItems: 2});
 
@@ -108,6 +117,11 @@ describe('StepMediaInputComponent', () => {
     component.addLinkedOutput({value: {step: 's', output: 'o'}});
     first.next(assetFor(1));
     second.next(assetFor(2));
+
+    expect(notifications.show.calls.mostRecent().args.slice(0, 2)).toEqual([
+      jasmine.stringContaining('b.png was not added'),
+      'info',
+    ]);
 
     expect(component.items.length).toBe(2);
     expect(ids()).toEqual([undefined, 1]);
@@ -138,6 +152,18 @@ describe('StepMediaInputComponent', () => {
     dropFiles([png()]);
 
     expect(ids()).toEqual([1]);
+  });
+
+  it('says so when the dropped file is not an image', () => {
+    setup({maxItems: 2});
+
+    dropFiles([new File(['x'], 'notes.pdf', {type: 'application/pdf'})]);
+
+    expect(uploadAsset).not.toHaveBeenCalled();
+    expect(notifications.show.calls.mostRecent().args.slice(0, 2)).toEqual([
+      "Can't use notes.pdf here.",
+      'info',
+    ]);
   });
 
   it('ignores a drop onto a video input', () => {

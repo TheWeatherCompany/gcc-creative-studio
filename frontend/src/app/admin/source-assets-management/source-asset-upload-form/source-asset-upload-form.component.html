@@ -23,6 +23,7 @@
       appFileDropAccept="image/*,video/*"
       [appFileDropDisabled]="isUploading"
       (filesDropped)="setFile($event[0])"
+      (filesRejected)="onFilesRejected($event)"
       appFilePaste
       appFilePasteAccept="image/*"
       [appFilePasteDisabled]="isUploading"

@@ -32,7 +32,10 @@ import {
   SourceAssetResponseDto,
   SourceAssetService,
 } from '../../../common/services/source-asset.service';
-import {handleErrorSnackbar} from '../../../utils/handleMessageSnackbar';
+import {
+  handleErrorSnackbar,
+  handleInfoSnackbar,
+} from '../../../utils/handleMessageSnackbar';
 import {WorkflowStep} from '../../workflow.models';
 
 @Component({
@@ -158,6 +161,11 @@ export class RunWorkflowModalComponent implements OnInit {
         },
         error: err => handleErrorSnackbar(this.snackBar, err, 'Image upload'),
       });
+  }
+
+  onFilesRejected(files: File[]): void {
+    const names = files.map(f => f.name).join(', ');
+    handleInfoSnackbar(this.snackBar, `Can't use ${names} here.`);
   }
 
   clearReferenceImage(inputName: string) {

@@ -27,7 +27,10 @@ import {Subject, throwError} from 'rxjs';
 
 import {setAppInjector} from '../../../app-injector';
 import {NotificationService} from '../../../common/services/notification.service';
-import {SourceAssetService} from '../../../common/services/source-asset.service';
+import {
+  SourceAssetResponseDto,
+  SourceAssetService,
+} from '../../../common/services/source-asset.service';
 import {FileDropDirective} from '../../../common/upload/file-drop.directive';
 import {RunWorkflowModalComponent} from './run-workflow-modal.component';
 
@@ -93,11 +96,11 @@ describe('RunWorkflowModalComponent', () => {
   });
 
   it('fills the input the file was dropped on, and only that one', () => {
-    const upload = new Subject<any>();
+    const upload = new Subject<SourceAssetResponseDto>();
     uploadAsset.and.returnValue(upload);
 
     dropOn(1);
-    upload.next(uploaded);
+    upload.next(uploaded as SourceAssetResponseDto);
     fixture.detectChanges();
 
     expect(uploadAsset).toHaveBeenCalledTimes(1);
@@ -134,6 +137,16 @@ describe('RunWorkflowModalComponent', () => {
 
     expect(filled.classList).not.toContain('file-drop-active');
     expect(empty.classList).toContain('file-drop-active');
+  });
+
+  it('says so when the dropped file is not an image', () => {
+    dropOn(0, new File(['x'], 'notes.pdf', {type: 'application/pdf'}));
+
+    expect(uploadAsset).not.toHaveBeenCalled();
+    expect(notifications.show.calls.mostRecent().args.slice(0, 2)).toEqual([
+      "Can't use notes.pdf here.",
+      'info',
+    ]);
   });
 
   it('toasts a failed upload and leaves the input empty', () => {

@@ -28,7 +28,10 @@ import {
 import {GalleryService} from '../gallery/gallery.service';
 import {AssetTypeEnum} from '../admin/source-assets-management/source-asset.model';
 import {MediaItem, JobStatus} from '../common/models/media-item.model';
-import {handleErrorSnackbar} from '../utils/handleMessageSnackbar';
+import {
+  handleErrorSnackbar,
+  handleInfoSnackbar,
+} from '../utils/handleMessageSnackbar';
 import {downloadMedia} from '../utils/download-media';
 import {MatIconRegistry} from '@angular/material/icon';
 import {DomSanitizer, SafeResourceUrl} from '@angular/platform-browser';
@@ -179,6 +182,7 @@ export class UpscaleComponent implements OnInit, OnDestroy {
 
   openUploaderDialog(event?: MouseEvent): void {
     if (event) event.stopPropagation();
+    if (this.isUploadingSource) return;
 
     const dialogRef = this.dialog.open(ImageSelectorComponent, {
       width: '90vw',
@@ -235,6 +239,11 @@ export class UpscaleComponent implements OnInit, OnDestroy {
         next: asset => this.applySelectedAsset(asset),
         error: err => handleErrorSnackbar(this._snackBar, err, 'Upload'),
       });
+  }
+
+  onFilesRejected(files: File[]): void {
+    const names = files.map(f => f.name).join(', ');
+    handleInfoSnackbar(this._snackBar, `Can't use ${names} here.`);
   }
 
   startUpscale(): void {

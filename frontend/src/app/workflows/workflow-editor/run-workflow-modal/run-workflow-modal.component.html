@@ -31,6 +31,7 @@
             appFileDropAccept="image/*"
             [appFileDropDisabled]="!!referenceImages[input.name]"
             (filesDropped)="onReferenceFileAdded($event[0], input.name)"
+            (filesRejected)="onFilesRejected($event)"
             >
             <mat-icon class="text-neutral-500">add</mat-icon>
             <span class="absolute bottom-0 text-[10px] text-neutral-500">{{ referenceImages[input.name] ? 1 : 0 }}/1</span>

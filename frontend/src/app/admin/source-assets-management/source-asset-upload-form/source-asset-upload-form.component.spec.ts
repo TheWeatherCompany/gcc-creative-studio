@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {ApplicationRef} from '@angular/core';
+import {ApplicationRef, Injector} from '@angular/core';
 import {ComponentFixture, TestBed} from '@angular/core/testing';
 import {ReactiveFormsModule, FormsModule} from '@angular/forms';
 import {
@@ -33,14 +33,18 @@ import {provideHttpClient} from '@angular/common/http';
 import {provideHttpClientTesting} from '@angular/common/http/testing';
 import {SourceAssetUploadFormComponent} from './source-asset-upload-form.component';
 import {SourceAssetsService} from '../source-assets.service';
+import {setAppInjector} from '../../../app-injector';
+import {NotificationService} from '../../../common/services/notification.service';
 import {FileDropDirective} from '../../../common/upload/file-drop.directive';
 import {FilePasteDirective} from '../../../common/upload/file-paste.directive';
 
 describe('SourceAssetUploadFormComponent', () => {
   let component: SourceAssetUploadFormComponent;
   let fixture: ComponentFixture<SourceAssetUploadFormComponent>;
+  let notifications: jasmine.SpyObj<NotificationService>;
 
   beforeEach(async () => {
+    notifications = jasmine.createSpyObj('NotificationService', ['show']);
     await TestBed.configureTestingModule({
       declarations: [SourceAssetUploadFormComponent],
       imports: [
@@ -68,6 +72,7 @@ describe('SourceAssetUploadFormComponent', () => {
           provide: MatSnackBar,
           useValue: {open: jasmine.createSpy('open')},
         },
+        {provide: NotificationService, useValue: notifications},
         {
           provide: SourceAssetsService,
           useValue: {uploadSourceAsset: jasmine.createSpy('uploadSourceAsset')},
@@ -75,6 +80,7 @@ describe('SourceAssetUploadFormComponent', () => {
       ],
     }).compileComponents();
 
+    setAppInjector(TestBed.inject(Injector));
     fixture = TestBed.createComponent(SourceAssetUploadFormComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
@@ -130,9 +136,13 @@ describe('SourceAssetUploadFormComponent', () => {
     });
   }
 
-  it('ignores a dropped file that is neither image nor video', () => {
+  it('ignores a dropped file that is neither image nor video, and says so', () => {
     dropOnFileRow([file('notes.pdf', 'application/pdf')]);
     expect(component.fileName).toBeNull();
+    expect(notifications.show.calls.mostRecent().args.slice(0, 2)).toEqual([
+      "Can't use notes.pdf here.",
+      'info',
+    ]);
   });
 
   it('ignores a drop while an upload is in progress', () => {
@@ -168,9 +178,13 @@ describe('SourceAssetUploadFormComponent', () => {
       expect(opened.fileName).toMatch(/^pasted-.*\.png$/);
     });
 
-    it('ignores a pasted video', () => {
+    it('ignores a pasted video, and says so', () => {
       paste(file('clip.mp4', 'video/mp4'));
       expect(opened.fileName).toBeNull();
+      expect(notifications.show.calls.mostRecent().args.slice(0, 2)).toEqual([
+        "Can't use clip.mp4 here.",
+        'info',
+      ]);
     });
 
     it('ignores a paste while an upload is in progress', () => {

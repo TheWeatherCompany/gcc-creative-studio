@@ -170,6 +170,7 @@
                 appFileDrop
                 appFileDropAccept="image/*"
                 (filesDropped)="onModelFileAdded($event[0])"
+                (filesRejected)="onFilesRejected($event)"
                 appFilePaste
                 appFilePasteAccept="image/*"
                 [appFilePasteDisabled]="stepper.selectedIndex !== 0 || isLoading"
