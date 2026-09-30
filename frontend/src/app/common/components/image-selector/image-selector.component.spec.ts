@@ -324,6 +324,20 @@ describe('ImageSelectorComponent file intake', () => {
       expect(toastText()).toEqual([jasmine.stringMatching('notes.pdf')]);
     });
 
+    it('accepts picked images that arrive without a MIME type', () => {
+      setup({multiSelect: true});
+      const input = document.createElement('input');
+      input.type = 'file';
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'a.jpg'));
+      dt.items.add(new File(['x'], 'b.png'));
+      input.files = dt.files;
+
+      component.onFileInputChange({currentTarget: input} as unknown as Event);
+      expect(assets.uploadAsset).toHaveBeenCalledTimes(2);
+      expect(toastText()).toEqual([]);
+    });
+
     describe('a URL dropped from another site', () => {
       const fetchResults: {name: string; result: () => Promise<Response>}[] = [
         {
