@@ -327,10 +327,10 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Paste takes images in image, ingredients and text-only modes, else
-   * whatever the slots take. In Text to Video, `slotAccept` reflects inputs
-   * left over from an earlier mode, and a pasted video would move the page
-   * on to Extend Video and clear the prompt.
+   * Paste, or a drop on the card outside the slots, takes images in image,
+   * ingredients and text-only modes, else whatever the slots take. In Text to
+   * Video, `slotAccept` reflects inputs left over from an earlier mode, and a
+   * video would move the page on to Extend Video and clear the prompt.
    */
   pasteAccept(): string {
     return this.isImageMode() ||
@@ -340,7 +340,50 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
       : this.slotAccept;
   }
 
-  onFilesPasted(files: File[]): void {
+  /** Text to Image switches to Ingredients, which takes several references. */
+  takesMultipleFiles(): boolean {
+    return this.isIngredientsMode() || this.selectedMode() === 'Text to Image';
+  }
+
+  /**
+   * The output a paste or card drop goes to in this mode, or null if none.
+   * Text-only modes count only when the mode they switch to is offered.
+   */
+  private fileOutput():
+    | FlowPromptBoxComponent['referenceFilesAdded']
+    | FlowPromptBoxComponent['slotFileAdded']
+    | null {
+    const offered = (mode: string) => this.modes.some(m => m.value === mode);
+    if (this.isIngredientsMode()) return this.referenceFilesAdded;
+    if (
+      this.isFramesToVideo() ||
+      this.isConcatenateVideo() ||
+      this.isExtendVideo()
+    ) {
+      return this.slotFileAdded;
+    }
+    if (
+      this.selectedMode() === 'Text to Image' &&
+      offered('Ingredients to Image')
+    ) {
+      return this.referenceFilesAdded;
+    }
+    if (this.isTextToVideo() && offered('Frames to Video')) {
+      return this.slotFileAdded;
+    }
+    return null;
+  }
+
+  /**
+   * Whether the card takes a file drop. When it doesn't, the drag passes
+   * through as if the card were not a drop target, as in the feed composer.
+   */
+  get cardTakesDrop(): boolean {
+    return !!this.fileOutput()?.observed;
+  }
+
+  /** Routes files from a paste or a drop on the card. */
+  onFilesAdded(files: File[]): void {
     if (this.isIngredientsMode()) {
       this.referenceFilesAdded.emit(files);
       return;
@@ -356,14 +399,10 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     }
     // A text-only mode moves to the mode that takes this input, as if the
     // user had picked it from the menu.
-    const offered = (mode: string) => this.modes.some(m => m.value === mode);
-    if (
-      this.selectedMode() === 'Text to Image' &&
-      offered('Ingredients to Image')
-    ) {
+    if (this.fileOutput() === this.referenceFilesAdded) {
       this.selectMode('Ingredients to Image');
       this.referenceFilesAdded.emit(files);
-    } else if (this.isTextToVideo() && offered('Frames to Video')) {
+    } else if (this.fileOutput() === this.slotFileAdded) {
       this.selectMode('Frames to Video');
       this.slotFileAdded.emit({num: 1, file: files[0]});
     }

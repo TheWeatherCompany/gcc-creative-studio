@@ -246,3 +246,74 @@ describe('FileDropDirective URL drops', () => {
     expect(event.defaultPrevented).toBeFalse();
   });
 });
+
+@Component({
+  template: `
+    <div
+      class="outer"
+      appFileDrop
+      [appFileDropDisabled]="outerDisabled"
+      (filesDropped)="outerDropped = $event"
+      (uriDropped)="outerUri = $event"
+    >
+      <div
+        class="inner"
+        appFileDrop
+        [appFileDropIgnore]="innerIgnored"
+        (filesDropped)="innerDropped = $event"
+      ></div>
+    </div>
+  `,
+  imports: [FileDropDirective],
+})
+class NestedHostComponent {
+  outerDisabled = false;
+  innerIgnored = false;
+  outerDropped: File[] | null = null;
+  innerDropped: File[] | null = null;
+  outerUri: string | null = null;
+}
+
+describe('FileDropDirective nested zones', () => {
+  let fixture: ComponentFixture<NestedHostComponent>;
+  let host: NestedHostComponent;
+  let outer: HTMLElement;
+  let inner: HTMLElement;
+  const png = new File(['x'], 'a.png', {type: 'image/png'});
+
+  beforeEach(() => {
+    fixture = TestBed.createComponent(NestedHostComponent);
+    host = fixture.componentInstance;
+    fixture.detectChanges();
+    outer = fixture.nativeElement.querySelector('.outer');
+    inner = fixture.nativeElement.querySelector('.inner');
+  });
+
+  it('lets the inner zone alone highlight for a drag over it', () => {
+    fire(inner, 'dragenter', transferOf(png));
+    fixture.detectChanges();
+    expect(inner.classList).toContain('file-drop-active');
+    expect(outer.classList).not.toContain('file-drop-active');
+  });
+
+  it('keeps the copy cursor over an inner zone inside a disabled one', () => {
+    host.outerDisabled = true;
+    fixture.detectChanges();
+    expect(dragoverWithEffect(inner).transfer.dropEffect).toBe('copy');
+  });
+
+  it('gives an ignored inner zone drag to the enclosing zone', () => {
+    host.innerIgnored = true;
+    fixture.detectChanges();
+    fire(inner, 'drop', transferOf(png));
+    expect(host.innerDropped).toBeNull();
+    expect(host.outerDropped).toEqual([png]);
+  });
+
+  it('passes a URL drag the inner zone does not take on to the outer one', () => {
+    const dt = new DataTransfer();
+    dt.setData('text/uri-list', 'https://example.com/cat.png');
+    fire(inner, 'drop', dt);
+    expect(host.outerUri).toBe('https://example.com/cat.png');
+  });
+});

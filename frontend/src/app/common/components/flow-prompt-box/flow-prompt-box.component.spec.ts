@@ -385,7 +385,8 @@ describe('FlowPromptBoxComponent', () => {
       fixture.detectChanges();
     }
 
-    describe('pasted', () => {
+    // A drop on the card outside the slots goes where a paste would.
+    describe('pasted, or dropped on the card', () => {
       const cases: {
         name: string;
         mode: string;
@@ -451,6 +452,13 @@ describe('FlowPromptBoxComponent', () => {
           refs: 1,
         },
         {
+          name: 'Text to Image adds several images when it switches',
+          mode: 'Text to Image',
+          files: [png('1.png'), png('2.png')],
+          switchTo: 'Ingredients to Image',
+          refs: 2,
+        },
+        {
           name: 'Text to Image takes no video',
           mode: 'Text to Image',
           files: [mp4],
@@ -498,34 +506,99 @@ describe('FlowPromptBoxComponent', () => {
         },
       ];
 
-      for (const c of cases) {
-        it(c.name, () => {
-          bindFileOutputs();
-          if (c.slotAccept) component.slotAccept = c.slotAccept;
-          show(c.mode, {start: c.start});
-          if (c.offered) {
-            component.modes = allModes.filter(m =>
-              c.offered!.includes(m.value),
-            );
-          }
+      for (const how of ['pasted', 'dropped on the card'] as const) {
+        for (const c of cases) {
+          it(`${how}: ${c.name}`, () => {
+            bindFileOutputs();
+            if (c.slotAccept) component.slotAccept = c.slotAccept;
+            show(c.mode, {start: c.start});
+            if (c.offered) {
+              component.modes = allModes.filter(m =>
+                c.offered!.includes(m.value),
+              );
+              fixture.detectChanges();
+            }
 
-          paste(...c.files);
+            if (how === 'pasted') paste(...c.files);
+            else drop('prompt-card', ...c.files);
 
-          expect(modes)
-            .withContext('mode switch')
-            .toEqual(c.switchTo ? [c.switchTo] : []);
-          expect(component.mode).toBe(c.switchTo ?? c.mode);
-          expect(refs.map(r => r.length))
-            .withContext('references')
-            .toEqual(c.refs ? [c.refs] : []);
-          expect(slots.map(s => [s.num, s.file.name]))
-            .withContext('slot')
-            .toEqual(c.slot ? [[c.slot, c.files[0].name]] : []);
-          expect(shown())
-            .withContext('rejection toast')
-            .toEqual(c.rejected ? ["Can't use clip.mp4 here."] : []);
-        });
+            expect(modes)
+              .withContext('mode switch')
+              .toEqual(c.switchTo ? [c.switchTo] : []);
+            expect(component.mode).toBe(c.switchTo ?? c.mode);
+            expect(refs.map(r => r.length))
+              .withContext('references')
+              .toEqual(c.refs ? [c.refs] : []);
+            expect(slots.map(s => [s.num, s.file.name]))
+              .withContext('slot')
+              .toEqual(c.slot ? [[c.slot, c.files[0].name]] : []);
+            expect(shown())
+              .withContext('rejection toast')
+              .toEqual(c.rejected ? ["Can't use clip.mp4 here."] : []);
+          });
+        }
       }
+    });
+
+    describe('a drop on the card', () => {
+      function dragOn(testId: string, type: string): DragEvent {
+        const el = (fixture.nativeElement as HTMLElement).querySelector(
+          `[data-testid="${testId}"]`,
+        )!;
+        const dt = new DataTransfer();
+        dt.items.add(png());
+        const e = new DragEvent(type, {
+          dataTransfer: dt,
+          bubbles: true,
+          cancelable: true,
+        });
+        el.dispatchEvent(e);
+        fixture.detectChanges();
+        return e;
+      }
+      const card = () =>
+        (fixture.nativeElement as HTMLElement).querySelector(
+          '[data-testid="prompt-card"]',
+        )!;
+
+      it('highlights the card in a text-only mode', () => {
+        bindFileOutputs();
+        show('Text to Image');
+        dragOn('prompt-card', 'dragenter');
+        expect(card().classList).toContain('file-drop-active');
+      });
+
+      it('leaves a slot to handle its own drag', () => {
+        bindFileOutputs();
+        show('Frames to Video');
+        dragOn('frame-slot-2', 'dragenter');
+        expect(card().classList).not.toContain('file-drop-active');
+        drop('frame-slot-2', png('end.png'));
+        expect(slots.map(s => [s.num, s.file.name])).toEqual([[2, 'end.png']]);
+      });
+
+      // The feed composer renders the prompt box without the file outputs.
+      it('is left alone when the host takes no files', () => {
+        show('Text to Image');
+        expect(dragOn('prompt-card', 'drop').defaultPrevented).toBeFalse();
+        expect(card().classList).not.toContain('file-drop-active');
+      });
+
+      it('is left alone when the mode has nowhere to put it', () => {
+        bindFileOutputs();
+        show('Video to Image');
+        expect(dragOn('prompt-card', 'drop').defaultPrevented).toBeFalse();
+      });
+
+      it('takes nothing while a generation is being submitted', () => {
+        bindFileOutputs();
+        show('Text to Image');
+        component.isLoading = true;
+        fixture.detectChanges();
+        drop('prompt-card', png());
+        expect(refs).toEqual([]);
+        expect(modes).toEqual([]);
+      });
     });
 
     // The feed composer renders the prompt box without the file outputs. A
