@@ -15,6 +15,15 @@
 -->
 
 <div class="feed-container">
+  <!-- The bar is the last thing in the tab order, past every row: a way to it. -->
+  <button
+    type="button"
+    class="max-md:hidden sr-only focus:not-sr-only focus:mb-4 text-white underline"
+    data-testid="feed-skip-to-prompt"
+    (click)="composer.focusPrompt()"
+  >
+    Skip to prompt
+  </button>
   <div class="flex flex-wrap items-center gap-4 mb-6">
     <h1 class="text-white !text-2xl font-semibold !m-0 mr-auto">Generations</h1>
     <div class="w-full md:w-96">
@@ -223,6 +232,10 @@
       {{ query.trim() ? 'No generations match your search' : 'No generations in this workspace yet' }}
     </p>
   }
+
+  <div class="feed-composer">
+    <app-feed-composer #composer (submitted)="onComposerSubmitted()"></app-feed-composer>
+  </div>
 </div>
 
 @if (lightboxItem) {
