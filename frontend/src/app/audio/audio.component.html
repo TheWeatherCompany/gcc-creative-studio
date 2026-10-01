@@ -173,9 +173,9 @@
 
         <div class="action-row">
             <button mat-raised-button color="primary" class="create-btn"
-                    (click)="generate()" [disabled]="isJobProcessing">
-                <mat-spinner diameter="20" *ngIf="isJobProcessing"></mat-spinner>
-                <span *ngIf="!isJobProcessing">Create</span>
+                    (click)="generate()" [disabled]="!canGenerate">
+                <mat-spinner diameter="20" *ngIf="!canGenerate"></mat-spinner>
+                <span *ngIf="canGenerate">Create</span>
             </button>
         </div>
 

@@ -70,9 +70,11 @@ export class AudioComponent implements OnInit {
   // Job Tracking
   activeAudioJob$: Observable<MediaItem | null>;
   public readonly JobStatus = JobStatus;
-  // The Create button and the Enter handler both read this, so they cannot
-  // disagree about whether a submit is allowed.
   isJobProcessing = false;
+  // True from the moment the generate request is sent until it settles. The job
+  // only reads as PROCESSING once the response arrives, so without this a second
+  // Enter in that window would start a duplicate job.
+  isSubmitting = false;
   readonly submitHint = PROMPT_SUBMIT_HINT;
   showErrorOverlay = true;
 
@@ -261,10 +263,19 @@ export class AudioComponent implements OnInit {
     });
   }
 
+  // The Create button and the Enter handler both read this, so they cannot
+  // disagree about whether a submit is allowed.
+  get canGenerate(): boolean {
+    return !this.isJobProcessing && !this.isSubmitting;
+  }
+
   onPromptEnter(event: Event) {
-    if (!isSubmitEnter(event as KeyboardEvent)) return;
+    const keyEvent = event as KeyboardEvent;
+    if (!isSubmitEnter(keyEvent)) return;
     event.preventDefault();
-    if (!this.isJobProcessing) this.generate();
+    // A held Enter must neither resubmit nor fill the prompt with newlines.
+    if (keyEvent.repeat) return;
+    if (this.canGenerate) this.generate();
   }
 
   generate() {
@@ -316,12 +327,16 @@ export class AudioComponent implements OnInit {
     this.saveState();
     this.audioUrl = null;
 
-    this.searchService.startAudioGeneration(request).subscribe({
-      error: (error: any) => {
-        handleErrorSnackbar(this.snackBar, error, 'Generation');
-        console.error('Generation failed:', error);
-      },
-    });
+    this.isSubmitting = true;
+    this.searchService
+      .startAudioGeneration(request)
+      .pipe(finalize(() => (this.isSubmitting = false)))
+      .subscribe({
+        error: (error: any) => {
+          handleErrorSnackbar(this.snackBar, error, 'Generation');
+          console.error('Generation failed:', error);
+        },
+      });
   }
 
   // --- Player Logic ---

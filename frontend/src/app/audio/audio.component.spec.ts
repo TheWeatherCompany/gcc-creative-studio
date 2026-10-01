@@ -27,9 +27,10 @@ import {MatProgressSpinnerModule} from '@angular/material/progress-spinner';
 import {MatSelectModule} from '@angular/material/select';
 import {MatSnackBarModule} from '@angular/material/snack-bar';
 import {NoopAnimationsModule} from '@angular/platform-browser/animations';
+import {Injector} from '@angular/core';
 import {provideHttpClient} from '@angular/common/http';
 import {provideHttpClientTesting} from '@angular/common/http/testing';
-import {BehaviorSubject, of} from 'rxjs';
+import {BehaviorSubject, Subject, of} from 'rxjs';
 
 import {AudioComponent} from './audio.component';
 import {JobStatus, MediaItem} from '../common/models/media-item.model';
@@ -37,6 +38,8 @@ import {GalleryService} from '../gallery/gallery.service';
 import {AudioStateService} from '../services/audio-state.service';
 import {SearchService} from '../services/search/search.service';
 import {WorkspaceStateService} from '../services/workspace/workspace-state.service';
+import {setAppInjector} from '../app-injector';
+import {NotificationService} from '../common/services/notification.service';
 import {PROMPT_SUBMIT_HINT} from '../utils/prompt-submit';
 
 describe('AudioComponent prompt submit', () => {
@@ -187,6 +190,48 @@ describe('AudioComponent prompt submit', () => {
         'button.create-btn',
       ) as HTMLButtonElement;
       expect(createButton.disabled).toBe(true);
+    });
+
+    it(`a held Enter in the ${field.name} is swallowed without submitting`, async () => {
+      const textarea = await showField(field.model);
+
+      const event = pressKey(textarea, {repeat: true});
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(startAudioGeneration).not.toHaveBeenCalled();
+    });
+
+    it(`a second Enter in the ${field.name} while the request is in flight starts nothing`, async () => {
+      const inFlight = new Subject<MediaItem>();
+      startAudioGeneration.and.returnValue(inFlight);
+      const textarea = await showField(field.model);
+
+      pressKey(textarea, {});
+      const second = pressKey(textarea, {});
+      pressKey(textarea, {ctrlKey: true});
+
+      expect(startAudioGeneration).toHaveBeenCalledTimes(1);
+      expect(second.defaultPrevented).toBe(true);
+      fixture.detectChanges();
+      const createButton = fixture.nativeElement.querySelector(
+        'button.create-btn',
+      ) as HTMLButtonElement;
+      expect(createButton.disabled).toBe(true);
+    });
+
+    it(`Enter in the ${field.name} works again after the request fails`, async () => {
+      setAppInjector(TestBed.inject(Injector));
+      spyOn(TestBed.inject(NotificationService), 'show');
+      spyOn(console, 'error');
+      const inFlight = new Subject<MediaItem>();
+      startAudioGeneration.and.returnValue(inFlight);
+      const textarea = await showField(field.model);
+      pressKey(textarea, {});
+
+      inFlight.error(new Error('boom'));
+      pressKey(textarea, {});
+
+      expect(startAudioGeneration).toHaveBeenCalledTimes(2);
     });
 
     it(`shows the submit hint under the ${field.name}`, async () => {
