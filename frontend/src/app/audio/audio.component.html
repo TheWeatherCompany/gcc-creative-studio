@@ -103,9 +103,10 @@
         <div class="config-grid">
 
             <ng-container *ngIf="selectedModel === 'lyria'">
-                <mat-form-field appearance="outline" class="large-field">
+                <mat-form-field appearance="outline" class="large-field prompt-field">
                     <mat-label>Prompt</mat-label>
-                    <textarea matInput [(ngModel)]="prompt" (ngModelChange)="saveState()" placeholder="Describe the music..." (keydown.control.enter)="generate()"></textarea>
+                    <textarea matInput [(ngModel)]="prompt" (ngModelChange)="saveState()" placeholder="Describe the music..." (keydown.enter)="onPromptEnter($event)" (keydown.control.enter)="onPromptEnter($event)"></textarea>
+                    <mat-hint>{{ submitHint }}</mat-hint>
                 </mat-form-field>
 
                 <mat-form-field appearance="outline">
@@ -129,9 +130,10 @@
             </ng-container>
 
             <ng-container *ngIf="selectedModel !== 'lyria'">
-                <mat-form-field appearance="outline" class="large-field">
+                <mat-form-field appearance="outline" class="large-field prompt-field">
                     <mat-label>Text to Speech</mat-label>
-                    <textarea matInput [(ngModel)]="prompt" (ngModelChange)="saveState()" placeholder="Enter text to speak..." (keydown.control.enter)="generate()"></textarea>
+                    <textarea matInput [(ngModel)]="prompt" (ngModelChange)="saveState()" placeholder="Enter text to speak..." (keydown.enter)="onPromptEnter($event)" (keydown.control.enter)="onPromptEnter($event)"></textarea>
+                    <mat-hint>{{ submitHint }}</mat-hint>
                 </mat-form-field>
 
                 <mat-form-field appearance="outline">
@@ -171,9 +173,9 @@
 
         <div class="action-row">
             <button mat-raised-button color="primary" class="create-btn"
-                    (click)="generate()" [disabled]="(activeAudioJob$ | async)?.status === JobStatus.PROCESSING">
-                <mat-spinner diameter="20" *ngIf="(activeAudioJob$ | async)?.status === JobStatus.PROCESSING"></mat-spinner>
-                <span *ngIf="(activeAudioJob$ | async)?.status !== JobStatus.PROCESSING">Create</span>
+                    (click)="generate()" [disabled]="!canGenerate">
+                <mat-spinner diameter="20" *ngIf="!canGenerate"></mat-spinner>
+                <span *ngIf="canGenerate">Create</span>
             </button>
         </div>
 

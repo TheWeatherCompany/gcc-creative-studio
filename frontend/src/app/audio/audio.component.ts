@@ -15,6 +15,7 @@
  */
 
 import {Component, ElementRef, Inject, ViewChild} from '@angular/core';
+import {takeUntilDestroyed} from '@angular/core/rxjs-interop';
 import {
   AudioService,
   CreateAudioDto,
@@ -38,6 +39,7 @@ import {
   handleErrorSnackbar,
   handleSuccessSnackbar,
 } from '../utils/handleMessageSnackbar';
+import {PROMPT_SUBMIT_HINT, isSubmitEnter} from '../utils/prompt-submit';
 
 // UI Helper type
 type UiModelType = 'lyria' | 'chirp' | 'gemini-tts';
@@ -68,6 +70,12 @@ export class AudioComponent implements OnInit {
   // Job Tracking
   activeAudioJob$: Observable<MediaItem | null>;
   public readonly JobStatus = JobStatus;
+  isJobProcessing = false;
+  // True from the moment the generate request is sent until it settles. The job
+  // only reads as PROCESSING once the response arrives, so without this a second
+  // Enter in that window would start a duplicate job.
+  isSubmitting = false;
+  readonly submitHint = PROMPT_SUBMIT_HINT;
   showErrorOverlay = true;
 
   // Lyria Specific Inputs
@@ -185,6 +193,9 @@ export class AudioComponent implements OnInit {
     private galleryService: GalleryService,
   ) {
     this.activeAudioJob$ = this.searchService.activeAudioJob$;
+    this.activeAudioJob$.pipe(takeUntilDestroyed()).subscribe(job => {
+      this.isJobProcessing = job?.status === JobStatus.PROCESSING;
+    });
 
     this.matIconRegistry.addSvgIcon(
       'white-gemini-spark-icon',
@@ -252,6 +263,21 @@ export class AudioComponent implements OnInit {
     });
   }
 
+  // The Create button and the Enter handler both read this, so they cannot
+  // disagree about whether a submit is allowed.
+  get canGenerate(): boolean {
+    return !this.isJobProcessing && !this.isSubmitting;
+  }
+
+  onPromptEnter(event: Event) {
+    const keyEvent = event as KeyboardEvent;
+    if (!isSubmitEnter(keyEvent)) return;
+    event.preventDefault();
+    // A held Enter must neither resubmit nor fill the prompt with newlines.
+    if (keyEvent.repeat) return;
+    if (this.canGenerate) this.generate();
+  }
+
   generate() {
     this.isLoading = true;
     this.mediaItem = null; // Clear previous result
@@ -301,12 +327,16 @@ export class AudioComponent implements OnInit {
     this.saveState();
     this.audioUrl = null;
 
-    this.searchService.startAudioGeneration(request).subscribe({
-      error: (error: any) => {
-        handleErrorSnackbar(this.snackBar, error, 'Generation');
-        console.error('Generation failed:', error);
-      },
-    });
+    this.isSubmitting = true;
+    this.searchService
+      .startAudioGeneration(request)
+      .pipe(finalize(() => (this.isSubmitting = false)))
+      .subscribe({
+        error: (error: any) => {
+          handleErrorSnackbar(this.snackBar, error, 'Generation');
+          console.error('Generation failed:', error);
+        },
+      });
   }
 
   // --- Player Logic ---
