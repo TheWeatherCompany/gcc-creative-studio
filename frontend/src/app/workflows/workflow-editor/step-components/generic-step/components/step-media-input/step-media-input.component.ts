@@ -17,6 +17,7 @@
 import {Component, Input, OnInit} from '@angular/core';
 import {AbstractControl, FormBuilder} from '@angular/forms';
 import {MatDialog} from '@angular/material/dialog';
+import {MatSnackBar} from '@angular/material/snack-bar';
 import {AssetTypeEnum} from '../../../../../../admin/source-assets-management/source-asset.model';
 import {ImageCropperDialogComponent} from '../../../../../../common/components/image-cropper-dialog/image-cropper-dialog.component';
 import {
@@ -28,6 +29,11 @@ import {
   SourceAssetResponseDto,
   SourceAssetService,
 } from '../../../../../../common/services/source-asset.service';
+import {
+  handleErrorSnackbar,
+  handleInfoSnackbar,
+  handleRejectedFilesSnackbar,
+} from '../../../../../../utils/handleMessageSnackbar';
 import {StepOutputReference} from '../../../../../workflow.models';
 
 @Component({
@@ -66,6 +72,7 @@ export class StepMediaInputComponent implements OnInit {
     private fb: FormBuilder,
     private dialog: MatDialog,
     private sourceAssetService: SourceAssetService,
+    private snackBar: MatSnackBar,
   ) {}
 
   ngOnInit(): void {}
@@ -155,30 +162,44 @@ export class StepMediaInputComponent implements OnInit {
     this.updateValue(currentItems);
   }
 
-  onReferenceImageDrop(event: DragEvent) {
-    event.preventDefault();
-    if (this.items.length >= this.maxItems) return;
-
-    // Only support image drop for now as per original code `input.type === 'image' && ...`
-    // If this component handles video too, we should check type.
-    if (this.type !== 'image') return;
-
-    const file = event.dataTransfer?.files[0];
-    if (file && file.type.startsWith('image/')) {
+  /** Dropped images fill the remaining slots; extras are ignored. */
+  onFilesAdded(files: File[]) {
+    const remaining = Math.max(0, this.maxItems - this.items.length);
+    if (files.length > remaining) {
+      handleInfoSnackbar(
+        this.snackBar,
+        `Only the first ${remaining} of ${files.length} images were added.`,
+      );
+    }
+    files.slice(0, remaining).forEach(file => {
       this.sourceAssetService
         .uploadAsset(file, {
           aspectRatio: 'other',
           assetType: AssetTypeEnum.GENERIC_IMAGE,
         })
-        .subscribe((result: SourceAssetResponseDto) => {
-          if (result && result.id) {
+        .subscribe({
+          next: (result: SourceAssetResponseDto) => {
+            // Another upload may have filled the slot while this one ran.
+            if (!result?.id) return;
+            if (this.items.length >= this.maxItems) {
+              handleInfoSnackbar(
+                this.snackBar,
+                `${file.name} was not added because the input is full. It is still in My Uploaded Assets.`,
+              );
+              return;
+            }
             this.addItem({
               sourceAssetId: result.id,
               previewUrl: result.presignedUrl || '',
             });
-          }
+          },
+          error: err => handleErrorSnackbar(this.snackBar, err, 'Image upload'),
         });
-    }
+    });
+  }
+
+  onFilesRejected(files: File[]): void {
+    handleRejectedFilesSnackbar(this.snackBar, files);
   }
 
   addLinkedOutput(outputValue: any) {

@@ -167,15 +167,21 @@
               <div
                 class="drop-zone"
                 (click)="openImageSelector()"
-                (dragover)="$event.preventDefault()"
-                (drop)="onDrop($event)"
+                appFileDrop
+                appFileDropAccept="image/*"
+                (filesDropped)="onModelFileAdded($event[0])"
+                (filesRejected)="onFilesRejected($event)"
+                appFilePaste
+                appFilePasteAccept="image/*"
+                [appFilePasteDisabled]="stepper.selectedIndex !== 0 || isLoading"
+                (filesPasted)="onModelFileAdded($event[0])"
               >
                 <div
                   *ngIf="firstFormGroup.get('model')?.value?.id !== 'uploaded'"
                   class="drop-zone-placeholder"
                 >
                   <mat-icon>add_photo_alternate</mat-icon>
-                  <span>Drop your photo or click to select</span>
+                  <span>Drop or paste your photo, or click to select</span>
                 </div>
                 <div
                   *ngIf="firstFormGroup.get('model')?.value?.id === 'uploaded'"

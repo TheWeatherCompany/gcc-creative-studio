@@ -60,6 +60,8 @@ import {MoveToFolderDialogComponent} from './components/move-to-folder-dialog/mo
 import {CopyToFolderDialogComponent} from './components/copy-to-folder-dialog/copy-to-folder-dialog.component';
 import {FolderConflictDialogComponent} from './components/folder-conflict-dialog/folder-conflict-dialog.component';
 import {MatTabsModule} from '@angular/material/tabs';
+import {FileDropDirective} from './upload/file-drop.directive';
+import {FilePasteDirective} from './upload/file-paste.directive';
 
 const DECLARATIONS = [
   CreateWorkspaceModalComponent,
@@ -109,6 +111,8 @@ const MODULES = [
   MatTabsModule,
   RouterModule,
   MarkdownModule.forRoot(),
+  FileDropDirective,
+  FilePasteDirective,
 ];
 
 const EXPORTED_MODULES = [
@@ -132,6 +136,8 @@ const EXPORTED_MODULES = [
   MatProgressSpinnerModule,
   MatTabsModule,
   MarkdownModule,
+  FileDropDirective,
+  FilePasteDirective,
 ];
 
 @NgModule({

@@ -497,3 +497,9 @@ app-workspace-switcher .workspace-name {
     font-weight: 600;
   }
 }
+
+// Set by appFileDrop while files are dragged over a drop target.
+.file-drop-active {
+  outline: 2px dashed #3b82f6;
+  outline-offset: 2px;
+}

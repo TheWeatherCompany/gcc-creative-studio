@@ -21,7 +21,10 @@ import {AssetScopeEnum, AssetTypeEnum} from '../source-asset.model';
 import {SourceAssetsService} from '../source-assets.service';
 import {finalize} from 'rxjs';
 import {MatSnackBar} from '@angular/material/snack-bar';
-import {handleErrorSnackbar} from '../../../utils/handleMessageSnackbar';
+import {
+  handleErrorSnackbar,
+  handleRejectedFilesSnackbar,
+} from '../../../utils/handleMessageSnackbar';
 
 @Component({
   selector: 'app-source-asset-upload-form',
@@ -49,14 +52,20 @@ export class SourceAssetUploadFormComponent {
     });
   }
 
-  onFileSelected(event: Event): void {
-    const element = event.currentTarget as HTMLInputElement;
-    const fileList: FileList | null = element.files;
-    if (fileList && fileList.length > 0) {
-      const file = fileList[0];
-      this.form.patchValue({file: file});
-      this.fileName = file.name;
-    }
+  onFileInputChange(event: Event): void {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (file) this.setFile(file);
+  }
+
+  setFile(file: File): void {
+    this.form.patchValue({file});
+    this.form.get('file')?.markAsTouched();
+    this.fileName = file.name;
+  }
+
+  onFilesRejected(files: File[]): void {
+    handleRejectedFilesSnackbar(this._snackBar, files);
   }
 
   onCancel(): void {

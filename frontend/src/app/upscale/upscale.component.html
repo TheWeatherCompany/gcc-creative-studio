@@ -101,15 +101,23 @@
           
           
 
-          <div class="drop-zone-upscaler !w-full !max-w-full !min-h-[200px]" (click)="openUploaderDialog()" (dragover)="onDragOver($event)"
-            (drop)="onDrop($event)">
+          <div class="drop-zone-upscaler !w-full !max-w-full !min-h-[200px]" (click)="openUploaderDialog()"
+            appFileDrop
+            appFileDropAccept="image/*"
+            [appFileDropDisabled]="isLoadingUpscale || isUploadingSource"
+            (filesDropped)="onFileAdded($event[0])"
+            (filesRejected)="onFilesRejected($event)"
+            appFilePaste
+            appFilePasteAccept="image/*"
+            [appFilePasteDisabled]="isLoadingUpscale || isUploadingSource"
+            (filesPasted)="onFileAdded($event[0])">
             
-            <div *ngIf="!isLoadingUpscale && !assetPair.original" class="drop-zone-placeholder">
+            <div *ngIf="!isLoadingUpscale && !isUploadingSource && !assetPair.original" class="drop-zone-placeholder">
               <mat-icon class="text-4xl text-gray-400">add_photo_alternate</mat-icon>
-              <span class="text-white mt-4 text-center">Drop your photo or click to select</span>
+              <span class="text-white mt-4 text-center">Drop or paste your photo, or click to select</span>
             </div>
 
-            <div *ngIf="!isLoadingUpscale && assetPair.original" class="relative w-full h-full flex justify-center items-center overflow-hidden rounded-lg group">
+            <div *ngIf="!isLoadingUpscale && !isUploadingSource && assetPair.original" class="relative w-full h-full flex justify-center items-center overflow-hidden rounded-lg group">
                  <img [src]="assetPair.original.url" class="max-w-full max-h-[350px] object-contain" />
                  
                  <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex justify-center items-center gap-4">
@@ -118,7 +126,7 @@
                  </div>
             </div>
 
-            <div *ngIf="isLoadingUpscale" class="placeholder-state">
+            <div *ngIf="isLoadingUpscale || isUploadingSource" class="placeholder-state">
               <mat-progress-spinner mode="indeterminate" [diameter]="30" class="mx-auto mb-4"></mat-progress-spinner>
               <p class="text-lg text-gray-400 mt-4">Processing...</p>
             </div>
@@ -163,7 +171,7 @@
 
             <button mat-raised-button 
                     class="w-full !py-1 !text-lg !font-bold !rounded-full !bg-gradient-to-r from-blue-500 via-violet-500 to-red-400 !text-white" 
-                    [disabled]="!selectedAsset || isLoadingUpscale"
+                    [disabled]="!selectedAsset || isLoadingUpscale || isUploadingSource"
                     (click)="startUpscale()">
                <mat-icon class="mr-2">auto_awesome</mat-icon> Upscale
             </button>

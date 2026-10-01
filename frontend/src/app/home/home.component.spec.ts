@@ -40,6 +40,11 @@ import {
   GenerationModelConfig,
   MODEL_CONFIGS,
 } from '../common/config/model-config';
+import {
+  SourceAssetResponseDto,
+  SourceAssetService,
+} from '../common/services/source-asset.service';
+import {MediaItem} from '../common/models/media-item.model';
 
 describe('HomeComponent', () => {
   let component: HomeComponent;
@@ -468,5 +473,88 @@ describe('HomeComponent', () => {
     component.clearImage(0, event);
     expect(component.referenceImages.length).toBe(0);
     expect(event.stopPropagation).toHaveBeenCalled();
+  });
+
+  describe('dropped or pasted reference files', () => {
+    // Nano Banana (Gemini 2.5 Flash Image) takes two references.
+    const twoRefModel = MODEL_CONFIGS.find(
+      m => m.value === 'gemini-2.5-flash-image',
+    )!;
+    const png = (n: number) => new File(['x'], `${n}.png`, {type: 'image/png'});
+    const asset = (n: number) =>
+      ({
+        id: n,
+        gcsUri: `gs://bucket/${n}.png`,
+        presignedUrl: `https://storage.test/${n}.png`,
+      }) as SourceAssetResponseDto;
+    let uploadAsset: jasmine.Spy;
+    let pending: Subject<SourceAssetResponseDto>[];
+    const land = () =>
+      pending.splice(0).forEach((s, i) => {
+        s.next(asset(i + 1));
+        s.complete();
+      });
+
+    beforeEach(() => {
+      component.selectedGenerationModelObject = twoRefModel;
+      component.currentMode = 'Ingredients to Image';
+      component.referenceImages = [];
+      pending = [];
+      uploadAsset = spyOn(
+        TestBed.inject(SourceAssetService),
+        'uploadAsset',
+      ).and.callFake(() => {
+        const upload = new Subject<SourceAssetResponseDto>();
+        pending.push(upload);
+        return upload;
+      });
+      mockNotificationService.show.calls.reset();
+    });
+
+    it('uploads only as many as the model has room for', () => {
+      component.referenceImages = [{previewUrl: 'existing'}];
+
+      component.onReferenceFilesAdded([png(1), png(2), png(3)]);
+      land();
+
+      expect(uploadAsset).toHaveBeenCalledTimes(1);
+      expect(component.referenceImages.map(r => r.previewUrl)).toEqual([
+        'existing',
+        'https://storage.test/1.png',
+      ]);
+    });
+
+    it('drops an upload that lands after the user left Ingredients to Image', () => {
+      component.onReferenceFilesAdded([png(1)]);
+      component.onModeChanged('Text to Image');
+      land();
+
+      expect(component.referenceImages).toEqual([]);
+    });
+
+    // A generation started before the upload lands would go out without it.
+    it('holds Generate until the pasted image has uploaded', () => {
+      component.searchRequest.prompt = 'a cat';
+      mockSearchService.startImagenGeneration.and.returnValue(
+        of({} as MediaItem),
+      );
+      component.onReferenceFilesAdded([png(1)]);
+
+      component.searchTerm();
+      expect(mockSearchService.startImagenGeneration).not.toHaveBeenCalled();
+      expect(mockNotificationService.show).toHaveBeenCalledWith(
+        'Wait for the image to finish uploading, then generate.',
+        'info',
+        undefined,
+        'info',
+        5000,
+      );
+
+      land();
+      component.searchTerm();
+      expect(mockSearchService.startImagenGeneration).toHaveBeenCalledOnceWith(
+        jasmine.objectContaining({sourceAssetIds: [1]}),
+      );
+    });
   });
 });

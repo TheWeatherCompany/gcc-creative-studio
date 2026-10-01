@@ -51,6 +51,7 @@ import {GalleryService} from '../gallery/gallery.service';
 import {WorkspaceStateService} from '../services/workspace/workspace-state.service';
 import {
   handleErrorSnackbar,
+  handleRejectedFilesSnackbar,
   handleSuccessSnackbar,
 } from '../utils/handleMessageSnackbar';
 import {VtoInputLink, VtoRequest, VtoSourceMediaItemLink} from './vto.model';
@@ -411,29 +412,29 @@ export class VtoComponent implements OnInit, AfterViewInit {
     });
   }
 
-  onDrop(event: DragEvent) {
-    event.preventDefault();
-    const file = event.dataTransfer?.files[0];
-    if (file) {
-      this.isLoading = true;
-      this.uploadAsset(file)
-        .pipe(finalize(() => (this.isLoading = false)))
-        .subscribe({
-          next: asset => {
-            const uploadedModel: Model = {
-              id: 'uploaded',
-              name: asset.originalFilename,
-              imageUrl: asset.presignedUrl,
-              size: 'custom',
-              inputLink: {sourceAssetId: asset.id},
-            };
-            this.firstFormGroup.get('model')?.setValue(uploadedModel);
-          },
-          error: error => {
-            handleErrorSnackbar(this._snackBar, error, 'Image upload');
-          },
-        });
-    }
+  onModelFileAdded(file: File) {
+    this.isLoading = true;
+    this.uploadAsset(file)
+      .pipe(finalize(() => (this.isLoading = false)))
+      .subscribe({
+        next: asset => {
+          const uploadedModel: Model = {
+            id: 'uploaded',
+            name: asset.originalFilename,
+            imageUrl: asset.presignedUrl,
+            size: 'custom',
+            inputLink: {sourceAssetId: asset.id},
+          };
+          this.firstFormGroup.get('model')?.setValue(uploadedModel);
+        },
+        error: error => {
+          handleErrorSnackbar(this._snackBar, error, 'Image upload');
+        },
+      });
+  }
+
+  onFilesRejected(files: File[]): void {
+    handleRejectedFilesSnackbar(this._snackBar, files);
   }
 
   clearImage(event: MouseEvent) {
