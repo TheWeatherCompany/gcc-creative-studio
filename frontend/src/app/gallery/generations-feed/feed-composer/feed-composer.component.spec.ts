@@ -189,6 +189,27 @@ describe('FeedComposerComponent', () => {
       });
     }
 
+    it('starts the same request when Enter is pressed in the prompt field', () => {
+      create();
+      const textarea: HTMLTextAreaElement =
+        fixture.nativeElement.querySelector('textarea');
+      textarea.value = 'a supercell';
+      textarea.dispatchEvent(new Event('input'));
+      const enter = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      });
+      textarea.dispatchEvent(enter);
+      fixture.detectChanges();
+
+      const req = http.expectOne(imagesUrl);
+      expect(req.request.body.prompt).toBe('a supercell');
+      expect(enter.defaultPrevented).toBeTrue();
+      expect(box().isLoading).toBeTrue();
+      req.flush({id: 101});
+    });
+
     const refusals: {
       name: string;
       prompt: string;

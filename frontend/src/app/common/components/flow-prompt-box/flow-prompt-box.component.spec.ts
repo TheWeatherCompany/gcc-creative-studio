@@ -23,6 +23,7 @@ import {MODEL_CONFIGS} from '../../config/model-config';
 import {Injector} from '@angular/core';
 import {setAppInjector} from '../../../app-injector';
 import {NotificationService} from '../../services/notification.service';
+import {PROMPT_SUBMIT_HINT} from '../../../utils/prompt-submit';
 
 describe('FlowPromptBoxComponent', () => {
   let component: FlowPromptBoxComponent;
@@ -683,6 +684,79 @@ describe('FlowPromptBoxComponent', () => {
           expect(refs).toEqual([]);
         });
       });
+    });
+  });
+
+  describe('Enter to submit', () => {
+    const textarea = () =>
+      (fixture.nativeElement as HTMLElement).querySelector('textarea')!;
+    const generateButton = () =>
+      Array.from(
+        (fixture.nativeElement as HTMLElement).querySelectorAll('button'),
+      ).find(b => b.textContent?.includes('Generate'))!;
+
+    /** Presses a key on the real textarea, the way the browser delivers it. */
+    function press(init: KeyboardEventInit, keyCode?: number) {
+      const event = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      if (keyCode !== undefined) {
+        Object.defineProperty(event, 'keyCode', {get: () => keyCode});
+      }
+      textarea().dispatchEvent(event);
+      return event;
+    }
+
+    let generated: jasmine.Spy;
+    beforeEach(() => {
+      generated = jasmine.createSpy('generateClicked');
+      component.generateClicked.subscribe(generated);
+    });
+
+    const keys: {
+      name: string;
+      init: KeyboardEventInit;
+      keyCode?: number;
+      submits: boolean;
+    }[] = [
+      {name: 'Enter', init: {}, submits: true},
+      // Ctrl+Enter is left to the window listeners on home and video.
+      {name: 'Ctrl+Enter', init: {ctrlKey: true}, submits: false},
+      {name: 'Shift+Enter', init: {shiftKey: true}, submits: false},
+      {name: 'IME Enter', init: {isComposing: true}, submits: false},
+      {name: 'Safari IME Enter', init: {}, keyCode: 229, submits: false},
+    ];
+    for (const k of keys) {
+      it(`${k.name} ${k.submits ? 'submits once and adds no newline' : 'neither submits nor is taken from the textarea'}`, () => {
+        const event = press(k.init, k.keyCode);
+        expect(generated).toHaveBeenCalledTimes(k.submits ? 1 : 0);
+        expect(event.defaultPrevented).toBe(k.submits);
+      });
+    }
+
+    it('is swallowed while Generate is disabled', () => {
+      fixture.componentRef.setInput('isLoading', true);
+      fixture.detectChanges();
+      expect(generateButton().disabled).toBeTrue();
+
+      const event = press({});
+      expect(generated).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBeTrue();
+    });
+
+    it('shows the shared hint, except in Concatenate Video where there is no prompt', () => {
+      const hint = () =>
+        (fixture.nativeElement as HTMLElement).querySelector(
+          '[data-testid="submit-hint"]',
+        );
+      expect(hint()?.textContent?.trim()).toBe(PROMPT_SUBMIT_HINT);
+
+      fixture.componentRef.setInput('mode', 'Concatenate Video');
+      fixture.detectChanges();
+      expect(hint()).toBeNull();
     });
   });
 });
