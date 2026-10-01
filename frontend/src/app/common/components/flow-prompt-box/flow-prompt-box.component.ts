@@ -43,6 +43,7 @@ import {MatTooltipModule} from '@angular/material/tooltip';
 import {FileDropDirective} from '../../upload/file-drop.directive';
 import {FilePasteDirective} from '../../upload/file-paste.directive';
 import {handleRejectedFilesSnackbar} from '../../../utils/handleMessageSnackbar';
+import {PROMPT_SUBMIT_HINT, isSubmitEnter} from '../../../utils/prompt-submit';
 
 export type NumPos = 1 | 2;
 
@@ -292,6 +293,27 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   onPromptInput(event: Event) {
     const target = event.target as HTMLTextAreaElement;
     this.promptChanged.emit(target.value);
+  }
+
+  /** What the Generate button and the Enter key both check before submitting. */
+  get canGenerate(): boolean {
+    return !this.isLoading;
+  }
+
+  readonly submitHint = PROMPT_SUBMIT_HINT;
+
+  /**
+   * Enter submits like the Generate button. Shift+Enter, and the Enter that
+   * confirms an IME candidate, are left to the textarea. Ctrl+Enter never
+   * reaches here (it is not a plain `keydown.enter`): home and video already
+   * submit on it from a window listener.
+   */
+  onPromptEnter(event: KeyboardEvent) {
+    if (!isSubmitEnter(event)) return;
+    // Swallowed while Generate is disabled, so a double tap during submission
+    // does not leave stray newlines in the prompt.
+    event.preventDefault();
+    if (this.canGenerate) this.generateClicked.emit();
   }
 
   /** Whether the active model accepts a reference video or audio. */

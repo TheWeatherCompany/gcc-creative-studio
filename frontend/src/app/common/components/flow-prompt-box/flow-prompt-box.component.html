@@ -157,6 +157,7 @@
     <div class="mt-4">
       <textarea
         (input)="onPromptInput($event)"
+        (keydown.enter)="onPromptEnter($any($event))"
         [ngModel]="prompt"
         [disabled]="mode === 'Concatenate Video'"
         class="w-full h-24 bg-transparent text-xl text-neutral-400 placeholder:text-neutral-600 focus:outline-none resize-none disabled:opacity-50 disabled:cursor-not-allowed"
@@ -508,30 +509,39 @@
       </div>
 
       <!-- Right: Generate Button -->
-      <div class="flex items-center gap-2">
-        <button
-          mat-raised-button
-          color="primary"
-          (click)="rewriteClicked.emit()"
-          [disabled]="isLoading"
-          class="!rounded-full"
-        >
-          <mat-icon>drive_file_rename_outline</mat-icon>
-          Rewrite
-        </button>
-        <button
-          mat-raised-button
-          class="!bg-white !rounded-full"
-          (click)="generateClicked.emit()"
-          [disabled]="isLoading"
-        >
-          <mat-icon svgIcon="gemini-spark-icon"></mat-icon>
+      <div class="flex flex-col items-end gap-1">
+        @if (!isConcatenateVideo()) {
           <span
-            class="font-bold bg-gradient-to-r from-blue-500 via-violet-500 to-red-400 bg-clip-text text-transparent"
+            data-testid="submit-hint"
+            class="whitespace-nowrap text-xs text-neutral-500"
+            >{{ submitHint }}</span
           >
-            Generate
-          </span>
-        </button>
+        }
+        <div class="flex items-center gap-2">
+          <button
+            mat-raised-button
+            color="primary"
+            (click)="rewriteClicked.emit()"
+            [disabled]="isLoading"
+            class="!rounded-full"
+          >
+            <mat-icon>drive_file_rename_outline</mat-icon>
+            Rewrite
+          </button>
+          <button
+            mat-raised-button
+            class="!bg-white !rounded-full"
+            (click)="generateClicked.emit()"
+            [disabled]="!canGenerate"
+          >
+            <mat-icon svgIcon="gemini-spark-icon"></mat-icon>
+            <span
+              class="font-bold bg-gradient-to-r from-blue-500 via-violet-500 to-red-400 bg-clip-text text-transparent"
+            >
+              Generate
+            </span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
