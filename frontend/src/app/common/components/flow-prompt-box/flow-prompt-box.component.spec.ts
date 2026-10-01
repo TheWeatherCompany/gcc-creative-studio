@@ -737,6 +737,14 @@ describe('FlowPromptBoxComponent', () => {
       });
     }
 
+    it('submits once when Enter is held, and keeps newlines out of the prompt', () => {
+      const presses = [{}, {repeat: true}, {repeat: true}].map(init =>
+        press(init),
+      );
+      expect(generated).toHaveBeenCalledTimes(1);
+      expect(presses.map(e => e.defaultPrevented)).toEqual([true, true, true]);
+    });
+
     it('is swallowed while Generate is disabled', () => {
       fixture.componentRef.setInput('isLoading', true);
       fixture.detectChanges();

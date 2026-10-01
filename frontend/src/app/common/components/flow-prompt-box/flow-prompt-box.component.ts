@@ -313,6 +313,8 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     // Swallowed while Generate is disabled, so a double tap during submission
     // does not leave stray newlines in the prompt.
     event.preventDefault();
+    // A held Enter auto-repeats keydown; only the first press submits.
+    if (event.repeat) return;
     if (this.canGenerate) this.generateClicked.emit();
   }
 
