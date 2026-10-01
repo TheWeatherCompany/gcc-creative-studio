@@ -27,7 +27,7 @@ if not os.getenv("ENVIRONMENT"):
     os.environ["ENVIRONMENT"] = config_service.ENVIRONMENT
 
 
-from src.database import Base, get_conn_string
+from src.database import Base, connector_ip_type, get_conn_string
 from src.tags.schema.tags_model import Tag
 from src.common.schema.media_item_model import MediaItem
 from src.workflows.schema.workflow_model import Workflow
@@ -90,7 +90,7 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
-from google.cloud.sql.connector import Connector, IPTypes
+from google.cloud.sql.connector import Connector
 
 
 # Define a local get_connection for Alembic to avoid loop issues with the global one
@@ -116,7 +116,7 @@ async def alembic_get_connection():
         user=config_service.DB_USER,
         password=config_service.DB_PASS,
         db=config_service.DB_NAME,
-        ip_type=IPTypes.PUBLIC,
+        ip_type=connector_ip_type(),
     )
     return conn
 

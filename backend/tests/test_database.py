@@ -17,6 +17,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from google.cloud.sql.connector import IPTypes
 
 from src.config.config_service import config_service
 from src.database import (
@@ -143,6 +144,31 @@ async def test_get_connection_cloud_sql():
 
             res = await get_connection()
             assert res == "cloud_conn"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [("PRIVATE", IPTypes.PRIVATE), ("PUBLIC", IPTypes.PUBLIC)],
+)
+async def test_get_connection_dials_configured_ip_type(setting, expected):
+    # Deployed services set DB_IP_TYPE=PRIVATE; once the instance loses its
+    # public IP, dialling PUBLIC fails every connection.
+    with (
+        patch.object(config_service, "USE_CLOUD_SQL_AUTH_PROXY", False),
+        patch.object(config_service, "INSTANCE_CONNECTION_NAME", "p:r:i"),
+        patch.object(config_service, "DB_IP_TYPE", setting),
+        patch.object(DatabaseConnector, "get_instance") as mock_inst,
+    ):
+        mock_connector = MagicMock()
+        mock_connector.connect_async = AsyncMock(return_value="cloud_conn")
+        mock_inst.return_value.get_connector.return_value = mock_connector
+
+        await get_connection()
+
+        assert (
+            mock_connector.connect_async.call_args.kwargs["ip_type"] is expected
+        )
 
 
 @pytest.mark.anyio

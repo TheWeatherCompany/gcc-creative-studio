@@ -73,6 +73,11 @@ def get_conn_string() -> str:
     )
 
 
+def connector_ip_type() -> IPTypes:
+    """The instance IP the Cloud SQL Python connector should dial."""
+    return IPTypes[config_service.DB_IP_TYPE]
+
+
 class DatabaseConnector:
     """Singleton class to manage the Google Cloud SQL Connector."""
 
@@ -131,7 +136,7 @@ async def get_connection():
         user=config_service.DB_USER,
         password=config_service.DB_PASS,
         db=config_service.DB_NAME,
-        ip_type=IPTypes.PUBLIC,  # Adjust if using Private IP
+        ip_type=connector_ip_type(),
     )
 
     return conn
@@ -196,7 +201,7 @@ class WorkerDatabase:
                     user=config_service.DB_USER,
                     password=config_service.DB_PASS,
                     db=config_service.DB_NAME,
-                    ip_type=IPTypes.PUBLIC,
+                    ip_type=connector_ip_type(),
                 )
 
             self.engine = create_async_engine(

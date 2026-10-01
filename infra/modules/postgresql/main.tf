@@ -25,18 +25,40 @@ resource "google_sql_database_instance" "default" {
   settings {
     tier    = "db-custom-2-7680"
     edition = "ENTERPRISE"
-    
+
     # Enable IAM Authentication for better security (optional but recommended)
     database_flags {
       name  = "cloudsql.iam_authentication"
       value = "on"
     }
 
+    # Private IP over Private Service Access. Adding a private network to an
+    # existing instance restarts it (several minutes offline). The public IP
+    # is only kept for the cutover window; Google does not list removing it
+    # among the changes that restart the instance.
     ip_configuration {
-      ipv4_enabled = true # Easy connectivity from Cloud Run without VPC peering complexity
+      ipv4_enabled    = var.public_ip_enabled
+      private_network = var.private_network
+      # Cloud Run reaches the instance through the Cloud SQL Python connector,
+      # which always uses TLS, so plaintext connections can be refused.
+      ssl_mode = "ENCRYPTED_ONLY"
+    }
+
+    # Enabling point-in-time recovery on an existing instance restarts it, so
+    # it lands in the same apply as the private network to restart only once.
+    backup_configuration {
+      enabled                        = true
+      start_time                     = var.backup_start_time
+      point_in_time_recovery_enabled = true
+      transaction_log_retention_days = 7
+
+      backup_retention_settings {
+        retained_backups = 7
+        retention_unit   = "COUNT"
+      }
     }
   }
-  
+
   deletion_protection = false # Set to true for production
 }
 

@@ -31,6 +31,34 @@ logger = logging.getLogger(__name__)
 # instances.
 MIGRATION_LOCK_ID = 42
 
+# Cloud Run's Direct VPC egress can take a minute or more to pass traffic
+# after an instance starts, and this is the first connection a process makes.
+# Network errors are retried for this long before startup gives up.
+FIRST_CONNECT_DEADLINE_SECONDS = 180.0
+FIRST_CONNECT_RETRY_INTERVAL_SECONDS = 5.0
+
+
+async def first_connection():
+    """Opens the first database connection, riding out a network that is not
+    ready yet. Only OSError (which covers timeouts and refused connections) is
+    retried; bad credentials or a missing database fail at once.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + FIRST_CONNECT_DEADLINE_SECONDS
+    while True:
+        try:
+            return await get_connection()
+        except OSError as e:
+            if loop.time() + FIRST_CONNECT_RETRY_INTERVAL_SECONDS > deadline:
+                raise
+            logger.warning(
+                "Database not reachable yet (%s: %s); retrying in %.0fs.",
+                type(e).__name__,
+                e,
+                FIRST_CONNECT_RETRY_INTERVAL_SECONDS,
+            )
+            await asyncio.sleep(FIRST_CONNECT_RETRY_INTERVAL_SECONDS)
+
 
 async def run_pending_migrations():
     """Acquires a Postgres advisory lock and runs Alembic migrations.
@@ -50,7 +78,7 @@ async def run_pending_migrations():
         # get_connection returns `conn` from `connector.connect_async`,
         # which IS an asyncpg connection.
 
-        conn = await get_connection()
+        conn = await first_connection()
 
         # Acquire advisory lock
         # pg_advisory_lock waits until the lock is available.

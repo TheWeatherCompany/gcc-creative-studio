@@ -45,6 +45,17 @@ resource "google_cloud_run_v2_service" "this" {
     max_instance_request_concurrency = var.max_instance_request_concurrency
     timeout                          = var.request_timeout
 
+    # Direct VPC egress, so the Cloud SQL connector can reach the instance's
+    # private IP. Only private ranges go through the VPC; Vertex, Storage and
+    # the other Google APIs keep their normal route.
+    vpc_access {
+      network_interfaces {
+        network    = var.vpc_network
+        subnetwork = var.vpc_subnetwork
+      }
+      egress = "PRIVATE_RANGES_ONLY"
+    }
+
     volumes {
       name = "cloudsql"
       cloud_sql_instance {
@@ -68,6 +79,12 @@ resource "google_cloud_run_v2_service" "this" {
       env {
         name = "DB_HOST"
         value = "/cloudsql/${var.cloud_sql_connection_name}"
+      }
+      env {
+        # Read by backend/src/database.py; the instance's private IP is
+        # reachable through vpc_access above.
+        name  = "DB_IP_TYPE"
+        value = "PRIVATE"
       }
       env {
         name = "DB_NAME"

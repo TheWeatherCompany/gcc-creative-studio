@@ -126,14 +126,59 @@ data "google_secret_manager_secret_version" "db_password" {
   version = "latest"
 }
 
-# 2. Call PostgreSQL Module
+# 2. Private networking for the database
+# A dedicated custom-mode VPC rather than the project's default network: the
+# default network is auto-mode (a subnet in every region), carries the
+# 0.0.0.0/0 SSH and RDP firewall rules, and is not managed here. Cloud SQL
+# gets a private IP from the Private Service Access range; Cloud Run reaches
+# it with Direct VPC egress from the subnet.
+resource "google_compute_network" "private" {
+  name                    = "cs-${var.environment}-vpc"
+  auto_create_subnetworks = false
+}
+
+# Direct VPC egress takes about two IPs per instance, more during a revision
+# rollout. The backend (max 100) and worker (max 20) fit in a /23.
+resource "google_compute_subnetwork" "run" {
+  name                     = "cs-${var.environment}-run"
+  region                   = var.gcp_region
+  network                  = google_compute_network.private.id
+  ip_cidr_range            = "10.10.0.0/23"
+  private_ip_google_access = true
+}
+
+resource "google_compute_global_address" "private_services" {
+  name          = "cs-${var.environment}-private-services"
+  purpose       = "VPC_PEERING"
+  address_type  = "INTERNAL"
+  address       = "10.20.0.0"
+  prefix_length = 20
+  network       = google_compute_network.private.id
+}
+
+resource "google_service_networking_connection" "private_services" {
+  network                 = google_compute_network.private.id
+  service                 = "servicenetworking.googleapis.com"
+  reserved_peering_ranges = [google_compute_global_address.private_services.name]
+
+  # Deleting the peering fails while Cloud SQL still uses it; abandon it
+  # instead so a destroy can get past it.
+  deletion_policy = "ABANDON"
+}
+
+# 3. Call PostgreSQL Module
 module "postgresql" {
-  source      = "../postgresql"
-  project_id  = var.gcp_project_id
-  region      = var.gcp_region
-  
+  source     = "../postgresql"
+  project_id = var.gcp_project_id
+  region     = var.gcp_region
+
   # Pass the ACTUAL value to create the user
   db_password = data.google_secret_manager_secret_version.db_password.secret_data
+
+  # Through the connection, not the network, so the instance waits for the
+  # peering to exist.
+  private_network   = google_service_networking_connection.private_services.network
+  public_ip_enabled = var.db_public_ip_enabled
 }
 
 # --- Service Module Calls ---
@@ -174,9 +219,12 @@ module "backend_service" {
   cloud_sql_connection_name = module.postgresql.connection_name
   db_name                   = module.postgresql.db_name
   db_user                   = module.postgresql.db_user
-  
+
   # Pass the Secret ID reference (NOT the value) for Cloud Run
   db_secret_id              = "creative-studio-db-password"
+
+  vpc_network    = google_compute_network.private.name
+  vpc_subnetwork = google_compute_subnetwork.run.name
 }
 
 resource "google_firebase_project" "default" {
@@ -330,6 +378,9 @@ module "worker_service" {
   db_name                   = module.postgresql.db_name
   db_user                   = module.postgresql.db_user
   db_secret_id              = "creative-studio-db-password"
+
+  vpc_network    = google_compute_network.private.name
+  vpc_subnetwork = google_compute_subnetwork.run.name
 
   # Private: reachable only from Cloud Tasks and Cloud Scheduler, as job_invoker.
   allow_unauthenticated            = false
