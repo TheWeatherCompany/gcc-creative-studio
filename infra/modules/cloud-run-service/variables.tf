@@ -124,6 +124,16 @@ variable "db_secret_id" {
 variable "db_name" { type = string }
 variable "db_user" { type = string }
 
+variable "vpc_network" {
+  type        = string
+  description = "VPC network for Direct VPC egress. Must be the network the Cloud SQL instance has its private IP on."
+}
+
+variable "vpc_subnetwork" {
+  type        = string
+  description = "Subnetwork for Direct VPC egress. Cloud Run holds about two of its IPs per instance."
+}
+
 variable "allow_unauthenticated" {
   type        = bool
   default     = true

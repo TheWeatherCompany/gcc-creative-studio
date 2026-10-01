@@ -148,3 +148,9 @@ variable "worker_min_instances" {
   type    = number
   default = 1
 }
+
+variable "db_public_ip_enabled" {
+  type        = bool
+  default     = false
+  description = "Keep the Cloud SQL public IP alongside the private one. Set true only while moving an existing instance to private IP, then remove."
+}

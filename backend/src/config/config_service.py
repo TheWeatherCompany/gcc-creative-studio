@@ -121,6 +121,10 @@ class ConfigService(BaseSettings):
 
     # --- Database Configuration ---
     INSTANCE_CONNECTION_NAME: str = ""
+    # Which instance IP the Cloud SQL Python connector dials. Deployed
+    # services set PRIVATE (Terraform); PUBLIC suits a laptop, where the
+    # private IP is unreachable.
+    DB_IP_TYPE: Literal["PUBLIC", "PRIVATE"] = "PUBLIC"
     DB_USER: str = "postgres"
     DB_PASS: str = "password"
     DB_NAME: str = "creative_studio"
