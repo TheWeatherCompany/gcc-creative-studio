@@ -18,16 +18,25 @@
   class="relative w-full max-w-2xl"
   appFilePaste
   [appFilePasteAccept]="pasteAccept()"
-  [appFilePasteMultiple]="isIngredientsMode()"
+  [appFilePasteMultiple]="takesMultipleFiles()"
   [appFilePasteDisabled]="isLoading || !takesFiles"
-  (filesPasted)="onFilesPasted($event)"
+  (filesPasted)="onFilesAdded($event)"
   (filesRejected)="onFilesRejected($event)"
 >
   <!-- ============================================= -->
   <!-- 1. Main Prompt Card                         -->
   <!-- ============================================= -->
+  <!-- A drop outside the slots goes where a paste would -->
   <div
     class="relative z-10 w-full rounded-3xl bg-neutral-900 p-5 text-neutral-300 shadow-2xl"
+    data-testid="prompt-card"
+    appFileDrop
+    [appFileDropAccept]="pasteAccept()"
+    [appFileDropMultiple]="takesMultipleFiles()"
+    [appFileDropDisabled]="isLoading"
+    [appFileDropIgnore]="!cardTakesDrop"
+    (filesDropped)="onFilesAdded($event)"
+    (filesRejected)="onFilesRejected($event)"
   >
     <div class="flex items-center justify-between">
       <!-- Top Left: Mode Selector -->

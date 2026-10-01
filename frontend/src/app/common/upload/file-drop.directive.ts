@@ -24,6 +24,10 @@ import {
 } from '@angular/core';
 import {extractFiles, extractUri, partitionByAccept} from './upload-files';
 
+// Drag events a zone has handled. They bubble on to any enclosing zone, which
+// would otherwise count the inner zone's children and overwrite its cursor.
+const handled = new WeakSet<Event>();
+
 /**
  * Turns the host into a drop target for files from outside the app.
  * Drags that carry neither files nor (when `uriDropped` is subscribed) a URL,
@@ -31,7 +35,8 @@ import {extractFiles, extractUri, partitionByAccept} from './upload-files';
  * own drop handlers for those still fire. Every drop that is claimed is
  * prevented, even when disabled or fully rejected, because the browser would
  * otherwise open the file in the tab. Feedback for `filesRejected` is up to
- * the host.
+ * the host. A zone inside another one handles its own drags, and the outer
+ * zone leaves them alone.
  */
 @Directive({
   selector: '[appFileDrop]',
@@ -43,6 +48,11 @@ export class FileDropDirective {
   @Input() appFileDropAccept: string | null = null;
   @Input() appFileDropMultiple = false;
   @Input() appFileDropDisabled = false;
+  /**
+   * Leaves every drag alone, as if the directive were not there. Unlike
+   * disabled, which still claims the drop and shows a no-drop cursor.
+   */
+  @Input() appFileDropIgnore = false;
 
   @Output() filesDropped = new EventEmitter<File[]>();
   @Output() filesRejected = new EventEmitter<File[]>();
@@ -109,10 +119,12 @@ export class FileDropDirective {
   }
 
   private isExternalDrag(event: DragEvent): boolean {
+    if (this.appFileDropIgnore || handled.has(event)) return false;
     const types = Array.from(event.dataTransfer?.types ?? []);
-    return (
+    const external =
       types.includes('Files') ||
-      (this.uriDropped.observed && types.includes('text/uri-list'))
-    );
+      (this.uriDropped.observed && types.includes('text/uri-list'));
+    if (external) handled.add(event);
+    return external;
   }
 }
