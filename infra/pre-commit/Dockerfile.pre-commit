@@ -1,7 +1,12 @@
 FROM python:3.12-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Fail the build if curl fails in a `curl | bash` or `curl | tar` pipe.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Install system dependencies. Debian package versions aren't pinned: the
+# base tag tracks the current Debian release, whose mirrors drop superseded
+# versions, so a pin would break the build at the next point release.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     build-essential \
@@ -9,19 +14,28 @@ RUN apt-get update && apt-get install -y \
 
 # Install Node.js (for gts)
 RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
-    && apt-get install -y nodejs \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
     && npm install -g gts@6.0.2
 
 # Install Go (for addlicense)
-RUN curl -sSL https://golang.org/dl/go1.21.0.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+RUN curl -fsSL https://golang.org/dl/go1.21.0.linux-amd64.tar.gz | tar -C /usr/local -xzf -
 ENV PATH=$PATH:/usr/local/go/bin
 
 # Install pre-commit and pylint
-RUN pip install pre-commit pylint
+RUN pip install --no-cache-dir pre-commit==4.6.2 pylint==4.1.1
 
 # Copy and set entrypoint
 COPY infra/pre-commit/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+# Run hooks as an unprivileged user. The entrypoint writes ~/.gitconfig and
+# pre-commit keeps its hook environments in ~/.cache, so it needs a home.
+# UID 1000 matches the usual first user on a Linux host, so files the hooks
+# rewrite in the bind-mounted repo stay writable and keep host ownership.
+RUN groupadd --gid 1000 dev \
+    && useradd --uid 1000 --gid dev --create-home --home-dir /home/dev dev
+USER 1000:1000
 
 WORKDIR /app
 ENTRYPOINT ["/entrypoint.sh"]

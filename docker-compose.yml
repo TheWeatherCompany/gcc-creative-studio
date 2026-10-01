@@ -19,7 +19,7 @@ services:
       dockerfile: Dockerfile
     container_name: creative-studio-backend
     ports:
-      - "9000:8080"
+      - "127.0.0.1:9000:8080"
     restart: unless-stopped
     depends_on:
       - postgres
@@ -54,7 +54,7 @@ services:
       target: builder
     container_name: creative-studio-frontend
     ports:
-      - "4200:8080"
+      - "127.0.0.1:4200:8080"
     # To change the env variables in the frontend, change the environment.ts file
     restart: unless-stopped
 
@@ -77,7 +77,7 @@ services:
     image: postgres:15-alpine
     container_name: creative-studio-postgres
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       - POSTGRES_USER=studio_user
       - POSTGRES_PASSWORD=studio_pass
@@ -95,7 +95,7 @@ services:
     image: adminer
     container_name: creative-studio-adminer
     ports:
-      - "8081:8080"
+      - "127.0.0.1:8081:8080"
     depends_on:
       - postgres
     restart: unless-stopped
