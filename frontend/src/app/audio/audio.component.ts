@@ -15,6 +15,7 @@
  */
 
 import {Component, ElementRef, Inject, ViewChild} from '@angular/core';
+import {takeUntilDestroyed} from '@angular/core/rxjs-interop';
 import {
   AudioService,
   CreateAudioDto,
@@ -38,6 +39,7 @@ import {
   handleErrorSnackbar,
   handleSuccessSnackbar,
 } from '../utils/handleMessageSnackbar';
+import {PROMPT_SUBMIT_HINT, isSubmitEnter} from '../utils/prompt-submit';
 
 // UI Helper type
 type UiModelType = 'lyria' | 'chirp' | 'gemini-tts';
@@ -68,6 +70,10 @@ export class AudioComponent implements OnInit {
   // Job Tracking
   activeAudioJob$: Observable<MediaItem | null>;
   public readonly JobStatus = JobStatus;
+  // The Create button and the Enter handler both read this, so they cannot
+  // disagree about whether a submit is allowed.
+  isJobProcessing = false;
+  readonly submitHint = PROMPT_SUBMIT_HINT;
   showErrorOverlay = true;
 
   // Lyria Specific Inputs
@@ -185,6 +191,9 @@ export class AudioComponent implements OnInit {
     private galleryService: GalleryService,
   ) {
     this.activeAudioJob$ = this.searchService.activeAudioJob$;
+    this.activeAudioJob$.pipe(takeUntilDestroyed()).subscribe(job => {
+      this.isJobProcessing = job?.status === JobStatus.PROCESSING;
+    });
 
     this.matIconRegistry.addSvgIcon(
       'white-gemini-spark-icon',
@@ -250,6 +259,12 @@ export class AudioComponent implements OnInit {
         handleSuccessSnackbar(this.snackBar, 'Voice cloned successfully!');
       }
     });
+  }
+
+  onPromptEnter(event: Event) {
+    if (!isSubmitEnter(event as KeyboardEvent)) return;
+    event.preventDefault();
+    if (!this.isJobProcessing) this.generate();
   }
 
   generate() {
