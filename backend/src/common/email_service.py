@@ -23,6 +23,7 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from src.common.log_utils import sanitize_for_log
 from src.config.config_service import config_service
 
 logger = logging.getLogger(__name__)
@@ -65,9 +66,9 @@ class EmailService:
             logger.info("--- SIMULATING EMAIL SEND (due to missing config) ---")
             logger.info(
                 "To: %s\nSubject: %s\nBody:\n%s",
-                recipient_email,
-                subject,
-                plain_text_content,
+                sanitize_for_log(recipient_email),
+                sanitize_for_log(subject),
+                sanitize_for_log(plain_text_content),
             )
             return
 
@@ -109,18 +110,20 @@ class EmailService:
                 .execute()
             )
             logger.info(
-                "Message Id: %s sent to %s", send_message["id"], recipient_email
+                "Message Id: %s sent to %s",
+                send_message["id"],
+                sanitize_for_log(recipient_email),
             )
 
         except HttpError as error:
             logger.error(
                 "An error occurred sending email to %s: %s",
-                recipient_email,
-                error,
+                sanitize_for_log(recipient_email),
+                sanitize_for_log(error),
             )
         except Exception as e:  # Catch other potential errors like auth issues
             logger.error(
                 "Failed to send workspace invitation email to %s: %s",
-                recipient_email,
-                e,
+                sanitize_for_log(recipient_email),
+                sanitize_for_log(e),
             )

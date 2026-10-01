@@ -35,6 +35,7 @@ from src.audios.audio_controller import router as audio_router
 from src.brand_guidelines.brand_guideline_controller import (
     router as brand_guideline_router,
 )
+from src.common.log_utils import sanitize_for_log
 from src.common.generation_executor import fail_inflight_jobs
 from src.config.config_service import config_service
 from src.galleries.gallery_controller import router as gallery_router
@@ -175,7 +176,10 @@ async def generic_exception_handler(request: Request, exc: Exception):
     """
     # Log the full error for debugging purposes
     logger.error(
-        f"Unhandled exception for request {request.method} {request.url}: {exc}",
+        "Unhandled exception for request %s %s: %s",
+        request.method,
+        sanitize_for_log(request.url),
+        sanitize_for_log(exc),
         exc_info=True,
     )
 

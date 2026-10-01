@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from google.genai import types
 from httpx import AsyncClient as RestClient
 
+from src.common.log_utils import sanitize_for_log
 from src.common.schema.genai_model_setup import GenAIModelSetup
 from src.common.schema.media_item_model import AssetRoleEnum
 from src.config.config_service import config_service
@@ -119,7 +120,9 @@ class WorkflowsExecutorService:
                 response = await self.rest_client.get(url, headers=headers)
                 if response.status_code != 200:
                     logger.warning(
-                        f"Polling failed with status {response.status_code}: {response.text}",
+                        "Polling failed with status %s: %s",
+                        response.status_code,
+                        sanitize_for_log(response.text),
                     )
                     raise HTTPException(
                         status_code=response.status_code,
@@ -143,7 +146,7 @@ class WorkflowsExecutorService:
             except Exception as e:
                 if isinstance(e, HTTPException):
                     raise e
-                logger.error("Error during polling: %s", e)
+                logger.error("Error during polling: %s", sanitize_for_log(e))
                 # Continue polling? Or fail?
                 # If we can't check status, we might be blind.
 
@@ -178,7 +181,9 @@ class WorkflowsExecutorService:
                     if 0 <= index < len(gcs_uris):
                         uri = gcs_uris[index]
                         logger.info(
-                            f"Adding part from URI: {uri}, mime_type: {mime_type}",
+                            "Adding part from URI: %s, mime_type: %s",
+                            sanitize_for_log(uri),
+                            sanitize_for_log(mime_type),
                         )
                         parts.append(
                             types.Part.from_uri(
@@ -187,18 +192,26 @@ class WorkflowsExecutorService:
                         )
                     else:
                         logger.warning(
-                            f"Index {index} out of range for gcs_uris: {gcs_uris}",
+                            "Index %s out of range for gcs_uris: %s",
+                            sanitize_for_log(index),
+                            sanitize_for_log(gcs_uris),
                         )
                 else:
                     logger.warning(
-                        f"Failed to fetch gallery item {media_id}: {response.text}",
+                        "Failed to fetch gallery item %s: %s",
+                        sanitize_for_log(media_id),
+                        sanitize_for_log(response.text),
                     )
             except Exception as e:
-                logger.error(f"Error resolving media item {media_id}: {e}")
+                logger.error(
+                    "Error resolving media item %s: %s",
+                    sanitize_for_log(media_id),
+                    sanitize_for_log(e),
+                )
 
         # Resolve Source Assets
         for asset_id in asset_ids:
-            logger.info("Resolving source asset %s", asset_id)
+            logger.info("Resolving source asset %s", sanitize_for_log(asset_id))
             try:
                 url = f"{self.backend_url}/api/source_assets/{asset_id}"
                 response = await self.rest_client.get(url, headers=headers)
@@ -212,15 +225,22 @@ class WorkflowsExecutorService:
                         or "image/jpeg"
                     )
                     if gcs_uri:
-                        logger.info("Adding part from URI: %s", gcs_uri)
+                        logger.info(
+                            "Adding part from URI: %s",
+                            sanitize_for_log(gcs_uri),
+                        )
                         parts.append(
                             types.Part.from_uri(
                                 file_uri=gcs_uri, mime_type=mime_type
                             ),
                         )
             except Exception as e:
-                logger.error(f"Error resolving source asset {asset_id}: {e}")
-        logger.info("Resolved media parts: %s", parts)
+                logger.error(
+                    "Error resolving source asset %s: %s",
+                    sanitize_for_log(asset_id),
+                    sanitize_for_log(e),
+                )
+        logger.info("Resolved media parts: %s", sanitize_for_log(parts))
         return parts
 
     async def generate_text(
@@ -228,7 +248,6 @@ class WorkflowsExecutorService:
         request: GenerateTextRequest,
         authorization: str | None = None,
     ):
-        logger.info("authorization: %s", authorization)
         generate_content_config = types.GenerateContentConfig(
             temperature=request.config.temperature,
             top_p=0.95,
@@ -255,7 +274,9 @@ class WorkflowsExecutorService:
 
         contents = []
 
-        logger.info("generate_text inputs: %s", request.inputs)
+        logger.info(
+            "generate_text inputs: %s", sanitize_for_log(request.inputs)
+        )
         # 1. Add Text Prompt
         if isinstance(request.inputs.prompt, str):
             contents.append(types.Part.from_text(text=request.inputs.prompt))
@@ -267,7 +288,7 @@ class WorkflowsExecutorService:
                 request.inputs.input_images,
                 authorization,
             )
-            logger.info("Image parts: %s", image_parts)
+            logger.info("Image parts: %s", sanitize_for_log(image_parts))
             contents.extend(image_parts)
 
         # 3. Add Videos
@@ -312,13 +333,13 @@ class WorkflowsExecutorService:
         headers = {"Authorization": authorization} if authorization else {}
 
         logger.info(
-            f"Call backend with url: {url}, body: {body}, headers: {headers}"
+            "Call backend with url: %s, body: %s", url, sanitize_for_log(body)
         )
 
         response = await self.rest_client.post(url, json=body, headers=headers)
 
         if response.status_code != 200:
-            logger.error("Backend error: %s", response.text)
+            logger.error("Backend error: %s", sanitize_for_log(response.text))
             raise HTTPException(
                 status_code=response.status_code,
                 detail=f"Backend error: {response.text}",
@@ -362,13 +383,13 @@ class WorkflowsExecutorService:
         headers = {"Authorization": authorization} if authorization else {}
 
         logger.info(
-            f"Call backend with url: {url}, body: {body}, headers: {headers}"
+            "Call backend with url: %s, body: %s", url, sanitize_for_log(body)
         )
 
         response = await self.rest_client.post(url, json=body, headers=headers)
 
         if response.status_code != 200:
-            logger.error("Backend error: %s", response.text)
+            logger.error("Backend error: %s", sanitize_for_log(response.text))
             raise HTTPException(
                 status_code=response.status_code,
                 detail=f"Backend error: {response.text}",
@@ -437,13 +458,13 @@ class WorkflowsExecutorService:
         headers = {"Authorization": authorization} if authorization else {}
 
         logger.info(
-            f"Call backend with url: {url}, body: {body}, headers: {headers}"
+            "Call backend with url: %s, body: %s", url, sanitize_for_log(body)
         )
 
         response = await self.rest_client.post(url, json=body, headers=headers)
 
         if response.status_code != 200:
-            logger.error("Backend error: %s", response.text)
+            logger.error("Backend error: %s", sanitize_for_log(response.text))
             raise HTTPException(
                 status_code=response.status_code,
                 detail=f"Backend error: {response.text}",
@@ -530,13 +551,13 @@ class WorkflowsExecutorService:
         headers = {"Authorization": authorization} if authorization else {}
 
         logger.info(
-            f"Call backend with url: {url}, body: {body}, headers: {headers}"
+            "Call backend with url: %s, body: %s", url, sanitize_for_log(body)
         )
 
         response = await self.rest_client.post(url, json=body, headers=headers)
 
         if response.status_code != 200:
-            logger.error("Backend error: %s", response.text)
+            logger.error("Backend error: %s", sanitize_for_log(response.text))
             raise HTTPException(
                 status_code=response.status_code,
                 detail=f"Backend error: {response.text}",
@@ -579,14 +600,14 @@ class WorkflowsExecutorService:
         headers = {"Authorization": authorization} if authorization else {}
 
         logger.info(
-            f"Call backend with url: {url}, body: {body}, headers: {headers}"
+            "Call backend with url: %s, body: %s", url, sanitize_for_log(body)
         )
 
         # Note: Audio generation is synchronous in the current controller/service implementation
         response = await self.rest_client.post(url, json=body, headers=headers)
 
         if response.status_code != 200:
-            logger.error("Backend error: %s", response.text)
+            logger.error("Backend error: %s", sanitize_for_log(response.text))
             raise HTTPException(
                 status_code=response.status_code,
                 detail=f"Backend error: {response.text}",

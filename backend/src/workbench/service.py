@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 from fastapi import Depends
 from google.cloud import storage
 
+from src.common.log_utils import sanitize_for_log
 from src.common.storage_service import GcsService
 from src.workbench.schemas import TimelineRequest
 
@@ -232,7 +233,9 @@ class WorkbenchService:
                 output_path,
             ]
 
-            logger.info("Running FFmpeg IDs: %s", [u for u in unique_urls_list])
+            logger.info(
+                "Running FFmpeg IDs: %s", sanitize_for_log(unique_urls_list)
+            )
 
             process = await asyncio.to_thread(
                 subprocess.run,
