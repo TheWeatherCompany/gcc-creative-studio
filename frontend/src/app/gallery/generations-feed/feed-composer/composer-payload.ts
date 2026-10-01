@@ -84,11 +84,13 @@ export function buildImagenPayload(
     generationModel: state.model,
     aspectRatio: state.aspectRatio,
     numberOfMedia: clampOutputs(state.numberOfMedia, findModel(state.model)),
-    style: state.style,
-    // Defence: 'none' is not a lighting, so never send it as one.
-    lighting: state.lighting === 'none' ? null : state.lighting,
-    colorAndTone: state.colorAndTone,
-    composition: state.composition,
+    // The backend takes a named value or null, and ImageStateService starts
+    // lighting at '', so blanks go as null (as HomeComponent.saveState does).
+    // 'none' is not a lighting either.
+    style: state.style || null,
+    lighting: state.lighting === 'none' ? null : state.lighting || null,
+    colorAndTone: state.colorAndTone || null,
+    composition: state.composition || null,
     negativePrompt: state.negativePrompt,
     addWatermark: state.watermark,
     useBrandGuidelines: state.useBrandGuidelines,
@@ -127,10 +129,11 @@ export function buildTextToVideoPayload(
     generateAudio: state.generateAudio,
     resolution,
     negativePrompt: state.negativePrompt,
-    style: state.style,
-    lighting: state.lighting,
-    colorAndTone: state.colorAndTone,
-    composition: state.composition,
+    // Same rule as the image builder: a blank is no choice, not a value.
+    style: state.style || null,
+    lighting: state.lighting || null,
+    colorAndTone: state.colorAndTone || null,
+    composition: state.composition || null,
     enhancePrompt: state.enhancePrompt,
     useBrandGuidelines: state.useBrandGuidelines,
     workspaceId,

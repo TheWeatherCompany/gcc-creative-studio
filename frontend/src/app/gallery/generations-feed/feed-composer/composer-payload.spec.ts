@@ -115,6 +115,27 @@ describe('composer payloads', () => {
     });
   });
 
+  // ImageStateService starts lighting at '', and the backend's enums reject
+  // an empty string with a 422, so an untouched bar could never generate.
+  it('sends unset style fields as null, for both builders', () => {
+    const blank = {style: '', lighting: '', colorAndTone: '', composition: ''};
+    const unset = {
+      style: null,
+      lighting: null,
+      colorAndTone: null,
+      composition: null,
+    };
+    const image = buildImagenPayload(
+      {...IMAGE_STATE, ...blank},
+      'Text to Image',
+      [],
+      5,
+    );
+    const video = buildTextToVideoPayload({...VIDEO_STATE, ...blank}, 5);
+    expect(image).toEqual(jasmine.objectContaining(unset));
+    expect(video).toEqual(jasmine.objectContaining(unset));
+  });
+
   it('clamps takes to what the backend accepts, for both builders', () => {
     const image = buildImagenPayload(
       {...IMAGE_STATE, numberOfMedia: 9},
