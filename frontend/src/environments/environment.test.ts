@@ -42,7 +42,7 @@ export const environment = {
   defaultAvatarUrl: 'assets/images/default-profile-picture.svg',
   // Opened in a new tab by the Feedback button in the nav rail.
   feedbackUrl:
-    'https://docs.google.com/forms/d/e/1FAIpQLSceWvu7G354h-dTbOGvNGEraEjcUAgPE300WNY5qr-WJbh3Eg/viewform',
+    'https://docs.google.com/forms/d/e/1FAIpQLSekUnQAfaoXx35dFIXkJ58EJGgoboz0AMTC1zo40v8IfSaCfg/viewform?usp=header',
   okta: {
     issuer: 'OKTA_ISSUER_PLACEHOLDER',
     clientId: 'OKTA_CLIENT_ID_PLACEHOLDER',
