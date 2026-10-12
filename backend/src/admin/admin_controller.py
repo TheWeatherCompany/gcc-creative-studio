@@ -128,7 +128,7 @@ async def get_active_users_monthly(
 async def cleanup_stuck_jobs(admin_service: AdminService = Depends()):
     """Cleans up stuck media generation jobs.
 
-    Marks jobs with 'processing' status that are older than 1 hour as 'stopped'.
+    Marks jobs with 'processing' status that are older than 40 minutes as 'stopped'.
     """
     count = await admin_service.cleanup_stuck_jobs()
     return {"message": f"Cleaned up {count} stuck jobs", "count": count}
