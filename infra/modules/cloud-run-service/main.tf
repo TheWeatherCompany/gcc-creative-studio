@@ -50,8 +50,8 @@ resource "google_cloud_run_v2_service" "this" {
     # the other Google APIs keep their normal route.
     vpc_access {
       network_interfaces {
-        network    = var.vpc_network
-        subnetwork = var.vpc_subnetwork
+        network    = var.vpc_network_name
+        subnetwork = var.vpc_subnet_name
       }
       egress = "PRIVATE_RANGES_ONLY"
     }

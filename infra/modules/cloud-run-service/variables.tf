@@ -124,12 +124,12 @@ variable "db_secret_id" {
 variable "db_name" { type = string }
 variable "db_user" { type = string }
 
-variable "vpc_network" {
+variable "vpc_network_name" {
   type        = string
   description = "VPC network for Direct VPC egress. Must be the network the Cloud SQL instance has its private IP on."
 }
 
-variable "vpc_subnetwork" {
+variable "vpc_subnet_name" {
   type        = string
   description = "Subnetwork for Direct VPC egress. Cloud Run holds about two of its IPs per instance."
 }

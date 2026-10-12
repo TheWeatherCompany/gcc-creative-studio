@@ -33,29 +33,28 @@ resource "google_sql_database_instance" "default" {
     }
 
     # Private IP over Private Service Access. Adding a private network to an
-    # existing instance restarts it (several minutes offline). The public IP
-    # is only kept for the cutover window; Google does not list removing it
-    # among the changes that restart the instance.
+    # existing instance restarts it (several minutes offline). Differs from
+    # upstream, which hardcodes ipv4_enabled = false: the public IP is kept for
+    # the in-place cutover window, and Google does not list removing it among
+    # the changes that restart the instance.
     ip_configuration {
-      ipv4_enabled    = var.public_ip_enabled
-      private_network = var.private_network
-      # Cloud Run reaches the instance through the Cloud SQL Python connector,
-      # which always uses TLS, so plaintext connections can be refused.
+      ipv4_enabled                                  = var.public_ip_enabled
+      private_network                               = var.private_network
+      enable_private_path_for_google_cloud_services = true
+      # Differs from upstream: refuse plaintext connections (KICS "SQL DB
+      # Instance With SSL Disabled"). Cloud Run reaches the instance through
+      # the Cloud SQL Python connector, which always uses TLS.
       ssl_mode = "ENCRYPTED_ONLY"
     }
 
     # Enabling point-in-time recovery on an existing instance restarts it, so
     # it lands in the same apply as the private network to restart only once.
+    # Backup window, retained backups (7) and log retention (7 days) are left
+    # at the Cloud SQL defaults, as upstream does.
     backup_configuration {
       enabled                        = true
-      start_time                     = var.backup_start_time
       point_in_time_recovery_enabled = true
-      transaction_log_retention_days = 7
-
-      backup_retention_settings {
-        retained_backups = 7
-        retention_unit   = "COUNT"
-      }
+      location                       = var.region
     }
   }
 

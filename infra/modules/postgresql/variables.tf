@@ -28,9 +28,3 @@ variable "public_ip_enabled" {
   default     = false
   description = "Keep the instance's public IP. Only for the cutover from public to private IP; leave false otherwise."
 }
-
-variable "backup_start_time" {
-  type        = string
-  default     = "07:00"
-  description = "Start of the daily backup window, HH:MM in UTC."
-}
