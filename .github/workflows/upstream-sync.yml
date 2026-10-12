@@ -151,10 +151,21 @@ jobs:
           fi
 
           conflicted=false
-          git merge --no-edit --no-ff "upstream/${UPSTREAM_BRANCH}" || conflicted=true
+          git merge --no-commit --no-ff "upstream/${UPSTREAM_BRANCH}" || conflicted=true
+
+          # GITHUB_TOKEN can never push changes under .github/workflows/, and
+          # our workflows are fork-owned anyway: keep ours, and list upstream's
+          # changes in the PR body so someone can port what matters by hand.
+          skipped_workflows=$(git diff --name-only HEAD -- .github/workflows | sort -u)
+          if [ -n "$skipped_workflows" ]; then
+            git restore --source=HEAD --staged --worktree -- .github/workflows
+          fi
+
+          git add -A
           if [ "$conflicted" = "true" ]; then
-            git add -A
             git commit -m "Merge upstream/${UPSTREAM_BRANCH} (unresolved conflicts, needs manual resolution)"
+          else
+            git commit --no-edit
           fi
 
           git push origin "$new_branch"
@@ -162,6 +173,11 @@ jobs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "name=$new_branch" >> "$GITHUB_OUTPUT"
           echo "conflicted=$conflicted" >> "$GITHUB_OUTPUT"
+          {
+            echo 'skipped_workflows<<WFEOF'
+            echo "$skipped_workflows"
+            echo 'WFEOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Open PR
         if: steps.diff.outputs.count != '0' && steps.branch.outputs.skip != 'true'
@@ -175,6 +191,7 @@ jobs:
           AUTH_FILES: ${{ steps.authcheck.outputs.files }}
           SYNC_BRANCH: ${{ steps.branch.outputs.name }}
           COMMIT_COUNT: ${{ steps.diff.outputs.count }}
+          SKIPPED_WORKFLOWS: ${{ steps.branch.outputs.skipped_workflows }}
         run: |
           shortlog=$(git log --oneline "origin/${LOCAL_BRANCH}..upstream/${UPSTREAM_BRANCH}")
           prev_number="$PREV_NUMBER"
@@ -206,12 +223,27 @@ jobs:
           )
           fi
 
+          workflow_note=""
+          if [ -n "$SKIPPED_WORKFLOWS" ]; then
+            workflow_note=$(cat <<EOF
+
+          ### Upstream workflow changes not applied
+          The sync bot can't push workflow files, and ours are fork-owned, so this
+          branch keeps our versions. Port anything we need from these by hand:
+          \`\`\`
+          ${SKIPPED_WORKFLOWS}
+          \`\`\`
+          EOF
+          )
+          fi
+
           body=$(cat <<EOF
           Automated sync from upstream (\`GoogleCloudPlatform/gcc-creative-studio\`, \`${UPSTREAM_BRANCH}\`).
 
           ${conflict_note}
           ${lineage_note}
           ${auth_warning}
+          ${workflow_note}
 
           ### New upstream commits
           \`\`\`
