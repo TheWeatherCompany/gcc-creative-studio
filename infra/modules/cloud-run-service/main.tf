@@ -120,6 +120,25 @@ resource "google_cloud_run_v2_service" "this" {
         name = "cloudsql"
         mount_path = "/cloudsql"
       }
+
+      # Hold traffic until the app answers. The default TCP probe passes as
+      # soon as gunicorn binds 8080, minutes before the lifespan (migrations
+      # under an advisory lock) finishes, so requests hung on new revisions.
+      # GET / is unauthenticated and touches no external service; backend and
+      # worker run the same image, so both serve it. Hardcoded for that reason.
+      # Window: 30 + 54 * 10 = 570s. Normal boot is about 60s; 5 minutes has
+      # been seen. Cloud Run caps failure_threshold * period_seconds at 600s.
+      # Past the window the container is shut down, the revision fails, and
+      # traffic stays on the previous revision.
+      startup_probe {
+        initial_delay_seconds = 30
+        period_seconds        = 10
+        timeout_seconds       = 5
+        failure_threshold     = 54
+        http_get {
+          path = "/"
+        }
+      }
     }
     scaling {
       min_instance_count = var.scaling_min_instances
