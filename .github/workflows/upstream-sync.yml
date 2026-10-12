@@ -53,11 +53,25 @@ jobs:
       # issues:write even though we only ever attach them to PRs.
       issues: write
     steps:
+      # GITHUB_TOKEN can never push a branch whose history changes files under
+      # .github/workflows/, and upstream's commits do. UPSTREAM_SYNC_TOKEN is a
+      # fine-grained token for this repo only, with Contents, Pull requests and
+      # Workflows read/write. Pushing and opening the PR with it also means CI
+      # runs on the sync PR, which GITHUB_TOKEN-created PRs never trigger.
+      - name: Require sync token
+        env:
+          SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: |
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::error::Repository secret UPSTREAM_SYNC_TOKEN is not set; see the comment above this step."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
 
       - name: Configure git identity
         run: |
@@ -153,12 +167,20 @@ jobs:
           conflicted=false
           git merge --no-commit --no-ff "upstream/${UPSTREAM_BRANCH}" || conflicted=true
 
-          # GITHUB_TOKEN can never push changes under .github/workflows/, and
-          # our workflows are fork-owned anyway: keep ours, and list upstream's
-          # changes in the PR body so someone can port what matters by hand.
-          skipped_workflows=$(git diff --name-only HEAD -- .github/workflows | sort -u)
-          if [ -n "$skipped_workflows" ]; then
-            git restore --source=HEAD --staged --worktree -- .github/workflows
+          # Keep our workflows. We've customized the ones we share with upstream
+          # (pinned actions, scoped tokens), and taking upstream's new ones
+          # would switch on their release and infra pipelines here. List every
+          # workflow upstream changed since main's merge base, not just this
+          # merge's diff, so a sync built on an earlier sync branch still shows
+          # them and deletions show too.
+          skipped_workflows=$(git diff --name-only "origin/${LOCAL_BRANCH}...upstream/${UPSTREAM_BRANCH}" -- .github/workflows | sort -u)
+          git restore --source=HEAD --staged --worktree -- .github/workflows
+
+          # Conflicts only in workflow files are gone after the restore.
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+            conflicted=true
+          else
+            conflicted=false
           fi
 
           git add -A
@@ -182,7 +204,7 @@ jobs:
       - name: Open PR
         if: steps.diff.outputs.count != '0' && steps.branch.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
           # Step outputs carry upstream-controlled strings (file paths, branch
           # names); pass them through env rather than interpolating ${{ }}.
           PREV_NUMBER: ${{ steps.prev.outputs.number }}
@@ -228,8 +250,9 @@ jobs:
             workflow_note=$(cat <<EOF
 
           ### Upstream workflow changes not applied
-          The sync bot can't push workflow files, and ours are fork-owned, so this
-          branch keeps our versions. Port anything we need from these by hand:
+          This branch keeps our versions of every workflow: ours are customized,
+          and upstream's new ones would switch on their pipelines here. Upstream
+          changed these since our last sync; port anything we need by hand:
           \`\`\`
           ${SKIPPED_WORKFLOWS}
           \`\`\`
