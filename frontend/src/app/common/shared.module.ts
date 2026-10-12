@@ -49,6 +49,7 @@ import {StudioSliderComponent} from './components/studio-slider/studio-slider.co
 import {StudioToolbarComponent} from './components/studio-toolbar/studio-toolbar.component';
 import {StudioToolbarButtonComponent} from './components/studio-toolbar-button/studio-toolbar-button.component';
 import {GalleryCardComponent} from './components/gallery-card/gallery-card.component';
+import {GalleryViewToggleComponent} from './components/gallery-view-toggle/gallery-view-toggle.component';
 import {StudioDropdownComponent} from './components/studio-dropdown/studio-dropdown.component';
 import {StudioSearchFilterComponent} from './components/studio-search-filter/studio-search-filter.component';
 import {StudioDateRangeFilterComponent} from './components/studio-date-range-filter/studio-date-range-filter.component';
@@ -59,6 +60,8 @@ import {MoveToFolderDialogComponent} from './components/move-to-folder-dialog/mo
 import {CopyToFolderDialogComponent} from './components/copy-to-folder-dialog/copy-to-folder-dialog.component';
 import {FolderConflictDialogComponent} from './components/folder-conflict-dialog/folder-conflict-dialog.component';
 import {MatTabsModule} from '@angular/material/tabs';
+import {FileDropDirective} from './upload/file-drop.directive';
+import {FilePasteDirective} from './upload/file-paste.directive';
 
 const DECLARATIONS = [
   CreateWorkspaceModalComponent,
@@ -72,6 +75,7 @@ const DECLARATIONS = [
   StudioToolbarComponent,
   StudioToolbarButtonComponent,
   GalleryCardComponent,
+  GalleryViewToggleComponent,
   StudioDropdownComponent,
   StudioSearchFilterComponent,
   StudioDateRangeFilterComponent,
@@ -107,6 +111,8 @@ const MODULES = [
   MatTabsModule,
   RouterModule,
   MarkdownModule.forRoot(),
+  FileDropDirective,
+  FilePasteDirective,
 ];
 
 const EXPORTED_MODULES = [
@@ -130,6 +136,8 @@ const EXPORTED_MODULES = [
   MatProgressSpinnerModule,
   MatTabsModule,
   MarkdownModule,
+  FileDropDirective,
+  FilePasteDirective,
 ];
 
 @NgModule({

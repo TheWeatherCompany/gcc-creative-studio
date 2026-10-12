@@ -76,6 +76,10 @@ import {
   handleSuccessSnackbar,
 } from '../utils/handleMessageSnackbar';
 import {NumPos} from '../common/components/flow-prompt-box/flow-prompt-box.component';
+import {
+  PendingUploads,
+  uploadReferenceFiles,
+} from '../common/components/flow-prompt-box/prompt-box-uploads';
 
 @Component({
   selector: 'app-video',
@@ -106,6 +110,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
   // --- Component State ---
   videoDocuments: MediaItem | null = null;
   isLoading = false;
+  /** Slot and reference uploads from a drop or paste; Generate waits for them. */
+  private uploads = new PendingUploads();
   isAudioGenerationDisabled = false;
   startImageAssetId: number | null = null;
   endImageAssetId: number | null = null;
@@ -664,12 +670,15 @@ export class VideoComponent implements OnInit, AfterViewInit {
     }
 
     // If we are entering Frames to Video mode, ensure we only keep image inputs.
+    // Reset the slots directly: clearInput would move a video from slot 2
+    // into slot 1 and run updateModeAndNotify, which switches to Extend Video
+    // and clears the prompt before this mode is set.
     if (mode === 'Frames to Video') {
       if (this.image1Preview && this._input1IsVideo) {
-        this.clearVideo(1);
+        this.resetSlot(1);
       }
       if (this.image2Preview && this._input2IsVideo) {
-        this.clearVideo(2);
+        this.resetSlot(2);
       }
     }
 
@@ -696,6 +705,13 @@ export class VideoComponent implements OnInit, AfterViewInit {
   }
 
   searchTerm() {
+    if (this.uploads.any) {
+      handleInfoSnackbar(
+        this._snackBar,
+        'Wait for the upload to finish, then generate.',
+      );
+      return;
+    }
     const activeWorkspaceId = this.workspaceStateService.getActiveWorkspaceId();
     if (!activeWorkspaceId) {
       handleErrorSnackbar(
@@ -1191,8 +1207,12 @@ export class VideoComponent implements OnInit, AfterViewInit {
 
   uploadImageDirectly(file: File, imageNumber: NumPos) {
     this.isLoading = true;
-    this.sourceAssetService
-      .uploadAsset(file, {assetType: AssetTypeEnum.GENERIC_IMAGE})
+    this.uploads
+      .track(
+        this.sourceAssetService.uploadAsset(file, {
+          assetType: AssetTypeEnum.GENERIC_IMAGE,
+        }),
+      )
       .pipe(finalize(() => (this.isLoading = false)))
       .subscribe({
         next: (asset: SourceAssetResponseDto) => {
@@ -1245,8 +1265,8 @@ export class VideoComponent implements OnInit, AfterViewInit {
   uploadVideoDirectly(file: File, imageNumber: NumPos) {
     this.isLoading = true;
     // No aspectRatio is sent for videos, so we don't pass the second argument
-    this.sourceAssetService
-      .uploadAsset(file)
+    this.uploads
+      .track(this.sourceAssetService.uploadAsset(file))
       .pipe(finalize(() => (this.isLoading = false)))
       .subscribe({
         next: (asset: SourceAssetResponseDto) => {
@@ -1260,24 +1280,9 @@ export class VideoComponent implements OnInit, AfterViewInit {
       });
   }
 
-  onDrop(event: DragEvent, imageNumber: NumPos) {
-    event.preventDefault();
-    const file = event.dataTransfer?.files[0];
-    if (file) {
-      if (file.type.startsWith('image/')) {
-        // If it's an IMAGE, upload it directly
-        this.uploadImageDirectly(file, imageNumber);
-      } else if (file.type.startsWith('video/')) {
-        // If it's a VIDEO, upload it directly
-        this.uploadVideoDirectly(file, imageNumber);
-      } else {
-        handleErrorSnackbar(
-          this._snackBar,
-          {message: 'Unsupported file type.'},
-          'File Upload',
-        );
-      }
-    }
+  /** A file dropped or pasted onto a start/end slot of the prompt box. */
+  onSlotFileAdded({num, file}: {num: NumPos; file: File}) {
+    this.handleFileUpload(file, num);
   }
 
   clearInput(imageNumber: NumPos) {
@@ -1304,6 +1309,20 @@ export class VideoComponent implements OnInit, AfterViewInit {
     }
 
     this.updateModeAndNotify();
+  }
+
+  /** Empties one slot, with none of clearInput's moving or mode switching. */
+  private resetSlot(imageNumber: NumPos) {
+    if (imageNumber === 1) {
+      this.startImageAssetId = null;
+      this.image1Preview = null;
+      this._input1IsVideo = false;
+    } else {
+      this.endImageAssetId = null;
+      this.image2Preview = null;
+      this._input2IsVideo = false;
+    }
+    this.clearSourceMediaItem(imageNumber);
   }
 
   clearVideo(imageNumber: NumPos) {
@@ -1448,6 +1467,11 @@ export class VideoComponent implements OnInit, AfterViewInit {
 
     // If any slot has something, restrict to that type's mimeType.
     return anyInputIsVideo ? 'video/mp4' : 'image/*';
+  }
+
+  /** What the prompt box's start/end slots accept from a drop or paste. */
+  get slotAcceptTypes(): string {
+    return this.getMimeTypeForSelector() ?? 'image/*,video/*';
   }
 
   private applyRemixState(remixState: {
@@ -1785,26 +1809,35 @@ export class VideoComponent implements OnInit, AfterViewInit {
     });
   }
 
-  // Called when DROPPING a file on the new drop zone
-  onReferenceImageDrop(event: DragEvent) {
-    event.preventDefault();
-    if (this.referenceImages.length >= 3) return;
-    const file = event.dataTransfer?.files[0];
-    if (file && file.type.startsWith('image/')) {
-      // For a direct drop, go straight to the cropper
-      ImageCropperDialogComponent.open(this.dialog, {
-        imageFile: file,
-      }).subscribe(result => {
-        if (result && result.id) {
+  /**
+   * Reference images dropped or pasted onto the prompt box. They upload
+   * straight away; the edit overlay on each thumbnail opens the cropper.
+   */
+  onReferenceFilesAdded(files: File[]): void {
+    uploadReferenceFiles(
+      files,
+      {
+        maxReferences: () =>
+          this.currentModelConfig()?.capabilities.maxReferenceImages ?? 3,
+        referenceCount: () => this.referenceImages.length,
+        takesReferences: () => this.currentMode === 'Ingredients to Video',
+        upload: file =>
+          this.uploads.track(
+            this.sourceAssetService.uploadAsset(file, {
+              assetType: AssetTypeEnum.GENERIC_IMAGE,
+            }),
+          ),
+        add: asset => {
           this.referenceImages.push({
-            sourceAssetId: result.id,
-            previewUrl: result.presignedUrl || '',
+            sourceAssetId: asset.id,
+            previewUrl: asset.presignedUrl || '',
           });
           this.handleReferenceImageAdded();
           this.saveState();
-        }
-      });
-    }
+        },
+      },
+      this._snackBar,
+    );
   }
 
   private handleReferenceImageAdded(): void {

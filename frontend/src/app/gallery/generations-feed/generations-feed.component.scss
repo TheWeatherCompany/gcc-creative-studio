@@ -27,6 +27,25 @@
   );
 }
 
+// The prompt bar stays near the bottom of the viewport while the rows scroll
+// under it. Sticky inside .feed-container, so it keeps the container's
+// nav-rail offset without repeating the calc. Below md (768px, where the nav
+// rail becomes a bottom bar) it is hidden. z-index sits above the rows and
+// below the nav rail and the lightbox (both 1000).
+.feed-composer {
+  display: none;
+
+  @media (min-width: 768px) {
+    display: block;
+    position: sticky;
+    bottom: 2.5vh;
+    z-index: 10;
+    // The same width as the prompt bar's card, so the card is centred.
+    max-width: 42rem;
+    margin: 1.5rem auto 0;
+  }
+}
+
 .feed-row {
   display: flex;
   gap: 1.5rem;

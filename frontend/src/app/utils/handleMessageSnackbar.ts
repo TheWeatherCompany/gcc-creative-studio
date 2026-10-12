@@ -81,3 +81,12 @@ export const handleInfoSnackbar: (
     console.error('NotificationService not available', e);
   }
 };
+
+export const handleRejectedFilesSnackbar: (
+  snackBar: MatSnackBar,
+  files: File[],
+) => void = (snackBar: MatSnackBar, files: File[]) =>
+  handleInfoSnackbar(
+    snackBar,
+    `Can't use ${files.map(f => f.name).join(', ')} here.`,
+  );

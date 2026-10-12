@@ -87,6 +87,7 @@ import {FooterComponent} from './footer/footer.component';
 import {FunTemplatesComponent} from './fun-templates/fun-templates.component';
 import {MediaDetailComponent} from './gallery/media-detail/media-detail.component';
 import {MediaGalleryComponent} from './gallery/media-gallery/media-gallery.component';
+import {FeedComposerComponent} from './gallery/generations-feed/feed-composer/feed-composer.component';
 import {GenerationsFeedComponent} from './gallery/generations-feed/generations-feed.component';
 import {HeaderComponent} from './header/header.component';
 import {HomeComponent} from './home/home.component';
@@ -182,6 +183,8 @@ import {UpscaleComponent} from './upscale/upscale.component';
     MatSliderModule,
     NotificationContainerComponent,
     FlowPromptBoxComponent,
+    // Fork: the feed's prompt bar (standalone), rendered by GenerationsFeedComponent
+    FeedComposerComponent,
     DragDropModule,
     MatPaginatorModule,
     ClipboardModule,

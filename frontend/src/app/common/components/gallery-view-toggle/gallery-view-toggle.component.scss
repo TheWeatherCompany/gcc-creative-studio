@@ -1,0 +1,100 @@
+/**
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+:host {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+// The same dark glass pill as studio-button and studio-toolbar, holding two
+// segments. The active segment gets a lighter fill.
+.view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: 9999px;
+  background-image: linear-gradient(
+      180deg,
+      rgba(60, 60, 60, 0.6),
+      rgba(40, 40, 40, 0.8)
+    ),
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.4) 0%,
+      rgba(255, 255, 255, 0.1) 100%
+    );
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  font-family: 'Google Sans Text', sans-serif;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.view-toggle__segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 12px;
+  border-radius: 9999px;
+  color: rgba(255, 255, 255, 0.7);
+  text-decoration: none;
+  transition:
+    background-color 0.2s ease-in-out,
+    color 0.2s ease-in-out;
+
+  mat-icon {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    font-size: 18px;
+  }
+
+  &:hover {
+    color: #fff;
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--gem-sys-color--brand-blue);
+    outline-offset: 1px;
+  }
+}
+
+.view-toggle__segment--active,
+.view-toggle__segment--active:hover {
+  color: #fff;
+  background-color: rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.2);
+  cursor: default;
+}
+
+.view-toggle__badge {
+  padding: 1px 6px;
+  border-radius: 9999px;
+  background-color: var(--gem-sys-color--brand-blue);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}

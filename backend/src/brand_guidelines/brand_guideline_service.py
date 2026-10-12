@@ -46,6 +46,7 @@ from src.brand_guidelines.repository.brand_guideline_repository import (
 from src.brand_guidelines.schema.brand_guideline_model import (
     BrandGuidelineModel,
 )
+from src.common.log_utils import sanitize_for_log
 from src.common.schema.media_item_model import JobStatusEnum
 from src.common.storage_service import GcsService
 from src.multimodal.gemini_service import GeminiService
@@ -112,7 +113,8 @@ def _process_brand_guideline_in_background(
                     try:
                         # 0. Download the source PDF from GCS
                         worker_logger.info(
-                            f"Downloading source PDF from {source_gcs_uri}",
+                            "Downloading source PDF from %s",
+                            sanitize_for_log(source_gcs_uri),
                         )
                         file_contents = gcs_service.download_bytes_from_gcs(
                             source_gcs_uri,
@@ -161,7 +163,9 @@ def _process_brand_guideline_in_background(
                         for i, result in enumerate(results):
                             if isinstance(result, Exception):
                                 worker_logger.error(
-                                    f"Extraction for PDF chunk {gcs_uris[i]} failed: {result}",
+                                    "Extraction for PDF chunk %s failed: %s",
+                                    sanitize_for_log(gcs_uris[i]),
+                                    sanitize_for_log(result),
                                 )
                             elif result:
                                 successful_partial_results.append(result)

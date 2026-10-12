@@ -1,0 +1,73 @@
+<!--
+ Copyright 2026 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+<!--
+  One box per media type, not one box re-fed. The box adjusts its resolution
+  when it is given a model the resolution doesn't fit, and on a mode switch it
+  still holds the other media type's resolution, which would overwrite the
+  saved one.
+-->
+@if (isVideo) {
+  <app-flow-prompt-box
+    [prompt]="prompt"
+    [mode]="mode"
+    [modes]="modes"
+    [generationModels]="models"
+    [selectedGenerationModel]="model?.viewValue ?? ''"
+    [aspectRatio]="aspectRatio"
+    [aspectRatioOptions]="aspectRatioOptions"
+    [outputs]="outputs"
+    [maxOutputs]="maxOutputs"
+    [resolution]="resolution"
+    [duration]="duration"
+    [isLoading]="isLoading"
+    (promptChanged)="onPromptChanged($event)"
+    (modeChanged)="onModeChanged($event)"
+    (modelSelected)="onModelSelected($event)"
+    (aspectRatioChanged)="onAspectRatioChanged($event)"
+    (outputsChanged)="onOutputsChanged($event)"
+    (resolutionChanged)="onResolutionChanged($event)"
+    (durationChanged)="onDurationChanged($event)"
+    (rewriteClicked)="rewritePrompt()"
+    (generateClicked)="generate()"
+  ></app-flow-prompt-box>
+} @else {
+  <app-flow-prompt-box
+    [prompt]="prompt"
+    [mode]="mode"
+    [modes]="modes"
+    [generationModels]="models"
+    [selectedGenerationModel]="model?.viewValue ?? ''"
+    [aspectRatio]="aspectRatio"
+    [aspectRatioOptions]="aspectRatioOptions"
+    [outputs]="outputs"
+    [maxOutputs]="maxOutputs"
+    [resolution]="resolution"
+    [temperature]="temperature"
+    [referenceImages]="mode === 'Ingredients to Image' ? references : []"
+    [isLoading]="isLoading"
+    (promptChanged)="onPromptChanged($event)"
+    (modeChanged)="onModeChanged($event)"
+    (modelSelected)="onModelSelected($event)"
+    (aspectRatioChanged)="onAspectRatioChanged($event)"
+    (outputsChanged)="onOutputsChanged($event)"
+    (resolutionChanged)="onResolutionChanged($event)"
+    (temperatureChanged)="onTemperatureChanged($event)"
+    (openImageSelectorForReference)="openReferencePicker()"
+    (clearReferenceImage)="clearReference($event.index)"
+    (rewriteClicked)="rewritePrompt()"
+    (generateClicked)="generate()"
+  ></app-flow-prompt-box>
+}

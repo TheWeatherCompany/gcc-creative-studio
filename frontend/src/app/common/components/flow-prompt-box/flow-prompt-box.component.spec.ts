@@ -20,6 +20,10 @@ import {MatSnackBar} from '@angular/material/snack-bar';
 import {NoopAnimationsModule} from '@angular/platform-browser/animations';
 import {MatIconTestingModule} from '@angular/material/icon/testing';
 import {MODEL_CONFIGS} from '../../config/model-config';
+import {Injector} from '@angular/core';
+import {setAppInjector} from '../../../app-injector';
+import {NotificationService} from '../../services/notification.service';
+import {PROMPT_SUBMIT_HINT} from '../../../utils/prompt-submit';
 
 describe('FlowPromptBoxComponent', () => {
   let component: FlowPromptBoxComponent;
@@ -305,6 +309,535 @@ describe('FlowPromptBoxComponent', () => {
       expect(component.modelSelected.emit).toHaveBeenCalledWith(
         unsupportedModel,
       );
+    });
+  });
+
+  describe('files from paste and drop', () => {
+    const png = (name = 'a.png') => new File(['x'], name, {type: 'image/png'});
+    const mp4 = new File(['x'], 'clip.mp4', {type: 'video/mp4'});
+    const allModes = [
+      'Text to Image',
+      'Ingredients to Image',
+      'Text to Video',
+      'Frames to Video',
+      'Ingredients to Video',
+      'Extend Video',
+      'Concatenate Video',
+      'Video to Image',
+    ].map(value => ({value, icon: '', label: value}));
+
+    let refs: File[][];
+    let slots: {num: number; file: File}[];
+    let modes: string[];
+    let notices: jasmine.Spy;
+
+    beforeEach(() => {
+      setAppInjector(TestBed.inject(Injector));
+      notices = spyOn(TestBed.inject(NotificationService), 'show');
+    });
+
+    /** The toast messages shown so far. */
+    const shown = () => notices.calls.allArgs().map(a => a[0] as string);
+
+    /** Subscribes the way a host template binding does. */
+    function bindFileOutputs(which: 'both' | 'slot' = 'both'): void {
+      refs = [];
+      slots = [];
+      modes = [];
+      if (which === 'both') {
+        component.referenceFilesAdded.subscribe(f => refs.push(f));
+      }
+      component.slotFileAdded.subscribe(s => slots.push(s));
+      component.modeChanged.subscribe(m => modes.push(m));
+    }
+
+    function paste(...files: File[]): ClipboardEvent {
+      const dt = new DataTransfer();
+      files.forEach(f => dt.items.add(f));
+      const event = new ClipboardEvent('paste', {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true,
+      });
+      document.body.dispatchEvent(event);
+      return event;
+    }
+
+    function drop(testId: string, ...files: File[]): void {
+      const el = (fixture.nativeElement as HTMLElement).querySelector(
+        `[data-testid="${testId}"]`,
+      );
+      expect(el).withContext(testId).not.toBeNull();
+      const dt = new DataTransfer();
+      files.forEach(f => dt.items.add(f));
+      el!.dispatchEvent(
+        new DragEvent('drop', {
+          dataTransfer: dt,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+
+    function show(mode: string, opts: {start?: boolean} = {}): void {
+      component.modes = allModes;
+      component.mode = mode;
+      component.image1Preview = opts.start ? 'https://x.test/start.png' : null;
+      fixture.detectChanges();
+    }
+
+    // A drop on the card outside the slots goes where a paste would.
+    describe('pasted, or dropped on the card', () => {
+      const cases: {
+        name: string;
+        mode: string;
+        start?: boolean;
+        offered?: string[];
+        files: File[];
+        refs?: number;
+        slot?: number;
+        switchTo?: string;
+        rejected?: boolean;
+        slotAccept?: string;
+      }[] = [
+        {
+          name: 'Ingredients to Image adds every image as a reference',
+          mode: 'Ingredients to Image',
+          files: [png('1.png'), png('2.png')],
+          refs: 2,
+        },
+        {
+          name: 'Ingredients to Video adds every image as a reference',
+          mode: 'Ingredients to Video',
+          files: [png('1.png'), png('2.png')],
+          refs: 2,
+        },
+        {
+          name: 'Ingredients to Video takes no video',
+          mode: 'Ingredients to Video',
+          files: [mp4],
+          rejected: true,
+        },
+        {
+          name: 'Frames to Video fills an empty start frame',
+          mode: 'Frames to Video',
+          files: [png('1.png'), png('2.png')],
+          slot: 1,
+        },
+        {
+          name: 'Frames to Video fills the end frame once there is a start',
+          mode: 'Frames to Video',
+          start: true,
+          files: [png()],
+          slot: 2,
+        },
+        {
+          name: 'Concatenate Video fills the second slot once there is a first',
+          mode: 'Concatenate Video',
+          start: true,
+          files: [mp4],
+          slot: 2,
+        },
+        {
+          name: 'Extend Video always replaces its one slot',
+          mode: 'Extend Video',
+          start: true,
+          files: [mp4],
+          slot: 1,
+        },
+        {
+          name: 'Text to Image switches to Ingredients to Image',
+          mode: 'Text to Image',
+          files: [png()],
+          switchTo: 'Ingredients to Image',
+          refs: 1,
+        },
+        {
+          name: 'Text to Image adds several images when it switches',
+          mode: 'Text to Image',
+          files: [png('1.png'), png('2.png')],
+          switchTo: 'Ingredients to Image',
+          refs: 2,
+        },
+        {
+          name: 'Text to Image takes no video',
+          mode: 'Text to Image',
+          files: [mp4],
+          rejected: true,
+        },
+        {
+          name: 'Text to Video switches to Frames to Video with a start frame',
+          mode: 'Text to Video',
+          files: [png()],
+          switchTo: 'Frames to Video',
+          slot: 1,
+        },
+        {
+          // A video would move the page on to Extend Video and clear the
+          // prompt the user typed.
+          name: 'Text to Video takes no video',
+          mode: 'Text to Video',
+          files: [mp4],
+          rejected: true,
+        },
+        {
+          name: 'Text to Video takes an image even when leftover inputs narrow the slots',
+          mode: 'Text to Video',
+          slotAccept: 'video/mp4',
+          files: [png()],
+          switchTo: 'Frames to Video',
+          slot: 1,
+        },
+        {
+          name: 'Text to Image stays put when Ingredients is not offered',
+          mode: 'Text to Image',
+          offered: ['Text to Image'],
+          files: [png()],
+        },
+        {
+          name: 'Text to Video stays put when Frames is not offered',
+          mode: 'Text to Video',
+          offered: ['Text to Video', 'Ingredients to Video'],
+          files: [png()],
+        },
+        {
+          name: 'Video to Image is not a text-only mode, so it does not switch',
+          mode: 'Video to Image',
+          files: [png()],
+        },
+      ];
+
+      for (const how of ['pasted', 'dropped on the card'] as const) {
+        for (const c of cases) {
+          it(`${how}: ${c.name}`, () => {
+            bindFileOutputs();
+            if (c.slotAccept) component.slotAccept = c.slotAccept;
+            show(c.mode, {start: c.start});
+            if (c.offered) {
+              component.modes = allModes.filter(m =>
+                c.offered!.includes(m.value),
+              );
+              fixture.detectChanges();
+            }
+
+            if (how === 'pasted') paste(...c.files);
+            else drop('prompt-card', ...c.files);
+
+            expect(modes)
+              .withContext('mode switch')
+              .toEqual(c.switchTo ? [c.switchTo] : []);
+            expect(component.mode).toBe(c.switchTo ?? c.mode);
+            expect(refs.map(r => r.length))
+              .withContext('references')
+              .toEqual(c.refs ? [c.refs] : []);
+            expect(slots.map(s => [s.num, s.file.name]))
+              .withContext('slot')
+              .toEqual(c.slot ? [[c.slot, c.files[0].name]] : []);
+            expect(shown())
+              .withContext('rejection toast')
+              .toEqual(c.rejected ? ["Can't use clip.mp4 here."] : []);
+          });
+        }
+      }
+    });
+
+    describe('a drop on the card', () => {
+      function dragOn(testId: string, type: string): DragEvent {
+        const el = (fixture.nativeElement as HTMLElement).querySelector(
+          `[data-testid="${testId}"]`,
+        )!;
+        const dt = new DataTransfer();
+        dt.items.add(png());
+        const e = new DragEvent(type, {
+          dataTransfer: dt,
+          bubbles: true,
+          cancelable: true,
+        });
+        el.dispatchEvent(e);
+        fixture.detectChanges();
+        return e;
+      }
+      const card = () =>
+        (fixture.nativeElement as HTMLElement).querySelector(
+          '[data-testid="prompt-card"]',
+        )!;
+
+      it('highlights the card in a text-only mode', () => {
+        bindFileOutputs();
+        show('Text to Image');
+        dragOn('prompt-card', 'dragenter');
+        expect(card().classList).toContain('file-drop-active');
+      });
+
+      it('leaves a slot to handle its own drag', () => {
+        bindFileOutputs();
+        show('Frames to Video');
+        dragOn('frame-slot-2', 'dragenter');
+        expect(card().classList).not.toContain('file-drop-active');
+        drop('frame-slot-2', png('end.png'));
+        expect(slots.map(s => [s.num, s.file.name])).toEqual([[2, 'end.png']]);
+      });
+
+      // The feed composer renders the prompt box without the file outputs.
+      it('is left alone when the host takes no files', () => {
+        show('Text to Image');
+        expect(dragOn('prompt-card', 'drop').defaultPrevented).toBeFalse();
+        expect(card().classList).not.toContain('file-drop-active');
+      });
+
+      it('is left alone when the mode has nowhere to put it', () => {
+        bindFileOutputs();
+        show('Video to Image');
+        expect(dragOn('prompt-card', 'drop').defaultPrevented).toBeFalse();
+      });
+
+      it('takes nothing while a generation is being submitted', () => {
+        bindFileOutputs();
+        show('Text to Image');
+        component.isLoading = true;
+        fixture.detectChanges();
+        drop('prompt-card', png());
+        expect(refs).toEqual([]);
+        expect(modes).toEqual([]);
+      });
+    });
+
+    // The feed composer renders the prompt box without the file outputs. A
+    // paste there must reach the browser rather than vanish.
+    describe('paste is left to the browser', () => {
+      it('when the host takes no files', () => {
+        show('Ingredients to Image');
+        expect(paste(png()).defaultPrevented).toBeFalse();
+      });
+
+      it('while a generation is being submitted', () => {
+        bindFileOutputs();
+        show('Ingredients to Image');
+        component.isLoading = true;
+        fixture.detectChanges();
+        expect(paste(png()).defaultPrevented).toBeFalse();
+        expect(refs).toEqual([]);
+      });
+
+      for (const which of ['both', 'slot'] as const) {
+        it(`but not once the host binds ${which === 'both' ? 'the file outputs' : 'only the slot output'}`, () => {
+          bindFileOutputs(which);
+          show('Frames to Video');
+          expect(paste(png()).defaultPrevented).toBeTrue();
+        });
+      }
+    });
+
+    // As with paste, a host that takes no files (the feed composer) leaves
+    // the drag alone: no highlight, and nothing claims the drop.
+    describe('drop zones', () => {
+      const flashImage = MODEL_CONFIGS.find(
+        m => m.value === 'gemini-2.5-flash-image',
+      )!;
+      const zones: {zone: string; mode: string; own: 'slot' | 'refs'}[] = [
+        {zone: 'frame-slot-1', mode: 'Frames to Video', own: 'slot'},
+        {zone: 'frame-slot-2', mode: 'Frames to Video', own: 'slot'},
+        {
+          zone: 'reference-drop-zone',
+          mode: 'Ingredients to Image',
+          own: 'refs',
+        },
+      ];
+      const binds = ['nothing', 'only the other output', 'its output'] as const;
+
+      for (const {zone, mode, own} of zones) {
+        for (const bound of binds) {
+          const takes = bound === 'its output';
+          it(`${zone} ${takes ? 'takes' : 'leaves'} a file drag when the host binds ${bound}`, () => {
+            component.generationModels = MODEL_CONFIGS;
+            component.selectedGenerationModel = flashImage.viewValue;
+            const other = own === 'slot' ? 'refs' : 'slot';
+            const output = {
+              slot: component.slotFileAdded,
+              refs: component.referenceFilesAdded,
+            } as const;
+            if (bound === 'its output') output[own].subscribe();
+            if (bound === 'only the other output') output[other].subscribe();
+            show(mode);
+            const el = (fixture.nativeElement as HTMLElement).querySelector(
+              `[data-testid="${zone}"]`,
+            )!;
+            const dt = new DataTransfer();
+            dt.items.add(png());
+            const drag = (type: string) => {
+              const e = new DragEvent(type, {
+                dataTransfer: dt,
+                bubbles: true,
+                cancelable: true,
+              });
+              el.dispatchEvent(e);
+              return e;
+            };
+
+            drag('dragenter');
+            fixture.detectChanges();
+            expect(el.classList.contains('file-drop-active'))
+              .withContext('highlight')
+              .toBe(takes);
+            expect(drag('drop').defaultPrevented)
+              .withContext('drop claimed')
+              .toBe(takes);
+          });
+        }
+      }
+    });
+
+    it('shows the second slot everywhere but Extend Video', () => {
+      bindFileOutputs();
+      for (const [mode, slots] of [
+        ['Frames to Video', ['frame-slot-1', 'frame-slot-2']],
+        ['Concatenate Video', ['frame-slot-1', 'frame-slot-2']],
+        ['Extend Video', ['frame-slot-1']],
+      ] as const) {
+        show(mode);
+        const shown = Array.from(
+          (fixture.nativeElement as HTMLElement).querySelectorAll(
+            '[data-testid^="frame-slot-"]',
+          ),
+        ).map(el => el.getAttribute('data-testid'));
+        expect(shown)
+          .withContext(mode)
+          .toEqual([...slots]);
+      }
+    });
+
+    describe('dropped', () => {
+      it('onto a frame slot fill that slot', () => {
+        bindFileOutputs();
+        show('Frames to Video');
+        drop('frame-slot-1', png('start.png'));
+        drop('frame-slot-2', png('end.png'));
+        expect(slots.map(s => [s.num, s.file.name])).toEqual([
+          [1, 'start.png'],
+          [2, 'end.png'],
+        ]);
+      });
+
+      it('onto a frame slot must match what the host says it takes', () => {
+        bindFileOutputs();
+        show('Extend Video');
+        component.slotAccept = 'video/mp4';
+        fixture.detectChanges();
+        drop('frame-slot-1', png());
+        expect(slots).toEqual([]);
+        expect(shown()).toEqual(["Can't use a.png here."]);
+      });
+
+      describe('onto the reference zone', () => {
+        const flashImage = MODEL_CONFIGS.find(
+          m => m.value === 'gemini-2.5-flash-image',
+        )!;
+
+        beforeEach(() => {
+          component.generationModels = MODEL_CONFIGS;
+          component.selectedGenerationModel = flashImage.viewValue;
+          bindFileOutputs();
+        });
+
+        it('add every image', () => {
+          show('Ingredients to Image');
+          drop('reference-drop-zone', png('1.png'), png('2.png'));
+          expect(refs.map(r => r.map(f => f.name))).toEqual([
+            ['1.png', '2.png'],
+          ]);
+        });
+
+        it('add nothing once the model is full', () => {
+          component.referenceImages = Array.from(
+            {length: flashImage.capabilities.maxReferenceImages},
+            (_, i) => ({previewUrl: `ref-${i}`}),
+          );
+          show('Ingredients to Image');
+          drop('reference-drop-zone', png());
+          expect(refs).toEqual([]);
+        });
+      });
+    });
+  });
+
+  describe('Enter to submit', () => {
+    const textarea = () =>
+      (fixture.nativeElement as HTMLElement).querySelector('textarea')!;
+    const generateButton = () =>
+      Array.from(
+        (fixture.nativeElement as HTMLElement).querySelectorAll('button'),
+      ).find(b => b.textContent?.includes('Generate'))!;
+
+    /** Presses a key on the real textarea, the way the browser delivers it. */
+    function press(init: KeyboardEventInit, keyCode?: number) {
+      const event = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      if (keyCode !== undefined) {
+        Object.defineProperty(event, 'keyCode', {get: () => keyCode});
+      }
+      textarea().dispatchEvent(event);
+      return event;
+    }
+
+    let generated: jasmine.Spy;
+    beforeEach(() => {
+      generated = jasmine.createSpy('generateClicked');
+      component.generateClicked.subscribe(generated);
+    });
+
+    const keys: {
+      name: string;
+      init: KeyboardEventInit;
+      keyCode?: number;
+      submits: boolean;
+    }[] = [
+      {name: 'Enter', init: {}, submits: true},
+      // Ctrl+Enter is left to the window listeners on home and video.
+      {name: 'Ctrl+Enter', init: {ctrlKey: true}, submits: false},
+      {name: 'Shift+Enter', init: {shiftKey: true}, submits: false},
+      {name: 'IME Enter', init: {isComposing: true}, submits: false},
+      {name: 'Safari IME Enter', init: {}, keyCode: 229, submits: false},
+    ];
+    for (const k of keys) {
+      it(`${k.name} ${k.submits ? 'submits once and adds no newline' : 'neither submits nor is taken from the textarea'}`, () => {
+        const event = press(k.init, k.keyCode);
+        expect(generated).toHaveBeenCalledTimes(k.submits ? 1 : 0);
+        expect(event.defaultPrevented).toBe(k.submits);
+      });
+    }
+
+    it('submits once when Enter is held, and keeps newlines out of the prompt', () => {
+      const presses = [{}, {repeat: true}, {repeat: true}].map(init =>
+        press(init),
+      );
+      expect(generated).toHaveBeenCalledTimes(1);
+      expect(presses.map(e => e.defaultPrevented)).toEqual([true, true, true]);
+    });
+
+    it('is swallowed while Generate is disabled', () => {
+      fixture.componentRef.setInput('isLoading', true);
+      fixture.detectChanges();
+      expect(generateButton().disabled).toBeTrue();
+
+      const event = press({});
+      expect(generated).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBeTrue();
+    });
+
+    it('shows the shared hint, except in Concatenate Video where there is no prompt', () => {
+      const hint = () =>
+        (fixture.nativeElement as HTMLElement).querySelector(
+          '[data-testid="submit-hint"]',
+        );
+      expect(hint()?.textContent?.trim()).toBe(PROMPT_SUBMIT_HINT);
+
+      fixture.componentRef.setInput('mode', 'Concatenate Video');
+      fixture.detectChanges();
+      expect(hint()).toBeNull();
     });
   });
 });

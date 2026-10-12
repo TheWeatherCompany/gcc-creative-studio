@@ -25,9 +25,12 @@ import {MatDialogModule} from '@angular/material/dialog';
 import {MatSnackBarModule} from '@angular/material/snack-bar';
 import {NoopAnimationsModule} from '@angular/platform-browser/animations';
 import {provideHttpClient} from '@angular/common/http';
-import {provideHttpClientTesting} from '@angular/common/http/testing';
+import {
+  HttpTestingController,
+  provideHttpClientTesting,
+} from '@angular/common/http/testing';
 import {provideRouter} from '@angular/router';
-import {CUSTOM_ELEMENTS_SCHEMA} from '@angular/core';
+import {CUSTOM_ELEMENTS_SCHEMA, Injector} from '@angular/core';
 import {of} from 'rxjs';
 
 import {VtoComponent} from './vto.component';
@@ -35,12 +38,21 @@ import {SearchService} from '../services/search/search.service';
 import {VtoStateService} from '../services/vto-state.service';
 import {WorkspaceStateService} from '../services/workspace/workspace-state.service';
 import {GalleryService} from '../gallery/gallery.service';
+import {NotificationService} from '../common/services/notification.service';
+import {SourceAssetService} from '../common/services/source-asset.service';
+import {setAppInjector} from '../app-injector';
+import {FileDropDirective} from '../common/upload/file-drop.directive';
+import {FilePasteDirective} from '../common/upload/file-paste.directive';
 
 describe('VtoComponent', () => {
   let component: VtoComponent;
   let fixture: ComponentFixture<VtoComponent>;
+  let uploadAsset: jasmine.Spy;
+  let notifications: jasmine.SpyObj<NotificationService>;
 
   beforeEach(async () => {
+    uploadAsset = jasmine.createSpy('uploadAsset');
+    notifications = jasmine.createSpyObj('NotificationService', ['show']);
     await TestBed.configureTestingModule({
       declarations: [VtoComponent],
       imports: [
@@ -54,6 +66,8 @@ describe('VtoComponent', () => {
         MatDialogModule,
         MatSnackBarModule,
         NoopAnimationsModule,
+        FileDropDirective,
+        FilePasteDirective,
       ],
       providers: [
         provideHttpClient(),
@@ -83,6 +97,8 @@ describe('VtoComponent', () => {
             getActiveWorkspaceId: () => 1,
           },
         },
+        {provide: SourceAssetService, useValue: {uploadAsset}},
+        {provide: NotificationService, useValue: notifications},
         {
           provide: GalleryService,
           useValue: {
@@ -93,12 +109,95 @@ describe('VtoComponent', () => {
       schemas: [CUSTOM_ELEMENTS_SCHEMA],
     }).compileComponents();
 
+    setAppInjector(TestBed.inject(Injector));
     fixture = TestBed.createComponent(VtoComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
+    // Settle the initial asset load; `isLoading` also gates pasting.
+    TestBed.inject(HttpTestingController)
+      .expectOne(req => req.url.endsWith('/source_assets/vto-assets'))
+      .flush({
+        female_models: [],
+        male_models: [],
+        tops: [],
+        bottoms: [],
+        dresses: [],
+        shoes: [],
+      });
+    fixture.detectChanges();
   });
 
-  it('should create', () => {
-    expect(component).toBeTruthy();
+  describe('dropping a photo', () => {
+    function drop(f: File): void {
+      const dt = new DataTransfer();
+      dt.items.add(f);
+      fixture.nativeElement.querySelector('.drop-zone').dispatchEvent(
+        new DragEvent('drop', {
+          dataTransfer: dt,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+
+    it('uses it as the uploaded model', () => {
+      uploadAsset.and.returnValue(
+        of({id: 7, originalFilename: 'me.png', presignedUrl: 'u'}),
+      );
+      drop(new File(['x'], 'me.png', {type: 'image/png'}));
+      expect(component.firstFormGroup.get('model')?.value).toEqual(
+        jasmine.objectContaining({
+          id: 'uploaded',
+          inputLink: {sourceAssetId: 7},
+        }),
+      );
+      expect(component.isLoading).toBeFalse();
+    });
+
+    it('says so when the file is not an image', () => {
+      drop(new File(['x'], 'notes.pdf', {type: 'application/pdf'}));
+      expect(uploadAsset).not.toHaveBeenCalled();
+      expect(notifications.show.calls.mostRecent().args.slice(0, 2)).toEqual([
+        "Can't use notes.pdf here.",
+        'info',
+      ]);
+    });
+  });
+
+  describe('pasting a photo', () => {
+    function paste(): void {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'image.png', {type: 'image/png'}));
+      document.dispatchEvent(
+        new ClipboardEvent('paste', {clipboardData: dt, cancelable: true}),
+      );
+    }
+
+    beforeEach(() => {
+      uploadAsset.and.returnValue(
+        of({id: 7, originalFilename: 'me.png', presignedUrl: 'u'}),
+      );
+    });
+
+    it('uploads it while the stepper is on the model step', () => {
+      paste();
+      expect(uploadAsset).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores it while another upload is in flight', () => {
+      component.isLoading = true;
+      fixture.detectChanges();
+      paste();
+      expect(uploadAsset).not.toHaveBeenCalled();
+    });
+
+    it('ignores it once the stepper has moved past the model step', () => {
+      component.firstFormGroup.get('model')?.setValue({id: 'f1'});
+      component.stepper.next();
+      fixture.detectChanges();
+      expect(component.stepper.selectedIndex).toBe(1);
+      paste();
+      expect(uploadAsset).not.toHaveBeenCalled();
+    });
   });
 });

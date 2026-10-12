@@ -197,7 +197,7 @@ async def test_count_active_generations_excludes_stale_rows():
         <= cutoffs[0]
         <= after - STUCK_JOB_STALE_AFTER
     )
-    assert STUCK_JOB_STALE_AFTER == timedelta(hours=1)
+    assert STUCK_JOB_STALE_AFTER == timedelta(minutes=40)
 
     # No mime-type prefix means the cap is not scoped to one media type.
     compiled = str(query.compile(compile_kwargs={"literal_binds": True}))

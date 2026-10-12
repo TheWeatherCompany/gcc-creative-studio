@@ -40,6 +40,10 @@ import {FormsModule} from '@angular/forms';
 import {MatButtonModule} from '@angular/material/button';
 import {MatMenuModule} from '@angular/material/menu';
 import {MatTooltipModule} from '@angular/material/tooltip';
+import {FileDropDirective} from '../../upload/file-drop.directive';
+import {FilePasteDirective} from '../../upload/file-paste.directive';
+import {handleRejectedFilesSnackbar} from '../../../utils/handleMessageSnackbar';
+import {PROMPT_SUBMIT_HINT, isSubmitEnter} from '../../../utils/prompt-submit';
 
 export type NumPos = 1 | 2;
 
@@ -54,6 +58,8 @@ export type NumPos = 1 | 2;
     MatButtonModule,
     MatMenuModule,
     MatTooltipModule,
+    FileDropDirective,
+    FilePasteDirective,
   ],
 })
 export class FlowPromptBoxComponent implements OnInit, OnDestroy {
@@ -147,7 +153,10 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   @Output() editImage = new EventEmitter<{num: NumPos}>();
   @Output() clearImage = new EventEmitter<{num: NumPos; event: Event}>();
   @Output() openImageSelectorForReference = new EventEmitter<void>();
-  @Output() onReferenceImageDrop = new EventEmitter<DragEvent>();
+  @Output() referenceFilesAdded = new EventEmitter<File[]>();
+  @Output() slotFileAdded = new EventEmitter<{num: NumPos; file: File}>();
+  /** What the start/end slots take right now; the host knows the mode rules. */
+  @Input() slotAccept = 'image/*,video/*';
   @Output() editReferenceImage = new EventEmitter<{
     index: number;
     ref: ReferenceImage;
@@ -244,6 +253,10 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   isTextToVideo = computed(() => this.selectedMode() === 'Text to Video');
   isVideoToImage = computed(() => this.selectedMode() === 'Video to Image');
   isImageMode = computed(() => this.selectedMode().includes('Image'));
+  isIngredientsMode = computed(() =>
+    this.selectedMode().startsWith('Ingredients to'),
+  );
+  frameSlots = computed<NumPos[]>(() => (this.isExtendVideo() ? [1] : [1, 2]));
   canEditImgSlot = computed(
     () => !this.isExtendVideo() && !this.isConcatenateVideo(),
   );
@@ -282,6 +295,29 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     this.promptChanged.emit(target.value);
   }
 
+  /** What the Generate button and the Enter key both check before submitting. */
+  get canGenerate(): boolean {
+    return !this.isLoading;
+  }
+
+  readonly submitHint = PROMPT_SUBMIT_HINT;
+
+  /**
+   * Enter submits like the Generate button. Shift+Enter, and the Enter that
+   * confirms an IME candidate, are left to the textarea. Ctrl+Enter never
+   * reaches here (it is not a plain `keydown.enter`): home and video already
+   * submit on it from a window listener.
+   */
+  onPromptEnter(event: KeyboardEvent) {
+    if (!isSubmitEnter(event)) return;
+    // Swallowed while Generate is disabled, so a double tap during submission
+    // does not leave stray newlines in the prompt.
+    event.preventDefault();
+    // A held Enter auto-repeats keydown; only the first press submits.
+    if (event.repeat) return;
+    if (this.canGenerate) this.generateClicked.emit();
+  }
+
   /** Whether the active model accepts a reference video or audio. */
   get supportsReferenceMedia(): boolean {
     return !!this.getSelectedModelObject()?.capabilities
@@ -304,6 +340,100 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     } else if (index !== undefined && ref) {
       this.editReferenceImage.emit({index, ref});
     }
+  }
+
+  /**
+   * Hosts that bind neither file output (the feed composer) keep the
+   * browser's own paste instead of having it swallowed.
+   */
+  get takesFiles(): boolean {
+    return this.referenceFilesAdded.observed || this.slotFileAdded.observed;
+  }
+
+  /**
+   * Paste, or a drop on the card outside the slots, takes images in image,
+   * ingredients and text-only modes, else whatever the slots take. In Text to
+   * Video, `slotAccept` reflects inputs left over from an earlier mode, and a
+   * video would move the page on to Extend Video and clear the prompt.
+   */
+  pasteAccept(): string {
+    return this.isImageMode() ||
+      this.isIngredientsMode() ||
+      this.isTextToVideo()
+      ? 'image/*'
+      : this.slotAccept;
+  }
+
+  /** Text to Image switches to Ingredients, which takes several references. */
+  takesMultipleFiles(): boolean {
+    return this.isIngredientsMode() || this.selectedMode() === 'Text to Image';
+  }
+
+  /**
+   * The output a paste or card drop goes to in this mode, or null if none.
+   * Text-only modes count only when the mode they switch to is offered.
+   */
+  private fileOutput():
+    | FlowPromptBoxComponent['referenceFilesAdded']
+    | FlowPromptBoxComponent['slotFileAdded']
+    | null {
+    const offered = (mode: string) => this.modes.some(m => m.value === mode);
+    if (this.isIngredientsMode()) return this.referenceFilesAdded;
+    if (
+      this.isFramesToVideo() ||
+      this.isConcatenateVideo() ||
+      this.isExtendVideo()
+    ) {
+      return this.slotFileAdded;
+    }
+    if (
+      this.selectedMode() === 'Text to Image' &&
+      offered('Ingredients to Image')
+    ) {
+      return this.referenceFilesAdded;
+    }
+    if (this.isTextToVideo() && offered('Frames to Video')) {
+      return this.slotFileAdded;
+    }
+    return null;
+  }
+
+  /**
+   * Whether the card takes a file drop. When it doesn't, the drag passes
+   * through as if the card were not a drop target, as in the feed composer.
+   */
+  get cardTakesDrop(): boolean {
+    return !!this.fileOutput()?.observed;
+  }
+
+  /** Routes files from a paste or a drop on the card. */
+  onFilesAdded(files: File[]): void {
+    if (this.isIngredientsMode()) {
+      this.referenceFilesAdded.emit(files);
+      return;
+    }
+    if (
+      this.isFramesToVideo() ||
+      this.isConcatenateVideo() ||
+      this.isExtendVideo()
+    ) {
+      const num: NumPos = this.image1Preview && !this.isExtendVideo() ? 2 : 1;
+      this.slotFileAdded.emit({num, file: files[0]});
+      return;
+    }
+    // A text-only mode moves to the mode that takes this input, as if the
+    // user had picked it from the menu.
+    if (this.fileOutput() === this.referenceFilesAdded) {
+      this.selectMode('Ingredients to Image');
+      this.referenceFilesAdded.emit(files);
+    } else if (this.fileOutput() === this.slotFileAdded) {
+      this.selectMode('Frames to Video');
+      this.slotFileAdded.emit({num: 1, file: files[0]});
+    }
+  }
+
+  onFilesRejected(files: File[]): void {
+    handleRejectedFilesSnackbar(this.snackBar, files);
   }
 
   // --- Menu Toggles ---

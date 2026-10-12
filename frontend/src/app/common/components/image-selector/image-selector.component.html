@@ -14,9 +14,20 @@
  limitations under the License.
 -->
 
-<div class="image-selector-container">
+<div
+  class="image-selector-container"
+  appFilePaste
+  [appFilePasteAccept]="getAcceptTypes()"
+  [appFilePasteMultiple]="!!data.multiSelect"
+  [appFilePasteDisabled]="isUploading"
+  (filesPasted)="onFilesAdded($event)"
+  (filesRejected)="onFilesRejected($event)"
+>
   <div class="selector-header">
-    <h2 class="selector-title">Select Media</h2>
+    <div class="title-group">
+      <h2 class="selector-title">Select Media</h2>
+      <span class="paste-hint">or paste with Ctrl/⌘+V</span>
+    </div>
     <mat-slide-toggle
       [(ngModel)]="shouldCrop"
       class="mr-4"
@@ -43,23 +54,27 @@
       hidden
       type="file"
       #fileInput
-      (change)="onFileSelected($event)"
+      [multiple]="!!data.multiSelect"
+      (change)="onFileInputChange($event)"
       [accept]="getAcceptTypes()"
       [disabled]="isUploading"
     />
   </div>
 
-  <div class="gallery-wrapper" 
-       (dragenter)="onDragOver($event)"
-       (dragover)="onDragOver($event)"
-       (dragleave)="onDragLeave($event)"
-       (drop)="onDrop($event)"
-       [class.dragging]="isDragging">
-    
-    <div *ngIf="isDragging" class="drop-overlay">
+  <div
+    class="gallery-wrapper"
+    appFileDrop
+    [appFileDropAccept]="getAcceptTypes()"
+    [appFileDropMultiple]="!!data.multiSelect"
+    [appFileDropDisabled]="isUploading"
+    (filesDropped)="onFilesAdded($event)"
+    (filesRejected)="onFilesRejected($event)"
+    (uriDropped)="onUriDropped($event)"
+  >
+    <div class="drop-overlay">
       <div class="drop-message">
         <mat-icon>cloud_upload</mat-icon>
-        <p>Drop file to upload</p>
+        <p>Drop {{ data.multiSelect ? 'files' : 'a file' }} to upload</p>
       </div>
     </div>
 

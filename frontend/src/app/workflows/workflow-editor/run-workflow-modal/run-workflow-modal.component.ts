@@ -21,6 +21,7 @@ import {
   MatDialog,
   MatDialogRef,
 } from '@angular/material/dialog';
+import {MatSnackBar} from '@angular/material/snack-bar';
 import {AssetTypeEnum} from '../../../admin/source-assets-management/source-asset.model';
 import {
   ImageSelectorComponent,
@@ -31,6 +32,10 @@ import {
   SourceAssetResponseDto,
   SourceAssetService,
 } from '../../../common/services/source-asset.service';
+import {
+  handleErrorSnackbar,
+  handleRejectedFilesSnackbar,
+} from '../../../utils/handleMessageSnackbar';
 import {WorkflowStep} from '../../workflow.models';
 
 @Component({
@@ -50,6 +55,7 @@ export class RunWorkflowModalComponent implements OnInit {
     private dialogRef: MatDialogRef<RunWorkflowModalComponent>,
     private dialog: MatDialog,
     private sourceAssetService: SourceAssetService,
+    private snackBar: MatSnackBar,
     @Inject(MAT_DIALOG_DATA) public data: {userInputStep: WorkflowStep},
   ) {
     this.userInputStep = data.userInputStep;
@@ -138,16 +144,13 @@ export class RunWorkflowModalComponent implements OnInit {
       });
   }
 
-  // Called when DROPPING a file on the new drop zone
-  onReferenceImageDrop(event: DragEvent, inputName: string) {
-    event.preventDefault();
+  // Called when a file is DROPPED on an image input's drop zone
+  onReferenceFileAdded(file: File, inputName: string) {
     if (this.referenceImages[inputName]) return;
-    const file = event.dataTransfer?.files[0];
-    if (file && file.type.startsWith('image/')) {
-      // Upload directly
-      this.sourceAssetService
-        .uploadAsset(file, {assetType: AssetTypeEnum.GENERIC_IMAGE})
-        .subscribe((result: SourceAssetResponseDto) => {
+    this.sourceAssetService
+      .uploadAsset(file, {assetType: AssetTypeEnum.GENERIC_IMAGE})
+      .subscribe({
+        next: (result: SourceAssetResponseDto) => {
           if (result && result.id) {
             this.referenceImages[inputName] = {
               sourceAssetId: result.id,
@@ -155,8 +158,13 @@ export class RunWorkflowModalComponent implements OnInit {
             };
             this.updateInputControlWithError(inputName);
           }
-        });
-    }
+        },
+        error: err => handleErrorSnackbar(this.snackBar, err, 'Image upload'),
+      });
+  }
+
+  onFilesRejected(files: File[]): void {
+    handleRejectedFilesSnackbar(this.snackBar, files);
   }
 
   clearReferenceImage(inputName: string) {

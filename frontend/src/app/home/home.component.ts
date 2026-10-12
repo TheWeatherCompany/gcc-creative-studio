@@ -66,6 +66,10 @@ import {SearchService} from '../services/search/search.service';
 import {WorkspaceStateService} from '../services/workspace/workspace-state.service';
 import {GalleryService} from '../gallery/gallery.service';
 import {
+  PendingUploads,
+  uploadReferenceFiles,
+} from '../common/components/flow-prompt-box/prompt-box-uploads';
+import {
   handleErrorSnackbar,
   handleInfoSnackbar,
   handleSuccessSnackbar,
@@ -84,6 +88,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   isLoading = false;
   /** True only while the generation request itself is in flight. */
   isSubmittingImage = false;
+  /** Reference uploads from a drop or paste; Generate waits for them. */
+  private uploads = new PendingUploads();
   templateParams: GenerationParameters | undefined;
   referenceImages: ReferenceImage[] = [];
   sourceMediaItems: (SourceMediaItemLink | null)[] = [];
@@ -725,10 +731,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     this.clearImage(data.index, data.event as MouseEvent);
   }
 
-  onReferenceImageDrop(event: DragEvent) {
-    this.onDrop(event);
-  }
-
   onPromptChanged(prompt: string) {
     this.searchRequest.prompt = prompt;
     this.service.imagePrompt = prompt;
@@ -814,6 +816,13 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   searchTerm() {
+    if (this.uploads.any) {
+      handleInfoSnackbar(
+        this._snackBar,
+        'Wait for the image to finish uploading, then generate.',
+      );
+      return;
+    }
     if (!this.searchRequest.prompt) {
       handleInfoSnackbar(
         this._snackBar,
@@ -1215,27 +1224,26 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  onDrop(event: DragEvent, index?: number) {
-    event.preventDefault();
-    const files = event.dataTransfer?.files;
-    if (files && files.length > 0) {
-      // Handle multiple files if dropped
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        if (file.type.startsWith('image/')) {
-          this.sourceAssetService
-            .uploadAsset(file, {assetType: AssetTypeEnum.GENERIC_IMAGE})
-            .subscribe((result: SourceAssetResponseDto) => {
-              if (result && result.id) {
-                this.processInput(
-                  result,
-                  index !== undefined ? index + i : undefined,
-                );
-              }
-            });
-        }
-      }
-    }
+  /** Reference images dropped or pasted onto the prompt box. */
+  onReferenceFilesAdded(files: File[]) {
+    uploadReferenceFiles(
+      files,
+      {
+        maxReferences: () =>
+          this.selectedGenerationModelObject?.capabilities.maxReferenceImages ??
+          10,
+        referenceCount: () => this.referenceImages.length,
+        takesReferences: () => this.currentMode === 'Ingredients to Image',
+        upload: file =>
+          this.uploads.track(
+            this.sourceAssetService.uploadAsset(file, {
+              assetType: AssetTypeEnum.GENERIC_IMAGE,
+            }),
+          ),
+        add: asset => this.processInput(asset),
+      },
+      this._snackBar,
+    );
   }
 
   clearImage(index: number, event: MouseEvent) {

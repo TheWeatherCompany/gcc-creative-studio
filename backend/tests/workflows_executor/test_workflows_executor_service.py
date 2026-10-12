@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -335,3 +336,31 @@ async def test_generate_audio(service):
         assert result["generated_audio"] == 555
         service.mock_rest_client.post.assert_called_once()
         mock_poll.assert_called_once_with(555, None)
+
+
+@pytest.mark.anyio
+async def test_user_token_is_forwarded_but_never_logged(service, caplog):
+    token = "Bearer user-access-token-123"
+    text_request = MagicMock()
+    text_request.config.temperature = 0.7
+    text_request.config.model = "gemini-1.5-pro"
+    text_request.inputs.prompt = "Write a story"
+    text_request.inputs.input_images = None
+    text_request.inputs.input_videos = None
+    service.mock_genai_client.models.generate_content_stream.return_value = []
+
+    image_request = MagicMock()
+    image_request.workspace_id = 1
+    image_request.inputs.prompt = "A cat"
+    service.mock_rest_client.post.return_value = Response(200, json={"id": 999})
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        patch.object(service, "_poll_job_status", AsyncMock(return_value=True)),
+    ):
+        await service.generate_text(text_request, token)
+        await service.generate_image(image_request, token)
+
+    _, kwargs = service.mock_rest_client.post.call_args
+    assert kwargs["headers"] == {"Authorization": token}
+    assert "user-access-token-123" not in caplog.text
