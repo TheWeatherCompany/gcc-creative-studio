@@ -130,10 +130,7 @@ export class HeaderComponent implements OnDestroy {
 
   openFeedbackForm() {
     if (this.isBrowser) {
-      window.open(
-        'https://docs.google.com/forms/d/e/1FAIpQLSceWvu7G354h-dTbOGvNGEraEjcUAgPE300WNY5qr-WJbh3Eg/viewform',
-        '_blank',
-      );
+      window.open(environment.feedbackUrl, '_blank');
     }
   }
 

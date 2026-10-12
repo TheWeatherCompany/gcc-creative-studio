@@ -35,6 +35,9 @@ export const environment = {
   // Shown wherever a user has no Okta profile picture. Okta does not serve
   // avatars, so in practice this is every user.
   defaultAvatarUrl: 'assets/images/default-profile-picture.svg',
+  // Opened in a new tab by the Feedback button in the nav rail.
+  feedbackUrl:
+    'https://docs.google.com/forms/d/e/1FAIpQLSceWvu7G354h-dTbOGvNGEraEjcUAgPE300WNY5qr-WJbh3Eg/viewform',
   okta: {
     // Your Okta org, e.g. 'https://your-org.okta.com'. Left blank so a fork
     // does not inherit someone else's tenant. Deployed builds get this from

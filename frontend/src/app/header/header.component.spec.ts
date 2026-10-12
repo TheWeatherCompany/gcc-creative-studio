@@ -128,10 +128,7 @@ describe('HeaderComponent', () => {
     ) as HTMLElement;
     feedback.click();
 
-    expect(open).toHaveBeenCalledOnceWith(
-      jasmine.stringMatching(/^https:\/\/docs\.google\.com\/forms\//),
-      '_blank',
-    );
+    expect(open).toHaveBeenCalledOnceWith(environment.feedbackUrl, '_blank');
   });
 
   // The rail is position:fixed below the top of the viewport and cannot
