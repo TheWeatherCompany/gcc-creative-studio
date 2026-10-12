@@ -142,7 +142,8 @@ async def cleanup_connector():
     await DatabaseConnector.get_instance().cleanup()
 
 
-# 30 min, as in Google's Cloud SQL samples; replaces sockets dropped idle.
+# 30 min, as in Google's Cloud SQL samples. Retires old pooled connections
+# before they go stale; pool_pre_ping catches ones already dropped.
 POOL_RECYCLE_SECONDS = 1800
 
 # Create the Async Engine
