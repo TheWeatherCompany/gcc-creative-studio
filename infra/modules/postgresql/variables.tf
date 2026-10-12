@@ -20,7 +20,7 @@ variable "db_password" { sensitive = true }
 
 variable "private_network" {
   type        = string
-  description = "Self link of the VPC that has the Private Service Access connection. The instance gets a private IP on it."
+  description = "VPC network ID or self link of the VPC that has the Private Service Access connection. The instance gets a private IP on it."
 }
 
 variable "public_ip_enabled" {
