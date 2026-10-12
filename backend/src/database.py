@@ -142,6 +142,9 @@ async def cleanup_connector():
     await DatabaseConnector.get_instance().cleanup()
 
 
+# 30 min, as in Google's Cloud SQL samples; replaces sockets dropped idle.
+POOL_RECYCLE_SECONDS = 1800
+
 # Create the Async Engine
 if (
     config_service.INSTANCE_CONNECTION_NAME
@@ -152,12 +155,16 @@ if (
         "postgresql+asyncpg://",
         async_creator=get_connection,
         echo=config_service.LOG_LEVEL == "DEBUG",
+        pool_pre_ping=True,
+        pool_recycle=POOL_RECYCLE_SECONDS,
     )
 else:
     # Use standard connection string (Local)
     engine = create_async_engine(
         get_conn_string(),
         echo=config_service.LOG_LEVEL == "DEBUG",
+        pool_pre_ping=True,
+        pool_recycle=POOL_RECYCLE_SECONDS,
     )
 
 # Create the Session Factory
@@ -203,12 +210,16 @@ class WorkerDatabase:
                 "postgresql+asyncpg://",
                 async_creator=get_conn,
                 echo=config_service.LOG_LEVEL == "DEBUG",
+                pool_pre_ping=True,
+                pool_recycle=POOL_RECYCLE_SECONDS,
             )
         else:
             # Use standard connection string
             self.engine = create_async_engine(
                 get_conn_string(),
                 echo=config_service.LOG_LEVEL == "DEBUG",
+                pool_pre_ping=True,
+                pool_recycle=POOL_RECYCLE_SECONDS,
             )
 
         self.sessionmaker = async_sessionmaker(
