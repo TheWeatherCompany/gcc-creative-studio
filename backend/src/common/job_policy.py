@@ -23,9 +23,11 @@ needs the same age bound, or those orphaned rows count forever.
 from datetime import datetime, timedelta, timezone
 
 # A PROCESSING job older than this is treated as orphaned rather than in-flight.
-# Used by the admin stuck-job cleanup and by the per-user concurrency cap, which
-# must agree: otherwise the cap counts rows the cleanup already considers dead.
-STUCK_JOB_STALE_AFTER = timedelta(hours=1)
+# Used by the per-user concurrency cap, the admin stuck-job cleanup and the
+# scheduled sweep (/internal/jobs/sweep), which must all agree. With Cloud
+# Tasks a job gets 2 attempts of JOB_DISPATCH_DEADLINE_SECONDS (900s) plus up
+# to 60s backoff, about 31 minutes, so this leaves margin above that.
+STUCK_JOB_STALE_AFTER = timedelta(minutes=40)
 
 
 def stale_job_cutoff() -> datetime:
