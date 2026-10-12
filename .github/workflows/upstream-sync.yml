@@ -7,9 +7,9 @@ on:
   pull_request:
     types: [closed]
 
+# Each job declares the write scopes it needs.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 env:
   # Pin every gh command to the fork. The sync job adds an `upstream` remote,
@@ -37,9 +37,11 @@ jobs:
       - name: Delete sync branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Branch names are attacker-controlled; pass through env, never
+          # interpolate ${{ }} into the script body.
+          BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
-          branch="${{ github.event.pull_request.head.ref }}"
-          gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/${branch}" || true
+          gh api -X DELETE "repos/${GH_REPO}/git/refs/heads/${BRANCH}" || true
 
   sync:
     if: github.event_name != 'pull_request'
@@ -52,7 +54,7 @@ jobs:
       issues: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -128,9 +130,11 @@ jobs:
       - name: Build new sync branch
         if: steps.diff.outputs.count != '0'
         id: branch
+        env:
+          PREV_HEAD: ${{ steps.prev.outputs.head }}
         run: |
           new_branch="sync/upstream-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
-          prev_head="${{ steps.prev.outputs.head }}"
+          prev_head="$PREV_HEAD"
 
           if [ -n "$prev_head" ]; then
             git fetch origin "$prev_head"
@@ -163,11 +167,19 @@ jobs:
         if: steps.diff.outputs.count != '0' && steps.branch.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Step outputs carry upstream-controlled strings (file paths, branch
+          # names); pass them through env rather than interpolating ${{ }}.
+          PREV_NUMBER: ${{ steps.prev.outputs.number }}
+          CONFLICTED: ${{ steps.branch.outputs.conflicted }}
+          AUTH_HIT: ${{ steps.authcheck.outputs.hit }}
+          AUTH_FILES: ${{ steps.authcheck.outputs.files }}
+          SYNC_BRANCH: ${{ steps.branch.outputs.name }}
+          COMMIT_COUNT: ${{ steps.diff.outputs.count }}
         run: |
           shortlog=$(git log --oneline "origin/${LOCAL_BRANCH}..upstream/${UPSTREAM_BRANCH}")
-          prev_number="${{ steps.prev.outputs.number }}"
+          prev_number="$PREV_NUMBER"
           conflict_note="Merged cleanly."
-          if [ "${{ steps.branch.outputs.conflicted }}" = "true" ]; then
+          if [ "$CONFLICTED" = "true" ]; then
             conflict_note="**Has merge conflicts** that need manual resolution on this branch."
           fi
 
@@ -178,7 +190,7 @@ jobs:
 
           auth_warning=""
           extra_label=""
-          if [ "${{ steps.authcheck.outputs.hit }}" = "true" ]; then
+          if [ "$AUTH_HIT" = "true" ]; then
             extra_label="--label needs-auth-review"
             auth_warning=$(cat <<EOF
 
@@ -188,7 +200,7 @@ jobs:
           a clean auto-merge here doesn't mean it's actually correct. Needs manual review by
           someone who understands both the upstream implementation and our replacement:
           \`\`\`
-          ${{ steps.authcheck.outputs.files }}
+          ${AUTH_FILES}
           \`\`\`
           EOF
           )
@@ -210,13 +222,13 @@ jobs:
 
           gh pr create \
             --base "$LOCAL_BRANCH" \
-            --head "${{ steps.branch.outputs.name }}" \
-            --title "Sync upstream: ${{ steps.diff.outputs.count }} new commit(s)" \
+            --head "$SYNC_BRANCH" \
+            --title "Sync upstream: ${COMMIT_COUNT} new commit(s)" \
             --body "$body" \
             --label "$SYNC_LABEL" $extra_label
 
           if [ -n "$prev_number" ]; then
-            new_number=$(gh pr list --head "${{ steps.branch.outputs.name }}" --json number --jq '.[0].number')
+            new_number=$(gh pr list --head "$SYNC_BRANCH" --json number --jq '.[0].number')
             gh pr comment "$prev_number" --body "Superseded by #${new_number}, which picks up this branch plus newer upstream commits. Left open in case resolution work here still needs to move over."
           fi
 
@@ -241,7 +253,7 @@ jobs:
             if [ "$needs_auth_review" = "true" ]; then
               continue
             fi
-            touched=$(gh api "repos/${{ github.repository }}/pulls/${number}/commits" --jq 'map(select(.commit.author.name != "github-actions[bot]")) | length')
+            touched=$(gh api "repos/${GH_REPO}/pulls/${number}/commits" --jq 'map(select(.commit.author.name != "github-actions[bot]")) | length')
             if [ "$touched" = "0" ]; then
               gh pr close "$number" --comment "Auto-closing: no manual commits on this branch, and superseded by ${newer} newer upstream-sync PRs."
             fi

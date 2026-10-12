@@ -20,12 +20,23 @@ COPY . /app/
 RUN npm ci
 RUN npm run build-dev
 
-FROM nginx:alpine
+# The unprivileged nginx image runs as the nginx user (UID 101) with its pid
+# and temp paths under /tmp. nginx.conf already listens on 8080, so the port
+# is unchanged.
+FROM nginxinc/nginx-unprivileged:alpine
+
+# The base image lags behind Alpine security fixes; apk needs root.
+USER root
+RUN apk upgrade --no-cache
+
+# The site files stay root-owned: nginx only needs to read them.
 COPY --from=builder /app/dist/creative-studio/browser /usr/share/nginx/html
 # It's best practice to replace the default config file.
 COPY --from=builder /app/nginx.conf /etc/nginx/conf.d/default.conf
 
-# Give the nginx user ownership of the app files
-RUN chown -R nginx:nginx /usr/share/nginx/html
+USER 101
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["wget", "-q", "--spider", "http://127.0.0.1:8080/"]

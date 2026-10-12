@@ -37,6 +37,7 @@ from src.brand_guidelines.repository.brand_guideline_repository import (
 from src.brand_guidelines.schema.brand_guideline_model import (
     BrandGuidelineModel,
 )
+from src.common.log_utils import sanitize_for_log
 from src.config.config_service import config_service
 from src.images.dto.create_imagen_dto import CreateImagenDto
 from src.multimodal.dto.create_prompt_imagen_dto import CreatePromptImageDto
@@ -143,7 +144,9 @@ class GeminiService:
             return response.text or ""
         except Exception as e:
             logger.error(
-                f"Failed to generate structured prompt for '{original_prompt}': {e}",
+                "Failed to generate structured prompt for '%s': %s",
+                sanitize_for_log(original_prompt),
+                sanitize_for_log(e),
             )
             raise
 
