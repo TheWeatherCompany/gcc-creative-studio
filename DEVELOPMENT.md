@@ -95,16 +95,16 @@ export const environment = {
   backendURL: "http://localhost:8080/api",
   defaultAvatarUrl: "assets/images/default-profile-picture.svg",
   okta: {
-    issuer: "https://your-org.okta.com",
+    issuer: "https://your-org.okta.com/oauth2/creative-studio",
     clientId: "0oaXXXXXXXXXXXXXXXXX",
     redirectUri: "/login/callback",
     postLogoutRedirectUri: "/login",
     scopes: ["openid", "profile", "email", "offline_access"],
     pkce: true,
-    // Phase 1 sends the ID token: Okta API Access Management is not active
-    // yet, so there is no custom authorization server to issue an
-    // audience-scoped access token. Phase 2 flips this to "access".
-    tokenForApi: "id" as "id" | "access",
+    // The access token issued by the custom authorization server named in
+    // the issuer above. Only use "id" against an org authorization server,
+    // where API Access Management is unavailable.
+    tokenForApi: "access" as "id" | "access",
   },
 
   // Common env vars

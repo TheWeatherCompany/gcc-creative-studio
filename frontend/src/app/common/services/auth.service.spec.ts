@@ -291,7 +291,7 @@ describe('AuthService', () => {
 
       const req = http.expectOne(`${environment.backendURL}/users/me`);
       expect(req.request.headers.get('Authorization')).toBe(
-        'Bearer id-token-abc',
+        'Bearer renewed-access-token',
       );
       req.flush({email: 'a@b.com', roles: ['user']});
       tick();
@@ -316,7 +316,7 @@ describe('AuthService', () => {
     }));
 
     it('errors when Okta produced no usable token', fakeAsync(() => {
-      okta.idToken = undefined;
+      okta.getOrRenewAccessToken.and.returnValue(Promise.resolve(null));
       const errors: Error[] = [];
 
       service.handleCallback().subscribe({error: e => errors.push(e)});
@@ -354,26 +354,17 @@ describe('AuthService', () => {
       return emitted;
     };
 
-    it('returns the stored ID token when it is still valid', fakeAsync(() => {
+    it('sends the access token, letting okta-auth-js renew it', fakeAsync(() => {
       const emitted = collect();
       tick();
 
-      expect(emitted).toEqual(['id-token-abc']);
+      expect(okta.getOrRenewAccessToken).toHaveBeenCalled();
+      expect(emitted).toEqual(['renewed-access-token']);
       expect(okta.tokenManager.renew).not.toHaveBeenCalled();
     }));
 
-    it('renews an expired ID token rather than sending it', fakeAsync(() => {
-      okta.expired = true;
-
-      const emitted = collect();
-      tick();
-
-      expect(okta.tokenManager.renew).toHaveBeenCalledWith('idToken');
-      expect(emitted).toEqual(['renewed-id-token']);
-    }));
-
-    it('emits null when there is no session', fakeAsync(() => {
-      okta.idToken = undefined;
+    it('emits null when there is no access token to renew', fakeAsync(() => {
+      okta.getOrRenewAccessToken.and.returnValue(Promise.resolve(null));
 
       const emitted = collect();
       tick();
@@ -381,12 +372,14 @@ describe('AuthService', () => {
       expect(emitted).toEqual([null]);
     }));
 
-    it('emits null instead of throwing when renewal fails', fakeAsync(() => {
-      spyOn(console, 'error');
-      okta.expired = true;
-      okta.tokenManager.renew.and.returnValue(
-        Promise.reject(new Error('login_required')),
-      );
+    it('logs the cause when access token renewal fails', fakeAsync(() => {
+      // A silent null here is indistinguishable from being signed out, which
+      // makes a missing CORS Trusted Origin invisible. The custom
+      // authorization server needs its own Trusted Origins; the ones granted
+      // to the org server in phase 1 do not carry over.
+      const consoleError = spyOn(console, 'error');
+      const cause = new Error('network down');
+      okta.getOrRenewAccessToken.and.returnValue(Promise.reject(cause));
       const emitted: Array<string | null> = [];
       let errored = false;
 
@@ -398,51 +391,84 @@ describe('AuthService', () => {
 
       expect(errored).toBeFalse();
       expect(emitted).toEqual([null]);
-    }));
-
-    it('logs the cause when ID token renewal fails', fakeAsync(() => {
-      // A silent null here is indistinguishable from being signed out, which
-      // makes a missing CORS Trusted Origin (the A5 failure) invisible.
-      const consoleError = spyOn(console, 'error');
-      const cause = new Error('login_required');
-      okta.expired = true;
-      okta.tokenManager.renew.and.returnValue(Promise.reject(cause));
-
-      service.getApiToken$().subscribe();
-      tick();
-
-      expect(consoleError).toHaveBeenCalled();
       const [message, logged] = consoleError.calls.mostRecent().args;
-      expect(message).toContain('ID token renewal failed');
+      expect(message).toContain('access token renewal failed');
       expect(message).toContain('Trusted Origin');
       expect(logged).toBe(cause);
     }));
 
-    it('logs the cause when access token renewal fails', fakeAsync(() => {
-      const consoleError = spyOn(console, 'error');
-      const cause = new Error('network down');
-      environment.okta.tokenForApi = 'access';
-      okta.getOrRenewAccessToken.and.returnValue(Promise.reject(cause));
-      const emitted: Array<string | null> = [];
+    // Retained because the code path is retained: an Okta tenant without API
+    // Access Management has no custom authorization server to issue an
+    // audience-scoped access token, and has to fall back to the ID token from
+    // the org server. This repo ran that way itself until the phase 2 cutover.
+    describe('against an org authorization server (tokenForApi: id)', () => {
+      beforeEach(() => {
+        environment.okta.tokenForApi = 'id';
+      });
 
-      service.getApiToken$().subscribe(t => emitted.push(t));
-      tick();
+      it('returns the stored ID token when it is still valid', fakeAsync(() => {
+        const emitted = collect();
+        tick();
 
-      expect(emitted).toEqual([null]);
-      const [message, logged] = consoleError.calls.mostRecent().args;
-      expect(message).toContain('access token renewal failed');
-      expect(logged).toBe(cause);
-    }));
+        expect(emitted).toEqual(['id-token-abc']);
+        expect(okta.tokenManager.renew).not.toHaveBeenCalled();
+        expect(okta.getOrRenewAccessToken).not.toHaveBeenCalled();
+      }));
 
-    it('uses the access token once tokenForApi is flipped to access', fakeAsync(() => {
-      environment.okta.tokenForApi = 'access';
+      it('renews an expired ID token rather than sending it', fakeAsync(() => {
+        okta.expired = true;
 
-      const emitted = collect();
-      tick();
+        const emitted = collect();
+        tick();
 
-      expect(okta.getOrRenewAccessToken).toHaveBeenCalled();
-      expect(emitted).toEqual(['renewed-access-token']);
-    }));
+        expect(okta.tokenManager.renew).toHaveBeenCalledWith('idToken');
+        expect(emitted).toEqual(['renewed-id-token']);
+      }));
+
+      it('emits null when there is no session', fakeAsync(() => {
+        okta.idToken = undefined;
+
+        const emitted = collect();
+        tick();
+
+        expect(emitted).toEqual([null]);
+      }));
+
+      it('emits null instead of throwing when renewal fails', fakeAsync(() => {
+        spyOn(console, 'error');
+        okta.expired = true;
+        okta.tokenManager.renew.and.returnValue(
+          Promise.reject(new Error('login_required')),
+        );
+        const emitted: Array<string | null> = [];
+        let errored = false;
+
+        service.getApiToken$().subscribe({
+          next: t => emitted.push(t),
+          error: () => (errored = true),
+        });
+        tick();
+
+        expect(errored).toBeFalse();
+        expect(emitted).toEqual([null]);
+      }));
+
+      it('logs the cause when ID token renewal fails', fakeAsync(() => {
+        const consoleError = spyOn(console, 'error');
+        const cause = new Error('login_required');
+        okta.expired = true;
+        okta.tokenManager.renew.and.returnValue(Promise.reject(cause));
+
+        service.getApiToken$().subscribe();
+        tick();
+
+        expect(consoleError).toHaveBeenCalled();
+        const [message, logged] = consoleError.calls.mostRecent().args;
+        expect(message).toContain('ID token renewal failed');
+        expect(message).toContain('Trusted Origin');
+        expect(logged).toBe(cause);
+      }));
+    });
 
     it('starts the auto-renew service only once', fakeAsync(() => {
       service.getApiToken$().subscribe();
@@ -459,7 +485,17 @@ describe('AuthService', () => {
     });
 
     it('is false with no token at all', () => {
-      okta.idToken = undefined;
+      okta.accessToken = undefined;
+
+      expect(service.isLoggedIn()).toBeFalse();
+    });
+
+    // The ID token is no longer what decides this. Leaving it in place while
+    // the access token is gone must still read as signed out, or the guards
+    // wave through a user whose API calls will all 401.
+    it('ignores a lingering ID token when the access token is gone', () => {
+      okta.accessToken = undefined;
+      okta.idToken = {idToken: 'id-token-abc', expiresAt: 9999999999};
 
       expect(service.isLoggedIn()).toBeFalse();
     });
@@ -478,7 +514,7 @@ describe('AuthService', () => {
     });
 
     it('never navigates: asking the question must not move the user', () => {
-      okta.idToken = undefined;
+      okta.accessToken = undefined;
 
       service.isLoggedIn();
 
