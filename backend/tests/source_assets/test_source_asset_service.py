@@ -256,6 +256,9 @@ async def test_upload_asset_video(
     assert response.id == 20
     mock_dependencies["gcs_service"].upload_file_to_gcs.assert_called()
     mock_generate_thumbnail.assert_called_once()
+    # The scratch dir is gone once the upload is done.
+    scratch_dir = os.path.dirname(mock_generate_thumbnail.call_args[0][0])
+    assert not os.path.exists(scratch_dir)
 
 
 @pytest.mark.anyio
@@ -481,6 +484,14 @@ async def test_create_from_gcs_uri_video(
     )
     assert mock_dependencies["gcs_service"].upload_file_to_gcs.call_count >= 1
     mock_dependencies["repo"].create.assert_called_once()
+    # The GCS object keeps the original filename, not the scratch name.
+    video_upload = mock_dependencies[
+        "gcs_service"
+    ].upload_file_to_gcs.call_args_list[0]
+    assert video_upload.kwargs["destination_blob_name"].endswith("/in.mp4")
+    # The scratch dir is gone once the upload is done.
+    scratch_dir = os.path.dirname(mock_thumb.call_args[0][0])
+    assert not os.path.exists(scratch_dir)
 
 
 @pytest.mark.anyio
@@ -648,3 +659,8 @@ async def test_upload_asset_video_scratch_file_ignores_the_client_filename(
     local_path = mock_generate_thumbnail.call_args[0][0]
     assert os.path.basename(local_path) == "upload.mp4"
     assert ".." not in local_path
+    # The GCS object keeps the original filename.
+    video_upload = mock_dependencies["gcs_service"].upload_file_to_gcs.call_args
+    assert video_upload.kwargs["destination_blob_name"].endswith(
+        "../../escape.mp4"
+    )
