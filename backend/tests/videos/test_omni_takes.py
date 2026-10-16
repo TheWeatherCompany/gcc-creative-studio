@@ -63,11 +63,19 @@ def _thumbnail(video_path):
     return video_path.replace(".mp4", ".png")
 
 
-def _run(dto, contents, fail_take_1=False, parent=None, first_call=None):
+def _run(
+    dto,
+    contents,
+    fail_take_1=False,
+    parent=None,
+    first_call=None,
+    parent_bytes=b"parent-video-bytes",
+):
     """Runs the worker and returns (the row update, the create mock).
 
     first_call, if given, is what the first interaction returns in place of
     contents. Takes run in parallel, so which take gets it is not fixed.
+    parent_bytes is what GCS returns for the parent video on a follow-up turn.
     """
 
     def upload(local_path, destination_blob_name, mime_type):
@@ -75,11 +83,6 @@ def _run(dto, contents, fail_take_1=False, parent=None, first_call=None):
         if fail_take_1 and destination_blob_name.endswith("_1.mp4"):
             raise RuntimeError("upload failed")
         return f"gs://bucket/{destination_blob_name}"
-
-    def download(gcs_uri_path, destination_file_path):
-        del gcs_uri_path
-        with open(destination_file_path, "wb") as f:
-            f.write(b"parent-video-bytes")
 
     with (
         patch("src.database.WorkerDatabase") as mock_worker_db_class,
@@ -111,7 +114,7 @@ def _run(dto, contents, fail_take_1=False, parent=None, first_call=None):
         mock_repo_class.return_value = mock_repo
         gcs = mock_gcs_class.return_value
         gcs.upload_file_to_gcs.side_effect = upload
-        gcs.download_from_gcs.side_effect = download
+        gcs.download_bytes_from_gcs.return_value = parent_bytes
 
         _process_video_in_background(
             media_item_id=MEDIA_ITEM_ID, request_dto=dto, user_email="t@t.com"
@@ -196,8 +199,9 @@ def test_failed_takes(number_of_media, run_kwargs, expected):
         ]
 
 
-def test_follow_up_turn_takes_each_continue_the_parent():
-    parent = MediaItemModel(
+def _parent_item():
+    """A finished Omni video that a follow-up turn continues from."""
+    return MediaItemModel(
         id=99,
         workspace_id=1,
         user_id=1,
@@ -210,6 +214,10 @@ def test_follow_up_turn_takes_each_continue_the_parent():
         raw_data={"interaction_id": "interaction-parent", "signature": "sig"},
     )
 
+
+def test_follow_up_turn_takes_each_continue_the_parent():
+    parent = _parent_item()
+
     update, create = _run(
         _dto(2, parent_media_item_id=99), [VIDEO], parent=parent
     )
@@ -221,3 +229,26 @@ def test_follow_up_turn_takes_each_continue_the_parent():
         "interaction-parent",
     ]
     assert update["gcs_uris"] == [_video_uri(0), _video_uri(1)]
+    # The parent video goes to Omni inline, as the model's previous output.
+    for call in create.call_args_list:
+        parent_video = call.kwargs["input"][1]["content"][1]
+        assert parent_video["data"] == b"parent-video-bytes"
+
+
+def test_follow_up_turn_fails_when_the_parent_video_cannot_be_downloaded():
+    parent = _parent_item()
+
+    update, create = _run(
+        _dto(2, parent_media_item_id=99),
+        [VIDEO],
+        parent=parent,
+        parent_bytes=None,
+    )
+
+    # Omni is never asked to continue from a video it was not given.
+    create.assert_not_called()
+    assert update["status"] == JobStatusEnum.FAILED
+    assert update["error_message"] == (
+        "Failed to download parent video: "
+        f"gs://{config_service.GENMEDIA_BUCKET}/videos/99_0.mp4"
+    )

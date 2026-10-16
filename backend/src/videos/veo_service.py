@@ -600,25 +600,17 @@ def _process_video_in_background(
                                     or ""
                                 )
 
-                                # Download parent video to read bytes
-                                parent_blob_name = parent_media_item.gcs_uris[
-                                    0
-                                ].replace(f"gs://{cfg.GENMEDIA_BUCKET}/", "")
-                                local_parent_path = (
-                                    f"thumbnails/{parent_blob_name}"
+                                # Omni takes the parent video inline, so read
+                                # it straight into memory.
+                                parent_video_bytes = await asyncio.to_thread(
+                                    gcs_service.download_bytes_from_gcs,
+                                    parent_media_item.gcs_uris[0],
                                 )
-                                os.makedirs(
-                                    os.path.dirname(local_parent_path),
-                                    exist_ok=True,
-                                )
-                                await asyncio.to_thread(
-                                    gcs_service.download_from_gcs,
-                                    gcs_uri_path=parent_blob_name,
-                                    destination_file_path=local_parent_path,
-                                )
-
-                                with open(local_parent_path, "rb") as f:
-                                    parent_video_bytes = f.read()
+                                if not parent_video_bytes:
+                                    raise Exception(
+                                        "Failed to download parent video: "
+                                        f"{parent_media_item.gcs_uris[0]}"
+                                    )
 
                                 omni_prompt = _format_omni_prompt(
                                     request_dto.prompt, request_dto.aspect_ratio
@@ -655,15 +647,6 @@ def _process_video_in_background(
                                         ],
                                     },
                                 ]
-
-                                # Clean up local parent video path
-                                if os.path.exists(local_parent_path):
-                                    try:
-                                        os.remove(local_parent_path)
-                                    except Exception as e:
-                                        worker_logger.warning(
-                                            f"Failed to clean up parent video at {local_parent_path}: {e}"
-                                        )
                             else:
                                 worker_logger.info(
                                     "Performing Turn 1 Video Generation/R2V"
