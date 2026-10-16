@@ -146,3 +146,66 @@ def test_veo_scratch_video_is_removed_when_the_thumbnail_fails():
 
     assert gcs.written
     assert not any(os.path.exists(path) for path in gcs.written)
+
+
+def _fake_concatenate(video_paths, output_path):
+    """Writes the joined video where media_utils.concatenate_videos would."""
+    del video_paths
+    with open(output_path, "wb") as f:
+        f.write(b"joined")
+    return output_path
+
+
+@pytest.mark.usefixtures("readonly_cwd")
+def test_concatenation_completes_from_a_read_only_working_directory():
+    gcs = FakeGcs()
+    items = [
+        MediaItemModel(
+            id=item_id,
+            workspace_id=1,
+            user_id=1,
+            user_email="t@t.com",
+            mime_type=MimeTypeEnum.VIDEO_MP4,
+            model=GenerationModelEnum.VEO_3_QUALITY,
+            aspect_ratio="16:9",
+            gcs_uris=[f"gs://{cfg.GENMEDIA_BUCKET}/{item_id}.mp4"],
+            thumbnail_uris=[],
+        )
+        for item_id in (1, 2)
+    ]
+    dto = ConcatenateVideosDto(
+        workspace_id=1,
+        name="Joined",
+        inputs=[
+            ConcatenationInput(type="media_item", id=1),
+            ConcatenationInput(type="media_item", id=2),
+        ],
+    )
+
+    with (
+        patch("src.database.WorkerDatabase") as mock_worker_db_class,
+        patch(
+            "src.videos.veo_service.concatenate_videos",
+            side_effect=_fake_concatenate,
+        ),
+        patch(
+            "src.videos.veo_service.generate_thumbnail",
+            side_effect=_fake_thumbnail,
+        ),
+        patch("src.videos.veo_service.MediaRepository") as mock_repo_class,
+        patch("src.videos.veo_service.SourceAssetRepository"),
+        patch("src.videos.veo_service.GcsService", return_value=gcs),
+    ):
+        mock_worker_db_class.return_value.__aenter__.return_value = MagicMock()
+        mock_repo = AsyncMock()
+        mock_repo.get_by_id.side_effect = items
+        mock_repo_class.return_value = mock_repo
+
+        _process_video_concatenation_in_background(
+            media_item_id=456, request_dto=dto
+        )
+
+    update = mock_repo.update.call_args[0][1]
+    assert update["status"] == JobStatusEnum.COMPLETED
+    assert len(gcs.written) == 2
+    assert not any(os.path.exists(path) for path in gcs.written)

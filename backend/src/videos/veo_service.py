@@ -1154,7 +1154,6 @@ def _process_video_concatenation_in_background(
 
     worker_logger = logging.getLogger(f"video_concat_worker.{media_item_id}")
     worker_logger.setLevel(logging.INFO)
-    temp_dir = f"temp/{media_item_id}"
 
     try:
         if worker_logger.hasHandlers():
@@ -1187,6 +1186,11 @@ def _process_video_concatenation_in_background(
                     source_asset_repo = SourceAssetRepository(db)
                     cfg = config_service
 
+                    # Not under the working directory: /app is read-only
+                    # in the image. The finally below removes it.
+                    temp_dir = tempfile.mkdtemp(
+                        prefix=f"concat_{media_item_id}_"
+                    )
                     try:
                         start_time = time.monotonic()
                         local_video_paths = []
