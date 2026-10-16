@@ -9,3 +9,7 @@ __pycache__
 .coverage
 htmlcov
 pylint_report*
+# Scratch output from local runs. The image creates these owned by the app
+# user; a root-owned copy from the build context would make them unwritable.
+thumbnails
+temp
