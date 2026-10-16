@@ -26,7 +26,9 @@ RUN apt-get update \
 
 # Run as an unprivileged user. UID 1000 matches the usual first user on a
 # Linux host, so the docker-compose bind mount of ./backend stays usable.
-# Only /app/.venv is owned by it; the source under /app stays root-owned.
+# Only /app/.venv and the scratch dirs are owned by it; the source under
+# /app stays root-owned. The video workers write to thumbnails/ and temp/
+# relative to /app, so those must exist and be writable (Errno 13 otherwise).
 #
 # docker-compose mounts the host's gcloud ADC at /root/.config/gcloud, so
 # let the app user traverse /root (not list it) and point google-auth there.
@@ -35,7 +37,7 @@ RUN apt-get update \
 RUN groupadd --gid 1000 app \
     && useradd --uid 1000 --gid app --create-home --home-dir /home/app app \
     && install -d /app \
-    && install -d -o app -g app /app/.venv \
+    && install -d -o app -g app /app/.venv /app/thumbnails /app/temp \
     && chmod 711 /root
 ENV CLOUDSDK_CONFIG=/root/.config/gcloud
 
