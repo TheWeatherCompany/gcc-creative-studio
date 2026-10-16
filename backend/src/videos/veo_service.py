@@ -18,6 +18,7 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
 import time
 
 from fastapi import Depends, HTTPException, status
@@ -599,25 +600,17 @@ def _process_video_in_background(
                                     or ""
                                 )
 
-                                # Download parent video to read bytes
-                                parent_blob_name = parent_media_item.gcs_uris[
-                                    0
-                                ].replace(f"gs://{cfg.GENMEDIA_BUCKET}/", "")
-                                local_parent_path = (
-                                    f"thumbnails/{parent_blob_name}"
+                                # Omni takes the parent video inline, so read
+                                # it straight into memory.
+                                parent_video_bytes = await asyncio.to_thread(
+                                    gcs_service.download_bytes_from_gcs,
+                                    parent_media_item.gcs_uris[0],
                                 )
-                                os.makedirs(
-                                    os.path.dirname(local_parent_path),
-                                    exist_ok=True,
-                                )
-                                await asyncio.to_thread(
-                                    gcs_service.download_from_gcs,
-                                    gcs_uri_path=parent_blob_name,
-                                    destination_file_path=local_parent_path,
-                                )
-
-                                with open(local_parent_path, "rb") as f:
-                                    parent_video_bytes = f.read()
+                                if not parent_video_bytes:
+                                    raise Exception(
+                                        "Failed to download parent video: "
+                                        f"{parent_media_item.gcs_uris[0]}"
+                                    )
 
                                 omni_prompt = _format_omni_prompt(
                                     request_dto.prompt, request_dto.aspect_ratio
@@ -654,15 +647,6 @@ def _process_video_in_background(
                                         ],
                                     },
                                 ]
-
-                                # Clean up local parent video path
-                                if os.path.exists(local_parent_path):
-                                    try:
-                                        os.remove(local_parent_path)
-                                    except Exception as e:
-                                        worker_logger.warning(
-                                            f"Failed to clean up parent video at {local_parent_path}: {e}"
-                                        )
                             else:
                                 worker_logger.info(
                                     "Performing Turn 1 Video Generation/R2V"
@@ -850,63 +834,51 @@ def _process_video_in_background(
                                     gcs_service,
                                 )
 
-                                # Write raw video bytes directly to local output path using index
+                                # Write the video to scratch space, upload it
+                                # and make its thumbnail. Not under the working
+                                # directory: /app is read-only in the image.
                                 output_filename = (
                                     f"videos/{media_item_id}_{i}.mp4"
                                 )
-                                local_output_path = (
-                                    f"thumbnails/{output_filename}"
-                                )
-                                os.makedirs(
-                                    os.path.dirname(local_output_path),
-                                    exist_ok=True,
-                                )
-                                with open(local_output_path, "wb") as f:
-                                    f.write(raw_video_bytes)
+                                with tempfile.TemporaryDirectory(
+                                    prefix="omni_"
+                                ) as scratch_dir:
+                                    local_output_path = os.path.join(
+                                        scratch_dir,
+                                        os.path.basename(output_filename),
+                                    )
+                                    with open(local_output_path, "wb") as f:
+                                        f.write(raw_video_bytes)
 
-                                # Upload local file to GCS
-                                final_gcs_uri = await asyncio.to_thread(
-                                    gcs_service.upload_file_to_gcs,
-                                    local_path=local_output_path,
-                                    destination_blob_name=output_filename,
-                                    mime_type="video/mp4",
-                                )
-
-                                # Generate local thumbnail
-                                thumbnail_path = await asyncio.to_thread(
-                                    generate_thumbnail,
-                                    local_output_path,
-                                )
-                                local_thumbnail_name = thumbnail_path or ""
-
-                                # Upload thumbnail to GCS
-                                thumbnail_gcs_blob = (
-                                    f"thumbnails/{media_item_id}_{i}.png"
-                                )
-                                thumbnail_gcs_uri = ""
-                                if thumbnail_path:
-                                    thumbnail_gcs_uri = (
-                                        await asyncio.to_thread(
-                                            gcs_service.upload_file_to_gcs,
-                                            local_path=thumbnail_path,
-                                            destination_blob_name=thumbnail_gcs_blob,
-                                            mime_type="image/png",
-                                        )
-                                        or ""
+                                    # Upload local file to GCS
+                                    final_gcs_uri = await asyncio.to_thread(
+                                        gcs_service.upload_file_to_gcs,
+                                        local_path=local_output_path,
+                                        destination_blob_name=output_filename,
+                                        mime_type="video/mp4",
                                     )
 
-                                # Clean up local temp files
-                                for local_path in [
-                                    local_output_path,
-                                    local_thumbnail_name,
-                                ]:
-                                    if os.path.exists(local_path):
-                                        try:
-                                            os.remove(local_path)
-                                        except Exception as e:
-                                            worker_logger.warning(
-                                                f"Failed to clean up {local_path}: {e}"
+                                    # Generate local thumbnail
+                                    thumbnail_path = await asyncio.to_thread(
+                                        generate_thumbnail,
+                                        local_output_path,
+                                    )
+
+                                    # Upload thumbnail to GCS
+                                    thumbnail_gcs_blob = (
+                                        f"thumbnails/{media_item_id}_{i}.png"
+                                    )
+                                    thumbnail_gcs_uri = ""
+                                    if thumbnail_path:
+                                        thumbnail_gcs_uri = (
+                                            await asyncio.to_thread(
+                                                gcs_service.upload_file_to_gcs,
+                                                local_path=thumbnail_path,
+                                                destination_blob_name=thumbnail_gcs_blob,
+                                                mime_type="image/png",
                                             )
+                                            or ""
+                                        )
 
                                 return (
                                     final_gcs_uri,
@@ -1034,7 +1006,10 @@ def _process_video_in_background(
                                     "returned no generated videos."
                                 )
 
-                            # Download the generated video and create thumbnail
+                            # Download the generated video and create thumbnail.
+                            # Scratch files go under tempfile, not the working
+                            # directory: the image runs as a non-root user and
+                            # /app is read-only to it.
                             thumbnail_path = ""
 
                             for (
@@ -1046,52 +1021,51 @@ def _process_video_in_background(
                                 ):
                                     output_path = f"{generated_video.video.uri.replace(f'gs://{cfg.GENMEDIA_BUCKET}/', '')}"
 
-                                    # Step 1: Download the Video from GCS
-                                    local_output_path = (
-                                        f"thumbnails/{output_path}"
-                                    )
-                                    downloaded_video_path = await asyncio.to_thread(
-                                        gcs_service.download_from_gcs,
-                                        gcs_uri_path=output_path,
-                                        destination_file_path=local_output_path,
-                                    )
-
-                                    # Step 2: Generate Thumbnail from the first video frame
-                                    thumbnail_path = await asyncio.to_thread(
-                                        generate_thumbnail,
-                                        downloaded_video_path or "",
-                                    )
-
-                                    # Step 3: Save the Thumbnail in GCS
-                                    if thumbnail_path:
-                                        # Get the parent directory of the thumbnail to clean it up later.
-                                        temp_dir = os.path.dirname(
-                                            thumbnail_path
+                                    with tempfile.TemporaryDirectory(
+                                        prefix="veo_"
+                                    ) as scratch_dir:
+                                        # Step 1: Download the Video from GCS
+                                        local_output_path = os.path.join(
+                                            scratch_dir, output_path
                                         )
-                                        try:
-                                            thumbnail_gcs_uri = (
-                                                await asyncio.to_thread(
-                                                    gcs_service.upload_file_to_gcs,
-                                                    local_path=thumbnail_path,
-                                                    destination_blob_name=thumbnail_path.replace(
-                                                        "thumbnails/",
-                                                        "",
-                                                    ),
-                                                    mime_type="image/png",
-                                                )
-                                                or ""
-                                            )
+                                        downloaded_video_path = await asyncio.to_thread(
+                                            gcs_service.download_from_gcs,
+                                            gcs_uri_path=output_path,
+                                            destination_file_path=local_output_path,
+                                        )
 
-                                            permanent_thumbnail_gcs_uris.append(
-                                                thumbnail_gcs_uri,
+                                        # Step 2: Generate Thumbnail from the first video frame
+                                        thumbnail_path = (
+                                            await asyncio.to_thread(
+                                                generate_thumbnail,
+                                                downloaded_video_path or "",
                                             )
-                                        except Exception as e:
-                                            print(
-                                                f"Failed to upload {thumbnail_path}. Error: {e}",
-                                            )
-                                        finally:
-                                            if os.path.exists(temp_dir):
-                                                shutil.rmtree(temp_dir)
+                                        )
+
+                                        # Step 3: Save the Thumbnail in GCS,
+                                        # next to the video
+                                        if thumbnail_path:
+                                            try:
+                                                thumbnail_gcs_uri = (
+                                                    await asyncio.to_thread(
+                                                        gcs_service.upload_file_to_gcs,
+                                                        local_path=thumbnail_path,
+                                                        destination_blob_name=os.path.relpath(
+                                                            thumbnail_path,
+                                                            scratch_dir,
+                                                        ),
+                                                        mime_type="image/png",
+                                                    )
+                                                    or ""
+                                                )
+
+                                                permanent_thumbnail_gcs_uris.append(
+                                                    thumbnail_gcs_uri,
+                                                )
+                                            except Exception as e:
+                                                print(
+                                                    f"Failed to upload {thumbnail_path}. Error: {e}",
+                                                )
 
                             all_generated_videos.extend(
                                 operation.response.generated_videos or [],
@@ -1180,7 +1154,6 @@ def _process_video_concatenation_in_background(
 
     worker_logger = logging.getLogger(f"video_concat_worker.{media_item_id}")
     worker_logger.setLevel(logging.INFO)
-    temp_dir = f"temp/{media_item_id}"
 
     try:
         if worker_logger.hasHandlers():
@@ -1213,6 +1186,11 @@ def _process_video_concatenation_in_background(
                     source_asset_repo = SourceAssetRepository(db)
                     cfg = config_service
 
+                    # Not under the working directory: /app is read-only
+                    # in the image. The finally below removes it.
+                    temp_dir = tempfile.mkdtemp(
+                        prefix=f"concat_{media_item_id}_"
+                    )
                     try:
                         start_time = time.monotonic()
                         local_video_paths = []

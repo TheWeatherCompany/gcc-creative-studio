@@ -15,6 +15,7 @@
 
 
 import io
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -212,6 +213,7 @@ async def test_delete_asset_not_found(service, mock_dependencies):
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("readonly_cwd")
 @patch("src.source_assets.source_asset_service.get_video_dimensions")
 @patch("src.source_assets.source_asset_service.generate_thumbnail")
 async def test_upload_asset_video(
@@ -254,6 +256,9 @@ async def test_upload_asset_video(
     assert response.id == 20
     mock_dependencies["gcs_service"].upload_file_to_gcs.assert_called()
     mock_generate_thumbnail.assert_called_once()
+    # The scratch dir is gone once the upload is done.
+    scratch_dir = os.path.dirname(mock_generate_thumbnail.call_args[0][0])
+    assert not os.path.exists(scratch_dir)
 
 
 @pytest.mark.anyio
@@ -428,6 +433,7 @@ async def test_create_from_gcs_uri_success(
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("readonly_cwd")
 @patch("src.source_assets.source_asset_service.generate_thumbnail")
 async def test_create_from_gcs_uri_video(
     mock_thumb,
@@ -478,6 +484,14 @@ async def test_create_from_gcs_uri_video(
     )
     assert mock_dependencies["gcs_service"].upload_file_to_gcs.call_count >= 1
     mock_dependencies["repo"].create.assert_called_once()
+    # The GCS object keeps the original filename, not the scratch name.
+    video_upload = mock_dependencies[
+        "gcs_service"
+    ].upload_file_to_gcs.call_args_list[0]
+    assert video_upload.kwargs["destination_blob_name"].endswith("/in.mp4")
+    # The scratch dir is gone once the upload is done.
+    scratch_dir = os.path.dirname(mock_thumb.call_args[0][0])
+    assert not os.path.exists(scratch_dir)
 
 
 @pytest.mark.anyio
@@ -601,3 +615,52 @@ async def test_upload_asset_upscale_failure(
     )
 
     assert response.id == 80
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("readonly_cwd")
+@patch("src.source_assets.source_asset_service.get_video_dimensions")
+@patch("src.source_assets.source_asset_service.generate_thumbnail")
+async def test_upload_asset_video_scratch_file_ignores_the_client_filename(
+    mock_generate_thumbnail,
+    mock_get_dimensions,
+    service,
+    mock_dependencies,
+    sample_user,
+):
+    mock_get_dimensions.return_value = (1920, 1080)
+    mock_generate_thumbnail.return_value = None
+    mock_dependencies["repo"].find_by_hash.return_value = None
+    mock_dependencies["gcs_service"].upload_file_to_gcs.return_value = (
+        "gs://bucket/vid.mp4"
+    )
+    mock_dependencies["iam_signer"].generate_presigned_url.return_value = (
+        "https://signed.url"
+    )
+    mock_dependencies["repo"].create.return_value = SourceAssetModel(
+        id=21,
+        workspace_id=1,
+        user_id=1,
+        gcs_uri="gs://b",
+        original_filename="escape.mp4",
+        file_hash="h21",
+        mime_type=MimeTypeEnum.VIDEO_MP4,
+    )
+
+    await service.upload_asset(
+        user=sample_user,
+        file_bytes=b"fake_video_bytes",
+        filename="../../escape.mp4",
+        workspace_id=1,
+        mime_type="video/mp4",
+    )
+
+    # The video was written under a fixed name, so "../" can't steer it.
+    local_path = mock_generate_thumbnail.call_args[0][0]
+    assert os.path.basename(local_path) == "upload.mp4"
+    assert ".." not in local_path
+    # The GCS object keeps the original filename.
+    video_upload = mock_dependencies["gcs_service"].upload_file_to_gcs.call_args
+    assert video_upload.kwargs["destination_blob_name"].endswith(
+        "../../escape.mp4"
+    )

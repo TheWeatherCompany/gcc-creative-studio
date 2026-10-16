@@ -19,6 +19,7 @@ videos land on one media item, like the Gemini image fan-out.
 
 import base64
 import itertools
+import os
 import threading
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -63,23 +64,30 @@ def _thumbnail(video_path):
     return video_path.replace(".mp4", ".png")
 
 
-def _run(dto, contents, fail_take_1=False, parent=None, first_call=None):
+def _run(
+    dto,
+    contents,
+    fail_take_1=False,
+    parent=None,
+    first_call=None,
+    parent_bytes=b"parent-video-bytes",
+    uploaded=None,
+):
     """Runs the worker and returns (the row update, the create mock).
 
     first_call, if given, is what the first interaction returns in place of
     contents. Takes run in parallel, so which take gets it is not fixed.
+    parent_bytes is what GCS returns for the parent video on a follow-up turn.
+    uploaded, if given, collects the local path of every upload.
     """
 
     def upload(local_path, destination_blob_name, mime_type):
-        del local_path, mime_type
+        del mime_type
+        if uploaded is not None:
+            uploaded.append(local_path)
         if fail_take_1 and destination_blob_name.endswith("_1.mp4"):
             raise RuntimeError("upload failed")
         return f"gs://bucket/{destination_blob_name}"
-
-    def download(gcs_uri_path, destination_file_path):
-        del gcs_uri_path
-        with open(destination_file_path, "wb") as f:
-            f.write(b"parent-video-bytes")
 
     with (
         patch("src.database.WorkerDatabase") as mock_worker_db_class,
@@ -111,7 +119,14 @@ def _run(dto, contents, fail_take_1=False, parent=None, first_call=None):
         mock_repo_class.return_value = mock_repo
         gcs = mock_gcs_class.return_value
         gcs.upload_file_to_gcs.side_effect = upload
-        gcs.download_from_gcs.side_effect = download
+
+        def download_bytes(gcs_uri):
+            # Like the real method: only a full gs:// URI finds the video.
+            if parent and gcs_uri == parent.gcs_uris[0]:
+                return parent_bytes
+            return None
+
+        gcs.download_bytes_from_gcs.side_effect = download_bytes
 
         _process_video_in_background(
             media_item_id=MEDIA_ITEM_ID, request_dto=dto, user_email="t@t.com"
@@ -131,13 +146,14 @@ def _dto(number_of_media, **kwargs):
 
 
 @pytest.fixture(autouse=True)
-def _scratch_cwd(tmp_path, monkeypatch):
-    # The worker writes its temp files relative to the working directory.
-    monkeypatch.chdir(tmp_path)
+def _readonly_cwd(readonly_cwd):
+    # /app is read-only in the image, so scratch files must go elsewhere.
+    del readonly_cwd
 
 
 def test_each_take_is_an_interaction_stored_in_take_order():
-    update, create = _run(_dto(4), [VIDEO])
+    uploaded = []
+    update, create = _run(_dto(4), [VIDEO], uploaded=uploaded)
 
     assert create.call_count == 4
     assert update["status"] == JobStatusEnum.COMPLETED
@@ -147,6 +163,9 @@ def test_each_take_is_an_interaction_stored_in_take_order():
     ]
     assert update["num_media"] == 4
     assert len(update["raw_data"]["interactions"]) == 4
+    # Scratch files are gone once the take is uploaded.
+    assert uploaded
+    assert not any(os.path.exists(path) for path in uploaded)
 
 
 # Partial failure follows the Gemini image fan-out: a take with no video is
@@ -196,8 +215,9 @@ def test_failed_takes(number_of_media, run_kwargs, expected):
         ]
 
 
-def test_follow_up_turn_takes_each_continue_the_parent():
-    parent = MediaItemModel(
+def _parent_item():
+    """A finished Omni video that a follow-up turn continues from."""
+    return MediaItemModel(
         id=99,
         workspace_id=1,
         user_id=1,
@@ -210,6 +230,10 @@ def test_follow_up_turn_takes_each_continue_the_parent():
         raw_data={"interaction_id": "interaction-parent", "signature": "sig"},
     )
 
+
+def test_follow_up_turn_takes_each_continue_the_parent():
+    parent = _parent_item()
+
     update, create = _run(
         _dto(2, parent_media_item_id=99), [VIDEO], parent=parent
     )
@@ -221,3 +245,26 @@ def test_follow_up_turn_takes_each_continue_the_parent():
         "interaction-parent",
     ]
     assert update["gcs_uris"] == [_video_uri(0), _video_uri(1)]
+    # The parent video goes to Omni inline, as the model's previous output.
+    for call in create.call_args_list:
+        parent_video = call.kwargs["input"][1]["content"][1]
+        assert parent_video["data"] == b"parent-video-bytes"
+
+
+def test_follow_up_turn_fails_when_the_parent_video_cannot_be_downloaded():
+    parent = _parent_item()
+
+    update, create = _run(
+        _dto(2, parent_media_item_id=99),
+        [VIDEO],
+        parent=parent,
+        parent_bytes=None,
+    )
+
+    # Omni is never asked to continue from a video it was not given.
+    create.assert_not_called()
+    assert update["status"] == JobStatusEnum.FAILED
+    assert update["error_message"] == (
+        "Failed to download parent video: "
+        f"gs://{config_service.GENMEDIA_BUCKET}/videos/99_0.mp4"
+    )

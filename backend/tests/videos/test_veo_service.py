@@ -1566,7 +1566,9 @@ class TestBackgroundWorkers:
 
             mock_gcs_service = MagicMock()
             mock_gcs_class.return_value = mock_gcs_service
-            mock_gcs_service.download_from_gcs.return_value = None
+            mock_gcs_service.download_bytes_from_gcs.return_value = (
+                b"parent-video-bytes"
+            )
             mock_gcs_service.upload_file_to_gcs.return_value = (
                 "gs://bucket/uploaded.mp4"
             )

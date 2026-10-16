@@ -148,3 +148,22 @@ def fixture_admin_client(mock_admin, db_session_mock):
 def fixture_creator_client(mock_creator, db_session_mock):
     """Provides a TestClient authenticated as a CREATOR."""
     yield from _create_api_client(mock_creator, db_session_mock)
+
+
+@pytest.fixture(name="readonly_cwd")
+def fixture_readonly_cwd(tmp_path, monkeypatch):
+    """Runs the test from a directory it can't write to, like /app in the image.
+
+    The backend image runs as a non-root user with a root-owned /app, so any
+    scratch file written relative to the working directory fails there with
+    Errno 13 while passing everywhere else.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    cwd = tmp_path / "app"
+    cwd.mkdir()
+    cwd.chmod(0o555)
+    monkeypatch.chdir(cwd)
+    yield cwd
+    # Let pytest delete tmp_path afterwards.
+    cwd.chmod(0o755)
