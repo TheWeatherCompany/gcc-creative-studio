@@ -589,6 +589,11 @@ def _process_video_in_background(
                                         f"Parent MediaItem {request_dto.parent_media_item_id} does not have interaction context. Falling back to Turn 1 R2V generation."
                                     )
 
+                            # End the read transaction before the model calls
+                            # so the connection isn't held (and dropped)
+                            # meanwhile.
+                            await db.rollback()
+
                             if is_turn_2:
                                 worker_logger.info(
                                     f"Performing Turn 2 Multi-Turn generation from parent MediaItem: {request_dto.parent_media_item_id}"
@@ -968,6 +973,11 @@ def _process_video_in_background(
                             }
 
                         else:
+                            # End the read transaction before the model call
+                            # and polling so the connection isn't held (and
+                            # dropped) meanwhile.
+                            await db.rollback()
+
                             # Map DTO resolution ("1K", "2K", "4K") to GenAI SDK supported resolutions ("720p", "1080p", "4k")
                             api_resolution = VIDEO_RESOLUTION_MAP.get(
                                 request_dto.resolution, "720p"
@@ -1247,6 +1257,10 @@ def _process_video_concatenation_in_background(
                                     f"Skipping non-video URI for {video_input.type} '{video_input.id}'",
                                 )
                                 continue
+
+                            # End the read transaction before the download so
+                            # the connection isn't held through it and ffmpeg.
+                            await db.rollback()
 
                             local_path = await asyncio.to_thread(
                                 gcs_service.download_from_gcs,

@@ -238,6 +238,10 @@ def _process_vto_in_background(
 
                             gcs_uris_with_roles.append((gcs_uri, role))
 
+                        # End the read transaction before the downloads and
+                        # model calls so the connection isn't held meanwhile.
+                        await db.rollback()
+
                         # --- Download & Optimize all inputs in parallel ---
                         async def download_and_optimize_uri(
                             gcs_uri: str, role: AssetRoleEnum
@@ -726,6 +730,10 @@ def _process_image_in_background(
                     all_generated_images: list[types.GeneratedImage] = []
 
                     try:
+                        # End the read transaction before the model calls so
+                        # the connection isn't held (and dropped) meanwhile.
+                        await db.rollback()
+
                         # --- PATH 1: TEXT-TO-IMAGE GENERATION ---
                         if not reference_images_for_api:
                             model = request_dto.generation_model
@@ -1181,6 +1189,10 @@ def _process_upload_upscale_in_background(
                                     f"Media item {media_item_id_existing} "
                                     f"has no usable URIs",
                                 )
+
+                        # End the read transaction before the upscale call so
+                        # the connection isn't held meanwhile.
+                        await db.rollback()
 
                         # --- Perform Upscaling ---
                         if not final_original_uri and not final_upscaled_uri:
