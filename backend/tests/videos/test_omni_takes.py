@@ -131,9 +131,9 @@ def _dto(number_of_media, **kwargs):
 
 
 @pytest.fixture(autouse=True)
-def _scratch_cwd(tmp_path, monkeypatch):
-    # The worker writes its temp files relative to the working directory.
-    monkeypatch.chdir(tmp_path)
+def _readonly_cwd(readonly_cwd):
+    # /app is read-only in the image, so scratch files must go elsewhere.
+    del readonly_cwd
 
 
 def test_each_take_is_an_interaction_stored_in_take_order():

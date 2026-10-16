@@ -851,63 +851,51 @@ def _process_video_in_background(
                                     gcs_service,
                                 )
 
-                                # Write raw video bytes directly to local output path using index
+                                # Write the video to scratch space, upload it
+                                # and make its thumbnail. Not under the working
+                                # directory: /app is read-only in the image.
                                 output_filename = (
                                     f"videos/{media_item_id}_{i}.mp4"
                                 )
-                                local_output_path = (
-                                    f"thumbnails/{output_filename}"
-                                )
-                                os.makedirs(
-                                    os.path.dirname(local_output_path),
-                                    exist_ok=True,
-                                )
-                                with open(local_output_path, "wb") as f:
-                                    f.write(raw_video_bytes)
+                                with tempfile.TemporaryDirectory(
+                                    prefix="omni_"
+                                ) as scratch_dir:
+                                    local_output_path = os.path.join(
+                                        scratch_dir,
+                                        os.path.basename(output_filename),
+                                    )
+                                    with open(local_output_path, "wb") as f:
+                                        f.write(raw_video_bytes)
 
-                                # Upload local file to GCS
-                                final_gcs_uri = await asyncio.to_thread(
-                                    gcs_service.upload_file_to_gcs,
-                                    local_path=local_output_path,
-                                    destination_blob_name=output_filename,
-                                    mime_type="video/mp4",
-                                )
-
-                                # Generate local thumbnail
-                                thumbnail_path = await asyncio.to_thread(
-                                    generate_thumbnail,
-                                    local_output_path,
-                                )
-                                local_thumbnail_name = thumbnail_path or ""
-
-                                # Upload thumbnail to GCS
-                                thumbnail_gcs_blob = (
-                                    f"thumbnails/{media_item_id}_{i}.png"
-                                )
-                                thumbnail_gcs_uri = ""
-                                if thumbnail_path:
-                                    thumbnail_gcs_uri = (
-                                        await asyncio.to_thread(
-                                            gcs_service.upload_file_to_gcs,
-                                            local_path=thumbnail_path,
-                                            destination_blob_name=thumbnail_gcs_blob,
-                                            mime_type="image/png",
-                                        )
-                                        or ""
+                                    # Upload local file to GCS
+                                    final_gcs_uri = await asyncio.to_thread(
+                                        gcs_service.upload_file_to_gcs,
+                                        local_path=local_output_path,
+                                        destination_blob_name=output_filename,
+                                        mime_type="video/mp4",
                                     )
 
-                                # Clean up local temp files
-                                for local_path in [
-                                    local_output_path,
-                                    local_thumbnail_name,
-                                ]:
-                                    if os.path.exists(local_path):
-                                        try:
-                                            os.remove(local_path)
-                                        except Exception as e:
-                                            worker_logger.warning(
-                                                f"Failed to clean up {local_path}: {e}"
+                                    # Generate local thumbnail
+                                    thumbnail_path = await asyncio.to_thread(
+                                        generate_thumbnail,
+                                        local_output_path,
+                                    )
+
+                                    # Upload thumbnail to GCS
+                                    thumbnail_gcs_blob = (
+                                        f"thumbnails/{media_item_id}_{i}.png"
+                                    )
+                                    thumbnail_gcs_uri = ""
+                                    if thumbnail_path:
+                                        thumbnail_gcs_uri = (
+                                            await asyncio.to_thread(
+                                                gcs_service.upload_file_to_gcs,
+                                                local_path=thumbnail_path,
+                                                destination_blob_name=thumbnail_gcs_blob,
+                                                mime_type="image/png",
                                             )
+                                            or ""
+                                        )
 
                                 return (
                                     final_gcs_uri,
