@@ -126,14 +126,37 @@ data "google_secret_manager_secret_version" "db_password" {
   version = "latest"
 }
 
-# 2. Call PostgreSQL Module
+# 2. Private networking for the database
+# Cloud SQL gets a private IP from the network module's Private Service Access
+# range; Cloud Run reaches it with Direct VPC egress from the subnet.
+module "network" {
+  source          = "../network"
+  project_id      = var.gcp_project_id
+  region          = var.gcp_region
+  resource_prefix = "cs"
+  environment     = var.environment
+
+  # Differs from upstream's /26 default: Direct VPC egress takes about two IPs
+  # per instance, more during a revision rollout, and the backend (max 100)
+  # plus the worker (max 20) need a /23.
+  cloud_run_cidr = "10.10.0.0/23"
+}
+
+# 3. Call PostgreSQL Module
 module "postgresql" {
-  source      = "../postgresql"
-  project_id  = var.gcp_project_id
-  region      = var.gcp_region
-  
+  source     = "../postgresql"
+  project_id = var.gcp_project_id
+  region     = var.gcp_region
+
   # Pass the ACTUAL value to create the user
   db_password = data.google_secret_manager_secret_version.db_password.secret_data
+
+  private_network   = module.network.network_id
+  public_ip_enabled = var.db_public_ip_enabled
+
+  # Wait for the Private Services Access peering before giving the instance a
+  # private network.
+  depends_on = [module.network.peering_completed]
 }
 
 # --- Service Module Calls ---
@@ -174,9 +197,12 @@ module "backend_service" {
   cloud_sql_connection_name = module.postgresql.connection_name
   db_name                   = module.postgresql.db_name
   db_user                   = module.postgresql.db_user
-  
+
   # Pass the Secret ID reference (NOT the value) for Cloud Run
   db_secret_id              = "creative-studio-db-password"
+
+  vpc_network_name = module.network.network_name
+  vpc_subnet_name  = module.network.cloud_run_subnet_name
 }
 
 resource "google_firebase_project" "default" {
@@ -330,6 +356,9 @@ module "worker_service" {
   db_name                   = module.postgresql.db_name
   db_user                   = module.postgresql.db_user
   db_secret_id              = "creative-studio-db-password"
+
+  vpc_network_name = module.network.network_name
+  vpc_subnet_name  = module.network.cloud_run_subnet_name
 
   # Private: reachable only from Cloud Tasks and Cloud Scheduler, as job_invoker.
   allow_unauthenticated            = false

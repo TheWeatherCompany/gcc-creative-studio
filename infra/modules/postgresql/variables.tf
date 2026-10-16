@@ -17,3 +17,14 @@ variable "region" {}
 variable "db_name" { default = "creative_studio" }
 variable "db_user" { default = "studio_user" }
 variable "db_password" { sensitive = true }
+
+variable "private_network" {
+  type        = string
+  description = "VPC network ID or self link of the VPC that has the Private Service Access connection. The instance gets a private IP on it."
+}
+
+variable "public_ip_enabled" {
+  type        = bool
+  default     = false
+  description = "Keep the instance's public IP. Only for the cutover from public to private IP; leave false otherwise."
+}

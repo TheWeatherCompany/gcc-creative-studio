@@ -105,4 +105,5 @@ apis_to_enable = [
   "firestore.googleapis.com",
   "texttospeech.googleapis.com",
   "workflows.googleapis.com",
+  "servicenetworking.googleapis.com", # Private Service Access for the Cloud SQL private IP
 ]

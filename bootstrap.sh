@@ -157,9 +157,17 @@ start_sql_proxy() {
     fi
 
     # 3. Start Proxy in Background (Port 5432)
-    ./cloud-sql-proxy --address 0.0.0.0 --port 5432 "$DB_INSTANCE_NAME" > /dev/null 2>&1 &
+    # The proxy dials the instance's public IP. Cloud SQL now defaults to
+    # private IP only, so from outside the VPC a fresh environment needs
+    # db_public_ip_enabled = true on the platform module. Otherwise the proxy
+    # accepts local connections but cannot reach the instance, and its log
+    # holds the reason.
+    PROXY_LOG=$(mktemp "${TMPDIR:-/tmp}/cloud-sql-proxy.XXXXXX")
+    export PROXY_LOG
+    ./cloud-sql-proxy --address 0.0.0.0 --port 5432 "$DB_INSTANCE_NAME" > "$PROXY_LOG" 2>&1 &
     PROXY_PID=$!
     export PROXY_PID
+    info "Cloud SQL Proxy log: $PROXY_LOG"
     
     # 4. Wait for Readiness
     echo -n "   Waiting for proxy connection..."
@@ -172,7 +180,7 @@ start_sql_proxy() {
         sleep 1
     done
     echo
-    warn "Proxy connection check timed out, but proceeding..."
+    warn "Proxy connection check timed out, but proceeding... (log: $PROXY_LOG)"
 }
 
 stop_sql_proxy() {
@@ -740,6 +748,8 @@ seed_data() {
     if (cd backend && "$VENV_DIR/bin/python" -m bootstrap.bootstrap); then
         success "Python bootstrap script executed successfully."
     else
+        warn "If the database was 'not reachable', check the Cloud SQL Proxy log: $PROXY_LOG"
+        warn "The proxy needs the instance's public IP: set db_public_ip_enabled = true on the creative_studio_platform module in infra/environments/$ENV_NAME/main.tf and apply, or run this script from inside the VPC."
         fail "Python bootstrap script failed."
     fi
 
