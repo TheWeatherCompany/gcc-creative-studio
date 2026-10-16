@@ -53,11 +53,25 @@ jobs:
       # issues:write even though we only ever attach them to PRs.
       issues: write
     steps:
+      # GITHUB_TOKEN can never push a branch whose history changes files under
+      # .github/workflows/, and upstream's commits do. UPSTREAM_SYNC_TOKEN is a
+      # fine-grained token for this repo only, with Contents, Pull requests and
+      # Workflows read/write. Pushing and opening the PR with it also means CI
+      # runs on the sync PR, which GITHUB_TOKEN-created PRs never trigger.
+      - name: Require sync token
+        env:
+          SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: |
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::error::Repository secret UPSTREAM_SYNC_TOKEN is not set; see the comment above this step."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
 
       - name: Configure git identity
         run: |
@@ -151,10 +165,29 @@ jobs:
           fi
 
           conflicted=false
-          git merge --no-edit --no-ff "upstream/${UPSTREAM_BRANCH}" || conflicted=true
+          git merge --no-commit --no-ff "upstream/${UPSTREAM_BRANCH}" || conflicted=true
+
+          # Keep our workflows. We've customized the ones we share with upstream
+          # (pinned actions, scoped tokens), and taking upstream's new ones
+          # would switch on their release and infra pipelines here. List every
+          # workflow upstream changed since main's merge base, not just this
+          # merge's diff, so a sync built on an earlier sync branch still shows
+          # them and deletions show too.
+          skipped_workflows=$(git diff --name-only "origin/${LOCAL_BRANCH}...upstream/${UPSTREAM_BRANCH}" -- .github/workflows | sort -u)
+          git restore --source=HEAD --staged --worktree -- .github/workflows
+
+          # Conflicts only in workflow files are gone after the restore.
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+            conflicted=true
+          else
+            conflicted=false
+          fi
+
+          git add -A
           if [ "$conflicted" = "true" ]; then
-            git add -A
             git commit -m "Merge upstream/${UPSTREAM_BRANCH} (unresolved conflicts, needs manual resolution)"
+          else
+            git commit --no-edit
           fi
 
           git push origin "$new_branch"
@@ -162,11 +195,16 @@ jobs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "name=$new_branch" >> "$GITHUB_OUTPUT"
           echo "conflicted=$conflicted" >> "$GITHUB_OUTPUT"
+          {
+            echo 'skipped_workflows<<WFEOF'
+            echo "$skipped_workflows"
+            echo 'WFEOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Open PR
         if: steps.diff.outputs.count != '0' && steps.branch.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
           # Step outputs carry upstream-controlled strings (file paths, branch
           # names); pass them through env rather than interpolating ${{ }}.
           PREV_NUMBER: ${{ steps.prev.outputs.number }}
@@ -175,6 +213,7 @@ jobs:
           AUTH_FILES: ${{ steps.authcheck.outputs.files }}
           SYNC_BRANCH: ${{ steps.branch.outputs.name }}
           COMMIT_COUNT: ${{ steps.diff.outputs.count }}
+          SKIPPED_WORKFLOWS: ${{ steps.branch.outputs.skipped_workflows }}
         run: |
           shortlog=$(git log --oneline "origin/${LOCAL_BRANCH}..upstream/${UPSTREAM_BRANCH}")
           prev_number="$PREV_NUMBER"
@@ -206,12 +245,28 @@ jobs:
           )
           fi
 
+          workflow_note=""
+          if [ -n "$SKIPPED_WORKFLOWS" ]; then
+            workflow_note=$(cat <<EOF
+
+          ### Upstream workflow changes not applied
+          This branch keeps our versions of every workflow: ours are customized,
+          and upstream's new ones would switch on their pipelines here. Upstream
+          changed these since our last sync; port anything we need by hand:
+          \`\`\`
+          ${SKIPPED_WORKFLOWS}
+          \`\`\`
+          EOF
+          )
+          fi
+
           body=$(cat <<EOF
           Automated sync from upstream (\`GoogleCloudPlatform/gcc-creative-studio\`, \`${UPSTREAM_BRANCH}\`).
 
           ${conflict_note}
           ${lineage_note}
           ${auth_warning}
+          ${workflow_note}
 
           ### New upstream commits
           \`\`\`
