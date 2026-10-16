@@ -18,6 +18,7 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
 import time
 
 from fastapi import Depends, HTTPException, status
@@ -1034,7 +1035,10 @@ def _process_video_in_background(
                                     "returned no generated videos."
                                 )
 
-                            # Download the generated video and create thumbnail
+                            # Download the generated video and create thumbnail.
+                            # Scratch files go under tempfile, not the working
+                            # directory: the image runs as a non-root user and
+                            # /app is read-only to it.
                             thumbnail_path = ""
 
                             for (
@@ -1046,52 +1050,51 @@ def _process_video_in_background(
                                 ):
                                     output_path = f"{generated_video.video.uri.replace(f'gs://{cfg.GENMEDIA_BUCKET}/', '')}"
 
-                                    # Step 1: Download the Video from GCS
-                                    local_output_path = (
-                                        f"thumbnails/{output_path}"
-                                    )
-                                    downloaded_video_path = await asyncio.to_thread(
-                                        gcs_service.download_from_gcs,
-                                        gcs_uri_path=output_path,
-                                        destination_file_path=local_output_path,
-                                    )
-
-                                    # Step 2: Generate Thumbnail from the first video frame
-                                    thumbnail_path = await asyncio.to_thread(
-                                        generate_thumbnail,
-                                        downloaded_video_path or "",
-                                    )
-
-                                    # Step 3: Save the Thumbnail in GCS
-                                    if thumbnail_path:
-                                        # Get the parent directory of the thumbnail to clean it up later.
-                                        temp_dir = os.path.dirname(
-                                            thumbnail_path
+                                    with tempfile.TemporaryDirectory(
+                                        prefix="veo_"
+                                    ) as scratch_dir:
+                                        # Step 1: Download the Video from GCS
+                                        local_output_path = os.path.join(
+                                            scratch_dir, output_path
                                         )
-                                        try:
-                                            thumbnail_gcs_uri = (
-                                                await asyncio.to_thread(
-                                                    gcs_service.upload_file_to_gcs,
-                                                    local_path=thumbnail_path,
-                                                    destination_blob_name=thumbnail_path.replace(
-                                                        "thumbnails/",
-                                                        "",
-                                                    ),
-                                                    mime_type="image/png",
-                                                )
-                                                or ""
-                                            )
+                                        downloaded_video_path = await asyncio.to_thread(
+                                            gcs_service.download_from_gcs,
+                                            gcs_uri_path=output_path,
+                                            destination_file_path=local_output_path,
+                                        )
 
-                                            permanent_thumbnail_gcs_uris.append(
-                                                thumbnail_gcs_uri,
+                                        # Step 2: Generate Thumbnail from the first video frame
+                                        thumbnail_path = (
+                                            await asyncio.to_thread(
+                                                generate_thumbnail,
+                                                downloaded_video_path or "",
                                             )
-                                        except Exception as e:
-                                            print(
-                                                f"Failed to upload {thumbnail_path}. Error: {e}",
-                                            )
-                                        finally:
-                                            if os.path.exists(temp_dir):
-                                                shutil.rmtree(temp_dir)
+                                        )
+
+                                        # Step 3: Save the Thumbnail in GCS,
+                                        # next to the video
+                                        if thumbnail_path:
+                                            try:
+                                                thumbnail_gcs_uri = (
+                                                    await asyncio.to_thread(
+                                                        gcs_service.upload_file_to_gcs,
+                                                        local_path=thumbnail_path,
+                                                        destination_blob_name=os.path.relpath(
+                                                            thumbnail_path,
+                                                            scratch_dir,
+                                                        ),
+                                                        mime_type="image/png",
+                                                    )
+                                                    or ""
+                                                )
+
+                                                permanent_thumbnail_gcs_uris.append(
+                                                    thumbnail_gcs_uri,
+                                                )
+                                            except Exception as e:
+                                                print(
+                                                    f"Failed to upload {thumbnail_path}. Error: {e}",
+                                                )
 
                             all_generated_videos.extend(
                                 operation.response.generated_videos or [],
