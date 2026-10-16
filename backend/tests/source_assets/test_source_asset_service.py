@@ -15,6 +15,7 @@
 
 
 import io
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -212,6 +213,7 @@ async def test_delete_asset_not_found(service, mock_dependencies):
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("readonly_cwd")
 @patch("src.source_assets.source_asset_service.get_video_dimensions")
 @patch("src.source_assets.source_asset_service.generate_thumbnail")
 async def test_upload_asset_video(
@@ -428,6 +430,7 @@ async def test_create_from_gcs_uri_success(
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("readonly_cwd")
 @patch("src.source_assets.source_asset_service.generate_thumbnail")
 async def test_create_from_gcs_uri_video(
     mock_thumb,
@@ -601,3 +604,47 @@ async def test_upload_asset_upscale_failure(
     )
 
     assert response.id == 80
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("readonly_cwd")
+@patch("src.source_assets.source_asset_service.get_video_dimensions")
+@patch("src.source_assets.source_asset_service.generate_thumbnail")
+async def test_upload_asset_video_scratch_file_ignores_the_client_filename(
+    mock_generate_thumbnail,
+    mock_get_dimensions,
+    service,
+    mock_dependencies,
+    sample_user,
+):
+    mock_get_dimensions.return_value = (1920, 1080)
+    mock_generate_thumbnail.return_value = None
+    mock_dependencies["repo"].find_by_hash.return_value = None
+    mock_dependencies["gcs_service"].upload_file_to_gcs.return_value = (
+        "gs://bucket/vid.mp4"
+    )
+    mock_dependencies["iam_signer"].generate_presigned_url.return_value = (
+        "https://signed.url"
+    )
+    mock_dependencies["repo"].create.return_value = SourceAssetModel(
+        id=21,
+        workspace_id=1,
+        user_id=1,
+        gcs_uri="gs://b",
+        original_filename="escape.mp4",
+        file_hash="h21",
+        mime_type=MimeTypeEnum.VIDEO_MP4,
+    )
+
+    await service.upload_asset(
+        user=sample_user,
+        file_bytes=b"fake_video_bytes",
+        filename="../../escape.mp4",
+        workspace_id=1,
+        mime_type="video/mp4",
+    )
+
+    # The video was written under a fixed name, so "../" can't steer it.
+    local_path = mock_generate_thumbnail.call_args[0][0]
+    assert os.path.basename(local_path) == "upload.mp4"
+    assert ".." not in local_path

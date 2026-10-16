@@ -19,7 +19,7 @@ import logging
 import mimetypes
 import os
 import shutil
-import uuid
+import tempfile
 
 from fastapi import Depends, HTTPException, UploadFile, status
 from PIL import Image as PILImage
@@ -53,6 +53,15 @@ from src.users.repository.user_repository import UserRepository
 from src.users.user_model import UserModel, UserRoleEnum
 
 logger = logging.getLogger(__name__)
+
+
+def _scratch_name(filename: str | None) -> str:
+    """Local name for an uploaded file: fixed, keeping only the extension.
+
+    The client supplies the filename, so using it as a path would let "../"
+    escape the scratch dir.
+    """
+    return "upload" + os.path.splitext(os.path.basename(filename or ""))[1]
 
 
 class SourceAssetService:
@@ -228,15 +237,16 @@ class SourceAssetService:
         thumbnail_gcs_uri: str | None = None
         original_gcs_uri: str | None = None
 
-        temp_dir = f"temp/source_assets/{uuid.uuid4()}"
+        # Not under the working directory: /app is read-only in the image.
+        # The finally below removes it.
+        temp_dir = tempfile.mkdtemp(prefix="source_asset_")
         final_aspect_ratio: AspectRatioEnum
 
         try:
             local_path = None
             if is_video:
                 # --- Video Upload Logic ---
-                os.makedirs(temp_dir, exist_ok=True)
-                local_path = os.path.join(temp_dir, filename or "asset")
+                local_path = os.path.join(temp_dir, _scratch_name(filename))
                 with open(local_path, "wb") as buffer:
                     buffer.write(contents)
 
@@ -668,15 +678,16 @@ class SourceAssetService:
 
         final_gcs_uri: str | None = None
         thumbnail_gcs_uri: str | None = None
-        temp_dir = f"temp/source_assets/{uuid.uuid4()}"
+        # Not under the working directory: /app is read-only in the image.
+        # The finally below removes it.
+        temp_dir = tempfile.mkdtemp(prefix="source_asset_")
         final_aspect_ratio: AspectRatioEnum
 
         try:
             local_path = None
             if is_video:
                 # --- Video Upload Logic ---
-                os.makedirs(temp_dir, exist_ok=True)
-                local_path = os.path.join(temp_dir, filename)
+                local_path = os.path.join(temp_dir, _scratch_name(filename))
                 with open(local_path, "wb") as buffer:
                     buffer.write(contents)
 
