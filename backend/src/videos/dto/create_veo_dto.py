@@ -106,8 +106,8 @@ class CreateVeoDto(BaseDto):
     duration_seconds: int = Field(
         default=8,
         ge=1,
-        le=10,
-        description="Duration in seconds for the videos to generate (between 1 and 10 secs).",
+        le=15,
+        description="Duration in seconds for the videos to generate (between 1 and 15 secs); the per-model maximum is enforced in validate_cross_fields.",
     )
     start_image_asset_id: AssetReferenceDto | None = Field(
         default=None,
@@ -164,16 +164,26 @@ class CreateVeoDto(BaseDto):
         4. Validates model-specific resolution limits.
         5. Validates model-specific duration limits.
         6. Ensures reference video and audio are only used with Gemini Omni,
-           the only path that reads them.
+           the only path that reads them, and that Omni 1.2 gets no audio.
         """
         conflicting_roles_present = False
         reference_roles_present = False
+        end_frame_role_present = False
+        source_video_role_present = False
         model = self.generation_model
 
         if (self.reference_video or self.reference_audio) and not model.is_omni:
             raise ValueError(
                 "Reference video and audio need a Gemini Omni model; "
                 f"'{model.value}' cannot use them.",
+            )
+
+        if (
+            self.reference_audio
+            and model == GenerationModelEnum.GEMINI_OMNI_1_2_FLASH
+        ):
+            raise ValueError(
+                f"Audio references are not supported by '{model.value}'.",
             )
 
         if self.source_media_items:
@@ -197,6 +207,10 @@ class CreateVeoDto(BaseDto):
                     conflicting_roles_present = True
                 if item.role in reference_roles:
                     reference_roles_present = True
+                if item.role == AssetRoleEnum.END_FRAME:
+                    end_frame_role_present = True
+                if item.role == AssetRoleEnum.VIDEO_EXTENSION_SOURCE:
+                    source_video_role_present = True
 
         has_asset_references = (
             bool(self.reference_images)
@@ -215,6 +229,7 @@ class CreateVeoDto(BaseDto):
                 GenerationModelEnum.GEMINI_OMNI,
                 GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW,
                 GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW,
+                GenerationModelEnum.GEMINI_OMNI_1_2_FLASH,
             }
             if model not in supported_reference_models:
                 raise ValueError(
@@ -225,8 +240,9 @@ class CreateVeoDto(BaseDto):
                     f"'{GenerationModelEnum.VEO_3_1_LITE_PREVIEW.value}' model, "
                     f"'{GenerationModelEnum.VEO_3_1_FAST_GENERATE_001.value}' model, "
                     f"'{GenerationModelEnum.GEMINI_OMNI.value}' model, "
-                    f"'{GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW.value}' model, or "
-                    f"'{GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW.value}' model.",
+                    f"'{GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW.value}' model, "
+                    f"'{GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW.value}' model, or "
+                    f"'{GenerationModelEnum.GEMINI_OMNI_1_2_FLASH.value}' model.",
                 )
 
             start_image_present = bool(self.start_image_asset_id)
@@ -261,9 +277,15 @@ class CreateVeoDto(BaseDto):
             )
 
         # Validate model-specific duration limits
-        max_duration = 8
-        if model.is_omni:
-            max_duration = 10
+        max_duration = model.max_video_duration(
+            has_any_references=has_any_references,
+            # A parent media item sends its video back as input, like a source video.
+            has_source_video=bool(self.source_video_asset_id)
+            or source_video_role_present
+            or self.parent_media_item_id is not None,
+            has_end_frame=bool(self.end_image_asset_id)
+            or end_frame_role_present,
+        )
 
         if self.duration_seconds > max_duration:
             raise ValueError(
@@ -298,6 +320,7 @@ class CreateVeoDto(BaseDto):
             GenerationModelEnum.GEMINI_OMNI,
             GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW,
             GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW,
+            GenerationModelEnum.GEMINI_OMNI_1_2_FLASH,
             GenerationModelEnum.VEO_3_1_PREVIEW,
             GenerationModelEnum.VEO_3_1_GENERATE_001,
             GenerationModelEnum.VEO_3_1_LITE_GENERATE_001,
