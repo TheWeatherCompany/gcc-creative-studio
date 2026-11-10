@@ -227,4 +227,138 @@ def test_validate_duration_seconds():
             generation_model=GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW,
             duration_seconds=11,
         )
-    assert "less than or equal to 10" in str(exc_info.value)
+    assert "Maximum supported duration: 10s" in str(exc_info.value)
+
+
+OMNI_1_2 = GenerationModelEnum.GEMINI_OMNI_1_2_FLASH
+ASSET = {"id": 1, "type": "source_asset"}
+
+# Inputs that cap Omni 1.2 at 10s. A start frame is deliberately absent.
+CAPPING_INPUTS = {
+    "reference image": {"reference_images": [ReferenceImageDto(asset_id=1)]},
+    "reference video": {"reference_video": ASSET},
+    "source video": {"source_video_asset_id": ASSET},
+    "end frame": {"end_image_asset_id": ASSET},
+    "end frame role": {
+        "source_media_items": [
+            SourceMediaItemLink(
+                media_item_id=1, media_index=0, role="end_frame"
+            )
+        ]
+    },
+    "source video role": {
+        "source_media_items": [
+            SourceMediaItemLink(
+                media_item_id=1, media_index=0, role="video_extension_source"
+            )
+        ]
+    },
+    "reference image role": {
+        "source_media_items": [
+            SourceMediaItemLink(
+                media_item_id=1, media_index=0, role="image_reference_asset"
+            )
+        ]
+    },
+}
+
+
+@pytest.mark.parametrize("duration", [3, 10, 15])
+def test_omni_1_2_allows_up_to_15s_without_capping_inputs(duration):
+    dto = CreateVeoDto(
+        prompt="Test",
+        workspace_id=1,
+        generation_model=OMNI_1_2,
+        duration_seconds=duration,
+    )
+    assert dto.duration_seconds == duration
+
+
+def test_omni_1_2_start_frame_alone_does_not_cap_duration():
+    dto = CreateVeoDto(
+        prompt="Test",
+        workspace_id=1,
+        generation_model=OMNI_1_2,
+        start_image_asset_id=ASSET,
+        duration_seconds=15,
+    )
+    assert dto.duration_seconds == 15
+
+
+@pytest.mark.parametrize("inputs", CAPPING_INPUTS.values(), ids=CAPPING_INPUTS)
+def test_omni_1_2_caps_duration_at_10s_for_capping_inputs(inputs):
+    dto = CreateVeoDto(
+        prompt="Test",
+        workspace_id=1,
+        generation_model=OMNI_1_2,
+        duration_seconds=10,
+        **inputs,
+    )
+    assert dto.duration_seconds == 10
+
+    for duration in (11, 15):
+        with pytest.raises(ValidationError) as exc_info:
+            CreateVeoDto(
+                prompt="Test",
+                workspace_id=1,
+                generation_model=OMNI_1_2,
+                duration_seconds=duration,
+                **inputs,
+            )
+        assert "Maximum supported duration: 10s" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        GenerationModelEnum.GEMINI_OMNI,
+        GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW,
+        GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW,
+    ],
+)
+def test_older_omni_models_stay_capped_at_10s(model):
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Test",
+            workspace_id=1,
+            generation_model=model,
+            duration_seconds=12,
+        )
+    assert "Maximum supported duration: 10s" in str(exc_info.value)
+
+
+def test_veo_stays_capped_at_8s_above_the_field_bound():
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Test",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_3_1_GENERATE_001,
+            duration_seconds=15,
+        )
+    assert "Maximum supported duration: 8s" in str(exc_info.value)
+
+
+def test_omni_1_2_rejects_reference_audio_naming_the_model():
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Test",
+            workspace_id=1,
+            generation_model=OMNI_1_2,
+            reference_audio=ASSET,
+            duration_seconds=5,
+        )
+    assert (
+        "Audio references are not supported by 'gemini-omni-1.2-flash'"
+        in str(exc_info.value)
+    )
+
+
+def test_omni_1_1_still_accepts_reference_audio():
+    dto = CreateVeoDto(
+        prompt="Test",
+        workspace_id=1,
+        generation_model=GenerationModelEnum.GEMINI_OMNI_1_1_FLASH_PREVIEW,
+        reference_audio=ASSET,
+        duration_seconds=5,
+    )
+    assert dto.reference_audio.id == 1
