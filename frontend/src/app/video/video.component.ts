@@ -569,13 +569,15 @@ export class VideoComponent implements OnInit, AfterViewInit {
 
   /**
    * Moves a duration the API would reject for this request to the longest one
-   * it takes: Omni 1.2 allows 15s only for plain text or a start frame, so a 15s
-   * pick must drop to 10s once a reference, an end frame or a source video is
-   * added. Models with no such cap are left alone.
+   * the model takes. Two things shorten the list: Omni 1.2 allows 15s only for
+   * plain text or a start frame, so a 15s pick drops to 10s once a reference,
+   * an end frame or a source video is added; and a switch to a model with a
+   * shorter list (Edit with Omni, a remix, the picker) leaves the old pick
+   * behind. Every model change ends in saveState, so this is the one place.
    */
   private applyDurationLimit(): void {
     const config = this.currentModelConfig();
-    if (!config?.capabilities.maxConstrainedDuration) return;
+    if (!config) return;
     const allowed = durationsFor(config, {
       hasReferences: this.hasReferenceInputs,
       hasSourceVideo: this.hasSourceVideoInput,
@@ -1450,7 +1452,13 @@ export class VideoComponent implements OnInit, AfterViewInit {
     // finished generations the user still wants to see.
   }
 
+  /** Switches mode to match the slots, then saves so the duration follows. */
   private updateModeAndNotify() {
+    this.switchModeToMatchInputs();
+    this.saveState();
+  }
+
+  private switchModeToMatchInputs() {
     if (this._input1IsVideo && this._input2IsVideo) {
       if (this.currentMode !== 'Concatenate Video') {
         this.currentMode = 'Concatenate Video';

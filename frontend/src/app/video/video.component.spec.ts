@@ -537,39 +537,65 @@ describe('VideoComponent', () => {
       component.searchTerm();
     }
 
-    // Each input that takes 15s off the table, as the request would send it.
+    /** Answers the selector dialog with `picked`, as a user's pick would. */
+    function pick(picked: unknown): void {
+      const open = component.dialog.open as jasmine.Spy;
+      (jasmine.isSpy(open)
+        ? open
+        : spyOn(component.dialog, 'open')
+      ).and.returnValue({
+        afterClosed: () => of(picked),
+      } as unknown as MatDialogRef<unknown>);
+    }
+    const asset = (mimeType: string) => ({
+      id: 7,
+      gcsUri: 'gs://bucket/x',
+      mimeType,
+      presignedUrl: 'url',
+    });
+
+    // Each input that takes 15s off the table, added the way the page adds it.
     const capped: [string, () => void][] = [
       [
         'a reference image',
         () => {
           component.currentMode = 'Ingredients to Video';
-          component.referenceImages = [{previewUrl: 'x', sourceAssetId: 1}];
+          pick(asset('image/png'));
+          component.openImageSelectorForReference();
         },
       ],
       [
         'a reference video',
         () => {
           component.currentMode = 'Ingredients to Video';
-          component.referenceVideo = {
-            id: 3,
-            type: 'source_asset',
-            previewUrl: 'v',
-          };
+          pick(asset('video/mp4'));
+          component.openVideoSelectorForReference();
         },
       ],
       [
-        'an end frame',
+        'an end frame asset',
         () => {
           component.currentMode = 'Frames to Video';
-          component.startImageAssetId = 1;
-          component.endImageAssetId = 2;
+          pick(asset('image/png'));
+          component.openImageSelector(2);
+        },
+      ],
+      [
+        'an end frame from the gallery',
+        () => {
+          component.currentMode = 'Frames to Video';
+          pick({
+            mediaItem: {id: 9, mimeType: 'image/png', presignedUrls: ['u']},
+            selectedIndex: 0,
+          });
+          component.openImageSelector(2);
         },
       ],
       [
         'a video to extend',
         () => {
-          component.currentMode = 'Extend Video';
-          component.startImageAssetId = 1;
+          pick(asset('video/mp4'));
+          component.openImageSelector(1);
         },
       ],
     ];
@@ -592,17 +618,18 @@ describe('VideoComponent', () => {
       expect(sentRequest().durationSeconds).withContext('text').toBe(15);
 
       component.currentMode = 'Frames to Video';
-      component.startImageAssetId = 1;
-      component.saveState();
+      pick(asset('image/png'));
+      component.openImageSelector(1);
+      expect(component.searchRequest.durationSeconds).toBe(15);
       submit();
       expect(sentRequest().generationModel).toBe(omni12.value);
       expect(sentRequest().durationSeconds).withContext('start frame').toBe(15);
     });
 
     for (const [input, attach] of capped) {
-      it(`should move a 15s pick to 10s when ${input} is added`, () => {
+      // The user sees the button move when the input lands, not at Generate.
+      it(`should move a 15s pick to 10s as soon as ${input} is added`, () => {
         attach();
-        component.saveState();
 
         expect(component.searchRequest.durationSeconds).toBe(10);
         expect(
@@ -622,19 +649,54 @@ describe('VideoComponent', () => {
       });
     }
 
+    // Slot 1 holding a video flips the page to Extend Video, so only restored
+    // state can have both at once; the request still sends it as a source video.
+    it('should cap a video start frame kept in Frames to Video', () => {
+      component.currentMode = 'Frames to Video';
+      (component as unknown as {_input1IsVideo: boolean})._input1IsVideo = true;
+      component.saveState();
+      expect(component.searchRequest.durationSeconds).toBe(10);
+    });
+
+    // A reference left over from Ingredients to Video is not sent, so it must
+    // not shorten a text request.
+    it('should keep 15s when the reference is not sent in this mode', () => {
+      component.currentMode = 'Ingredients to Video';
+      pick(asset('image/png'));
+      component.openImageSelectorForReference();
+      expect(component.referenceImages.length).toBe(1);
+      component.onModeChanged('Text to Video');
+      component.onDurationChanged(15);
+
+      submit();
+
+      expect(sentRequest().durationSeconds).toBe(15);
+      expect(sentRequest().referenceImages).toBeUndefined();
+    });
+
     it('should keep a duration that still fits when an input is added', () => {
       component.onDurationChanged(6);
       capped[0][1]();
-      component.saveState();
       expect(component.searchRequest.durationSeconds).toBe(6);
     });
 
-    it('should leave the duration alone on a model with no such cap', () => {
-      component.selectModel(veo);
-      component.searchRequest.durationSeconds = 10;
-      capped[0][1]();
-      component.saveState();
+    // Every path to another model ends in selectModel, so the pick has to
+    // follow the model, not only the picker.
+    it('should send at most 10s when Edit with Omni switches 1.2 at 15s to 1.1', () => {
+      component.handleEditWithOmni({
+        mediaItem: {id: 5, presignedThumbnailUrls: ['t']} as never,
+        selectedIndex: 0,
+      });
+
+      expect(component.searchRequest.generationModel).toBe(omni11.value);
       expect(component.searchRequest.durationSeconds).toBe(10);
+      submit();
+      expect(sentRequest().durationSeconds).toBe(10);
+    });
+
+    it('should move a pick the new model does not offer, on a model with no cap', () => {
+      component.selectModel(veo);
+      expect(component.searchRequest.durationSeconds).toBe(8);
     });
 
     describe('audio reference', () => {
