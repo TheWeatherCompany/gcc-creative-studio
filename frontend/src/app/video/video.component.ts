@@ -553,8 +553,13 @@ export class VideoComponent implements OnInit, AfterViewInit {
     );
   }
 
+  /**
+   * A parent item (Edit with Omni) is sent in every mode, and the backend
+   * counts it as a source video: the multi-turn edit sends the parent back.
+   */
   get hasSourceVideoInput(): boolean {
     return (
+      this.parentMediaItemId !== null ||
       this.currentMode === 'Extend Video' ||
       (this.currentMode === 'Frames to Video' && this._input1IsVideo)
     );
@@ -1304,7 +1309,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
       if (result && result.id) {
         this.processInput(result, data.num);
         this.updateModeAndNotify();
-        this.saveState();
       }
     });
   }
@@ -1975,7 +1979,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
       this.currentMode = 'Ingredients to Video';
     }
     this.updateModeAndNotify();
-    this.saveState();
   }
 
   promptText = signal<string>('');

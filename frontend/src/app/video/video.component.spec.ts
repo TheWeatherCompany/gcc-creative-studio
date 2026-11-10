@@ -694,6 +694,28 @@ describe('VideoComponent', () => {
       expect(sentRequest().durationSeconds).toBe(10);
     });
 
+    // The backend sends the parent back as input on a multi-turn edit, so a
+    // parent caps 1.2 at 10s in every mode, even after its video is removed.
+    it('should cap 1.2 at 10s once Edit with Omni has set a parent item', () => {
+      component.handleEditWithOmni({
+        mediaItem: {id: 5, presignedThumbnailUrls: ['t']} as never,
+        selectedIndex: 0,
+      });
+      component.clearReferenceVideo(new Event('click'));
+      component.onModeChanged('Text to Video');
+      component.selectModel(omni12);
+      fixture.detectChanges();
+
+      const box = fixture.nativeElement.querySelector('app-flow-prompt-box');
+      expect(box.hasSourceVideoInput).withContext('offered list').toBeTrue();
+      component.onDurationChanged(15);
+      expect(component.searchRequest.durationSeconds).toBe(10);
+      submit();
+      expect(sentRequest().generationModel).toBe(omni12.value);
+      expect(sentRequest().parentMediaItemId).toBe(5);
+      expect(sentRequest().durationSeconds).toBe(10);
+    });
+
     it('should move a pick the new model does not offer, on a model with no cap', () => {
       component.selectModel(veo);
       expect(component.searchRequest.durationSeconds).toBe(8);
