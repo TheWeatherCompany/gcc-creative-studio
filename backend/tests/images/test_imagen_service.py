@@ -642,20 +642,26 @@ def test_process_image_in_background_sync(
 @patch("src.common.media_utils.generate_image_thumbnail_from_gcs")
 @patch("src.database.WorkerDatabase")
 @patch("src.images.imagen_service.GenAIModelSetup.init")
+@pytest.mark.parametrize(
+    "model",
+    [
+        GenerationModelEnum.GEMINI_3_PRO_IMAGE_PREVIEW,
+        # Left out of is_gemini_image_model it would go to Imagen instead.
+        GenerationModelEnum.GEMINI_NANO_BANANA_2_1,
+    ],
+)
 def test_process_image_in_background_sync_gemini_model(
     mock_genai_init,
     mock_worker_db_class,
     mock_thumb_mu,
     mock_thumb_is,
+    model,
     sample_create_imagen_dto,
     sample_user,
 ):
     _ = (mock_thumb_mu, mock_thumb_is)
-    from src.common.base_dto import GenerationModelEnum
 
-    sample_create_imagen_dto.generation_model = (
-        GenerationModelEnum.GEMINI_3_PRO_IMAGE_PREVIEW
-    )
+    sample_create_imagen_dto.generation_model = model
     sample_create_imagen_dto.google_search = False
     sample_create_imagen_dto.resolution = "1024x1024"
 
@@ -1477,3 +1483,43 @@ def test_gemini_generate_image_forwards_temperature_image_to_image():
     # genuinely on the image-to-image branch and not just text-to-image.
     parts = call.kwargs["contents"][0].parts
     assert any(getattr(p, "file_data", None) is not None for p in parts)
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        (GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE, 0.2),
+        # The API errors on temperature for this model, and old clients and
+        # persisted UI state still send one.
+        (GenerationModelEnum.GEMINI_NANO_BANANA_2_1, None),
+    ],
+)
+def test_gemini_generate_image_temperature_depends_on_model(model, expected):
+    """Nano Banana 2 gets the temperature; 2.1 never does."""
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = MagicMock(candidates=[])
+
+    gemini_generate_image(
+        gcs_service=MagicMock(),
+        vertexai_client=mock_client,
+        prompt="A cat",
+        model=model,
+        bucket_name="bucket",
+        temperature=0.2,
+    )
+
+    config = mock_client.models.generate_content.call_args.kwargs["config"]
+    assert config.temperature == expected
+
+
+def test_create_imagen_dto_accepts_nano_banana_2_1_edit_with_14_inputs():
+    """2.1 takes what Nano Banana 2 takes: 14 inputs and the wide ratios."""
+    dto = CreateImagenDto(
+        prompt="Blend these",
+        workspace_id=1,
+        generation_model=GenerationModelEnum.GEMINI_NANO_BANANA_2_1,
+        source_asset_ids=list(range(1, 15)),
+        aspect_ratio=AspectRatioEnum.RATIO_1_8,
+        resolution="4K",
+    )
+    assert dto.generation_model == GenerationModelEnum.GEMINI_NANO_BANANA_2_1

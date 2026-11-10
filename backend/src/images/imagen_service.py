@@ -518,8 +518,10 @@ def gemini_generate_image(
                 image_config=image_config,
                 tools=tools if tools else None,
                 # Omitted when unset so the model's own default applies rather
-                # than us pinning one.
-                temperature=temperature,
+                # than us pinning one, and for models whose API errors on it.
+                temperature=(
+                    temperature if model.supports_sampling_params else None
+                ),
             )
             response: types.GenerateContentResponse = (
                 vertexai_client.models.generate_content(
