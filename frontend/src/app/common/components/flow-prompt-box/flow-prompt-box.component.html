@@ -384,7 +384,7 @@
 
           <!-- Audio Reference Slot: as the video slot above -->
           <div
-            *ngIf="mode === 'Ingredients to Video' && (supportsReferenceMedia || referenceAudio)"
+            *ngIf="mode === 'Ingredients to Video' && (supportsAudioReference || referenceAudio)"
             class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex flex-col items-center justify-center"
             (click)="!referenceAudio && openAudioSelectorForReference.emit()"
           >

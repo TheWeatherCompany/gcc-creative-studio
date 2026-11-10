@@ -33,6 +33,7 @@ import {ReferenceImage} from '../../models/search.model';
 import {
   GenerationModelConfig,
   isOmniModelValue,
+  durationsFor,
 } from '../../config/model-config';
 import {MatIconModule} from '@angular/material/icon';
 import {CommonModule} from '@angular/common';
@@ -182,6 +183,14 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   @Input() referenceImagesType: 'ASSET' | 'STYLE' = 'ASSET';
   @Input() referenceVideo: any | null = null;
   @Input() referenceAudio: any | null = null;
+  /**
+   * What the host's request carries that can cap the duration on some models
+   * (see maxConstrainedDuration). The host decides: it knows which inputs the
+   * request sends in the current mode.
+   */
+  @Input() hasReferenceInputs = false;
+  @Input() hasSourceVideoInput = false;
+  @Input() hasEndFrameInput = false;
   /** null means "use the model's default" rather than a chosen value. */
   @Input() temperature: number | null = null;
 
@@ -322,6 +331,12 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   get supportsReferenceMedia(): boolean {
     return !!this.getSelectedModelObject()?.capabilities
       ?.supportsReferenceMedia;
+  }
+
+  /** Whether the active model accepts a reference audio. */
+  get supportsAudioReference(): boolean {
+    return !!this.getSelectedModelObject()?.capabilities
+      ?.supportsAudioReference;
   }
 
   /** Whether the active model accepts a sampling temperature. */
@@ -548,13 +563,18 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
 
   getSelectedModelDurations(model?: any): number[] {
     const activeModel = model || this.getSelectedModelObject();
+    const durations = durationsFor(activeModel, {
+      hasReferences: this.hasReferenceInputs,
+      hasSourceVideo: this.hasSourceVideoInput,
+      hasEndFrame: this.hasEndFrameInput,
+    });
     // resolutions above 1K support only longest duration
     if (this.selectedResolution() !== '1K') {
-      const longest = activeModel?.capabilities?.supportedDurations?.at(-1);
+      const longest = durations.at(-1);
       return longest ? [longest] : [];
     }
 
-    return activeModel?.capabilities?.supportedDurations ?? [];
+    return durations;
   }
 
   private updateSupportedResolutions(model?: any, modeChanged = false) {

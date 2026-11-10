@@ -44,6 +44,7 @@ import {
   MODEL_CONFIGS,
   DEFAULT_OUTPUTS,
   clampOutputs,
+  durationsFor,
   maxOutputsFor,
 } from '../common/config/model-config';
 import {JobStatus, MediaItem} from '../common/models/media-item.model';
@@ -335,6 +336,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
   }
 
   public saveState() {
+    this.applyDurationLimit();
     this.videoStateService.updateState({
       prompt: this.searchRequest.prompt,
       aspectRatio: this.searchRequest.aspectRatio,
@@ -538,6 +540,61 @@ export class VideoComponent implements OnInit, AfterViewInit {
   }
 
   /**
+   * The three inputs below mirror what searchTerm sends in the current mode;
+   * an input that is attached but not sent (a reference left over from another
+   * mode) does not count.
+   */
+  get hasReferenceInputs(): boolean {
+    return (
+      this.currentMode === 'Ingredients to Video' &&
+      (this.referenceImages.length > 0 ||
+        !!this.referenceVideo ||
+        !!this.referenceAudio)
+    );
+  }
+
+  /**
+   * A parent item (Edit with Omni) is sent in every mode, and the backend
+   * counts it as a source video: the multi-turn edit sends the parent back.
+   */
+  get hasSourceVideoInput(): boolean {
+    return (
+      this.parentMediaItemId !== null ||
+      this.currentMode === 'Extend Video' ||
+      (this.currentMode === 'Frames to Video' && this._input1IsVideo)
+    );
+  }
+
+  get hasEndFrameInput(): boolean {
+    return (
+      this.currentMode === 'Frames to Video' &&
+      (this.endImageAssetId !== null || !!this.sourceMediaItems[1])
+    );
+  }
+
+  /**
+   * Moves a duration the API would reject for this request to the longest one
+   * the model takes. Two things shorten the list: Omni 1.2 allows 15s only for
+   * plain text or a start frame, so a 15s pick drops to 10s once a reference,
+   * an end frame or a source video is added; and a switch to a model with a
+   * shorter list (Edit with Omni, a remix, the picker) leaves the old pick
+   * behind. Every model change ends in saveState, so this is the one place.
+   */
+  private applyDurationLimit(): void {
+    const config = this.currentModelConfig();
+    if (!config) return;
+    const allowed = durationsFor(config, {
+      hasReferences: this.hasReferenceInputs,
+      hasSourceVideo: this.hasSourceVideoInput,
+      hasEndFrame: this.hasEndFrameInput,
+    });
+    const longest = allowed.at(-1);
+    if (longest && !allowed.includes(this.searchRequest.durationSeconds)) {
+      this.searchRequest.durationSeconds = longest;
+    }
+  }
+
+  /**
    * The attached Ingredients to Video input that `model` cannot take, or null
    * if it can take them all.
    */
@@ -551,6 +608,9 @@ export class VideoComponent implements OnInit, AfterViewInit {
       !capabilities.supportsReferenceMedia
     ) {
       return 'a reference video or audio';
+    }
+    if (this.referenceAudio && !capabilities.supportsAudioReference) {
+      return 'a reference audio';
     }
     if (
       this.referenceImages.length > 0 &&
@@ -867,6 +927,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
     // Some paths (remix, templates) set the model directly, so clamp here too.
     this.applyOutputsLimit();
     this.applyResolutionLimit();
+    this.applyDurationLimit();
     const payload: VeoRequest = {
       ...this.searchRequest,
       startImageAssetId:
@@ -1248,7 +1309,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
       if (result && result.id) {
         this.processInput(result, data.num);
         this.updateModeAndNotify();
-        this.saveState();
       }
     });
   }
@@ -1396,7 +1456,13 @@ export class VideoComponent implements OnInit, AfterViewInit {
     // finished generations the user still wants to see.
   }
 
+  /** Switches mode to match the slots, then saves so the duration follows. */
   private updateModeAndNotify() {
+    this.switchModeToMatchInputs();
+    this.saveState();
+  }
+
+  private switchModeToMatchInputs() {
     if (this._input1IsVideo && this._input2IsVideo) {
       if (this.currentMode !== 'Concatenate Video') {
         this.currentMode = 'Concatenate Video';
@@ -1913,7 +1979,6 @@ export class VideoComponent implements OnInit, AfterViewInit {
       this.currentMode = 'Ingredients to Video';
     }
     this.updateModeAndNotify();
-    this.saveState();
   }
 
   promptText = signal<string>('');

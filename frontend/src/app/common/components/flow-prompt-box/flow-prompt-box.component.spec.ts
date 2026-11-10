@@ -263,6 +263,88 @@ describe('FlowPromptBoxComponent', () => {
     });
   });
 
+  describe('Omni 1.2 Flash', () => {
+    const omni11 = MODEL_CONFIGS.find(
+      m => m.value === 'gemini-omni-1.1-flash-preview',
+    )!;
+    const omni12 = MODEL_CONFIGS.find(
+      m => m.value === 'gemini-omni-1.2-flash',
+    )!;
+    const veo = MODEL_CONFIGS.find(m => m.value === 'veo-3.1-generate-001')!;
+
+    beforeEach(() => {
+      component.generationModels = MODEL_CONFIGS;
+      component.selectedGenerationModel = omni12.viewValue;
+      component.selectedResolution.set('1K');
+    });
+
+    it('should offer up to 15s with no inputs, with a start frame alone, or in Text to Video', () => {
+      component.mode = 'Frames to Video';
+      component.image1Preview = 'start.png';
+      expect(component.getSelectedModelDurations()).toEqual([
+        4, 6, 8, 10, 12, 15,
+      ]);
+    });
+
+    const capped: [
+      string,
+      'hasReferenceInputs' | 'hasSourceVideoInput' | 'hasEndFrameInput',
+    ][] = [
+      ['a reference', 'hasReferenceInputs'],
+      ['a source video', 'hasSourceVideoInput'],
+      ['an end frame', 'hasEndFrameInput'],
+    ];
+    for (const [input, flag] of capped) {
+      it(`should offer only 10s or less with ${input}`, () => {
+        component[flag] = true;
+        expect(component.getSelectedModelDurations()).toEqual([4, 6, 8, 10]);
+      });
+    }
+
+    it('should keep the cap when a resolution above 1K collapses the list', () => {
+      component.selectedResolution.set('2K');
+      component.hasReferenceInputs = true;
+      expect(component.getSelectedModelDurations()).toEqual([10]);
+    });
+
+    it('should not narrow the durations of a model with no cap', () => {
+      component.hasReferenceInputs = true;
+      component.hasSourceVideoInput = true;
+      component.hasEndFrameInput = true;
+      expect(component.getSelectedModelDurations(omni11)).toEqual([
+        4, 6, 8, 10,
+      ]);
+      expect(component.getSelectedModelDurations(veo)).toEqual([4, 6, 8]);
+    });
+
+    it('should show a reference video slot but no audio slot for 1.2, and both for 1.1', () => {
+      const slots = () => {
+        component.mode = 'Ingredients to Video';
+        fixture.detectChanges();
+        const text = fixture.nativeElement.textContent as string;
+        return [text.includes('Video Ref'), text.includes('Audio Ref')];
+      };
+
+      expect(slots()).withContext('1.2').toEqual([true, false]);
+
+      component.selectedGenerationModel = omni11.viewValue;
+      expect(slots()).withContext('1.1').toEqual([true, true]);
+    });
+
+    // So a user who switched from 1.1 can still remove it.
+    it('should keep an attached audio reference showing on 1.2', () => {
+      component.mode = 'Ingredients to Video';
+      component.referenceAudio = {
+        id: 4,
+        type: 'source_asset',
+        name: 'carried-over.wav',
+      };
+      fixture.detectChanges();
+      expect(component.supportsAudioReference).toBeFalse();
+      expect(fixture.nativeElement.textContent).toContain('carried-over.wav');
+    });
+  });
+
   describe('Video to Image / Video Reference Support', () => {
     const nanoBanana2 = MODEL_CONFIGS.find(
       m => m.value === 'gemini-3.1-flash-image',
