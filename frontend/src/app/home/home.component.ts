@@ -701,6 +701,11 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       this.searchRequest.googleSearch = false;
     }
 
+    // A temperature saved for another model would make the API reject this one.
+    if (!capabilities.supportsTemperature) {
+      this.searchRequest.temperature = undefined;
+    }
+
     this.applyOutputsLimit();
     this.saveState();
   }

@@ -357,6 +357,26 @@ describe('FeedComposerComponent', () => {
       expect(imageState().getState().googleSearch).toBeFalse();
     });
 
+    it('sends no temperature once Nano Banana 2.1 is picked, but keeps it for Nano Banana 2', () => {
+      imageState().updateState({
+        model: 'gemini-3.1-flash-image',
+        temperature: 0.7,
+      });
+      create();
+      selectModel('gemini-3.1-flash-lite-image');
+      expect(imageState().getState().temperature).toBe(0.7);
+
+      // The API rejects a temperature for 2.1, and the box hides the control
+      // so a saved one could never be cleared by hand.
+      selectModel('gemini-nano-banana-2.1');
+      type('a supercell');
+      generate();
+
+      const req = http.expectOne(imagesUrl);
+      expect(req.request.body.generationModel).toBe('gemini-nano-banana-2.1');
+      expect(req.request.body.temperature).toBeUndefined();
+    });
+
     it('turns audio back on when a video model is picked, as the video page does', () => {
       videoState().updateState({generateAudio: false});
       create();

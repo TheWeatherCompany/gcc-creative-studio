@@ -255,6 +255,32 @@ describe('HomeComponent', () => {
     expect(mockImageStateService.updateState).toHaveBeenCalled();
   });
 
+  it('should drop a saved temperature when selecting Nano Banana 2.1 but keep it for Nano Banana 2', () => {
+    const pick = (value: string) =>
+      component.selectModel(MODEL_CONFIGS.find(m => m.value === value)!);
+    component.searchRequest.temperature = 0.7;
+
+    pick('gemini-3.1-flash-image');
+    expect(component.searchRequest.temperature).toBe(0.7);
+
+    // The API rejects a temperature for 2.1.
+    pick('gemini-nano-banana-2.1');
+    expect(component.searchRequest.temperature).toBeUndefined();
+  });
+
+  it('should show the Google Search toggle for every model that supports it', () => {
+    const shows = (value: string) => {
+      component.selectModel(MODEL_CONFIGS.find(m => m.value === value)!);
+      fixture.detectChanges();
+      return (fixture.nativeElement.textContent as string).includes(
+        'Google Search',
+      );
+    };
+    expect(shows('gemini-nano-banana-2.1')).toBeTrue();
+    expect(shows('gemini-3.1-flash-image')).toBeTrue();
+    expect(shows('gemini-2.5-flash-image')).toBeFalse();
+  });
+
   it('should update searchRequest and save state when selecting an aspect ratio', () => {
     const ratio = {value: '16:9', viewValue: '16:9 \n Horizontal'};
     component.selectAspectRatio(ratio);
