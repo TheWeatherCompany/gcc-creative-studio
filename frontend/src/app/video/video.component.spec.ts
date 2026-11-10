@@ -523,4 +523,144 @@ describe('VideoComponent', () => {
       }
     });
   });
+
+  describe('Omni 1.2 Flash', () => {
+    const model = (value: string) =>
+      MODEL_CONFIGS.find(m => m.value === value)!;
+    const omni11 = model('gemini-omni-1.1-flash-preview');
+    const omni12 = model('gemini-omni-1.2-flash');
+    const veo = model('veo-3.1-generate-001');
+    const sentRequest = () => startVeoGeneration.calls.mostRecent().args[0];
+
+    function submit(): void {
+      component.searchRequest.prompt = 'a test prompt';
+      component.searchTerm();
+    }
+
+    // Each input that takes 15s off the table, as the request would send it.
+    const capped: [string, () => void][] = [
+      [
+        'a reference image',
+        () => {
+          component.currentMode = 'Ingredients to Video';
+          component.referenceImages = [{previewUrl: 'x', sourceAssetId: 1}];
+        },
+      ],
+      [
+        'a reference video',
+        () => {
+          component.currentMode = 'Ingredients to Video';
+          component.referenceVideo = {
+            id: 3,
+            type: 'source_asset',
+            previewUrl: 'v',
+          };
+        },
+      ],
+      [
+        'an end frame',
+        () => {
+          component.currentMode = 'Frames to Video';
+          component.startImageAssetId = 1;
+          component.endImageAssetId = 2;
+        },
+      ],
+      [
+        'a video to extend',
+        () => {
+          component.currentMode = 'Extend Video';
+          component.startImageAssetId = 1;
+        },
+      ],
+    ];
+
+    beforeEach(() => {
+      setAppInjector(TestBed.inject(Injector));
+      component.selectModel(omni12);
+      component.onDurationChanged(15);
+    });
+
+    it('should list 1.1 first, so remix and Edit with Omni stay on 1.1', () => {
+      (
+        component as unknown as {applyRemixState(state: unknown): void}
+      ).applyRemixState({generationModel: 'gemini-omni', isOmniMode: true});
+      expect(component.searchRequest.generationModel).toBe(omni11.value);
+    });
+
+    it('should send 15s with no inputs, or with a start frame alone', () => {
+      submit();
+      expect(sentRequest().durationSeconds).withContext('text').toBe(15);
+
+      component.currentMode = 'Frames to Video';
+      component.startImageAssetId = 1;
+      component.saveState();
+      submit();
+      expect(sentRequest().generationModel).toBe(omni12.value);
+      expect(sentRequest().durationSeconds).withContext('start frame').toBe(15);
+    });
+
+    for (const [input, attach] of capped) {
+      it(`should move a 15s pick to 10s when ${input} is added`, () => {
+        attach();
+        component.saveState();
+
+        expect(component.searchRequest.durationSeconds).toBe(10);
+        expect(
+          TestBed.inject(VideoStateService).updateState,
+        ).toHaveBeenCalledWith(jasmine.objectContaining({durationSeconds: 10}));
+      });
+
+      // A saved 15s comes back with the saved inputs, and nothing saves before
+      // the user hits Generate.
+      it(`should send 10s, not a restored 15s, with ${input}`, () => {
+        attach();
+        component.searchRequest.durationSeconds = 15;
+
+        submit();
+
+        expect(sentRequest().durationSeconds).toBe(10);
+      });
+    }
+
+    it('should keep a duration that still fits when an input is added', () => {
+      component.onDurationChanged(6);
+      capped[0][1]();
+      component.saveState();
+      expect(component.searchRequest.durationSeconds).toBe(6);
+    });
+
+    it('should leave the duration alone on a model with no such cap', () => {
+      component.selectModel(veo);
+      component.searchRequest.durationSeconds = 10;
+      capped[0][1]();
+      component.saveState();
+      expect(component.searchRequest.durationSeconds).toBe(10);
+    });
+
+    describe('audio reference', () => {
+      beforeEach(() => {
+        component.currentMode = 'Ingredients to Video';
+        component.referenceAudio = {id: 4, type: 'source_asset', name: 'a'};
+      });
+
+      it('should block an audio reference carried over from 1.1 instead of sending it', () => {
+        component.selectModel(omni11);
+        expect(component.modelNotice).toBeNull();
+
+        component.selectModel(omni12);
+        expect(component.modelNotice?.blocking).toBeTrue();
+        expect(component.modelNotice?.text).toContain('reference audio');
+        submit();
+        expect(startVeoGeneration).not.toHaveBeenCalled();
+      });
+
+      it('should still send an audio reference on 1.1', () => {
+        component.selectModel(omni11);
+        submit();
+        expect(sentRequest().referenceAudio).toEqual(
+          jasmine.objectContaining({id: 4}),
+        );
+      });
+    });
+  });
 });
