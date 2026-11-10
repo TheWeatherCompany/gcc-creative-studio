@@ -279,8 +279,10 @@ class CreateVeoDto(BaseDto):
         # Validate model-specific duration limits
         max_duration = model.max_video_duration(
             has_any_references=has_any_references,
+            # A parent media item sends its video back as input, like a source video.
             has_source_video=bool(self.source_video_asset_id)
-            or source_video_role_present,
+            or source_video_role_present
+            or self.parent_media_item_id is not None,
             has_end_frame=bool(self.end_image_asset_id)
             or end_frame_role_present,
         )

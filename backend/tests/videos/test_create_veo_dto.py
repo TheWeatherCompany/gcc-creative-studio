@@ -238,6 +238,7 @@ CAPPING_INPUTS = {
     "reference image": {"reference_images": [ReferenceImageDto(asset_id=1)]},
     "reference video": {"reference_video": ASSET},
     "source video": {"source_video_asset_id": ASSET},
+    "parent media item": {"parent_media_item_id": 1},
     "end frame": {"end_image_asset_id": ASSET},
     "end frame role": {
         "source_media_items": [
