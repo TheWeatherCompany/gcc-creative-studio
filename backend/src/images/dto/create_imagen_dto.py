@@ -141,6 +141,7 @@ class CreateImagenDto(BaseDto):
             GenerationModelEnum.GEMINI_3_PRO_IMAGE,
             GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE_PREVIEW,
             GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE,
+            GenerationModelEnum.GEMINI_NANO_BANANA_2_1,
             GenerationModelEnum.GEMINI_3_1_FLASH_LITE_IMAGE,
         ]
         if value not in valid_generation_models:

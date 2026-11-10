@@ -53,6 +53,7 @@ class GenerationModelEnum(str, Enum):
     GEMINI_3_PRO_PREVIEW = "gemini-3-pro-preview"
     GEMINI_3_PRO_IMAGE = "gemini-3-pro-image"
     GEMINI_3_1_FLASH_IMAGE = "gemini-3.1-flash-image"
+    GEMINI_NANO_BANANA_2_1 = "gemini-nano-banana-2.1"
     GEMINI_3_1_FLASH_LITE_IMAGE = "gemini-3.1-flash-lite-image"
     GEMINI_3_FLASH_PREVIEW = "gemini-3-flash-preview"
     VTO = "virtual-try-on-001"
@@ -115,8 +116,14 @@ class GenerationModelEnum(str, Enum):
             GenerationModelEnum.GEMINI_3_PRO_IMAGE,
             GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE_PREVIEW,
             GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE,
+            GenerationModelEnum.GEMINI_NANO_BANANA_2_1,
             GenerationModelEnum.GEMINI_3_1_FLASH_LITE_IMAGE,
         ]
+
+    @property
+    def supports_sampling_params(self) -> bool:
+        """Returns False if the API errors on temperature, seed, topK, topP."""
+        return self != GenerationModelEnum.GEMINI_NANO_BANANA_2_1
 
     @property
     def is_omni(self) -> bool:
@@ -133,6 +140,7 @@ class GenerationModelEnum(str, Enum):
         if self in [
             GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE_PREVIEW,
             GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE,
+            GenerationModelEnum.GEMINI_NANO_BANANA_2_1,
             GenerationModelEnum.GEMINI_3_1_FLASH_LITE_IMAGE,
         ]:
             return [
@@ -180,6 +188,7 @@ class GenerationModelEnum(str, Enum):
             GenerationModelEnum.GEMINI_3_PRO_IMAGE,
             GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE_PREVIEW,
             GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE,
+            GenerationModelEnum.GEMINI_NANO_BANANA_2_1,
             GenerationModelEnum.GEMINI_3_1_FLASH_LITE_IMAGE,
         ]:
             return 14

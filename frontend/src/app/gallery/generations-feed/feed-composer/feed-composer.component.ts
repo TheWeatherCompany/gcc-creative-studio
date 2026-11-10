@@ -261,6 +261,9 @@ export class FeedComposerComponent {
     if (!capabilities.supportsGoogleSearch) {
       this.imageState.updateState({googleSearch: false});
     }
+    if (!capabilities.supportsTemperature) {
+      this.imageState.updateState({temperature: null});
+    }
     this.references = this.references.slice(0, capabilities.maxReferenceImages);
   }
 

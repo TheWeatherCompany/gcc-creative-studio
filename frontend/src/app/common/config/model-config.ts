@@ -39,8 +39,9 @@ export interface ModelCapability {
   supportsSeed?: boolean;
   supportsVideoReference?: boolean;
   /**
-   * Whether sampling temperature can be set. Gemini image models accept it;
-   * Imagen does not expose it, and Gemini Omni rejects it outright.
+   * Whether sampling temperature can be set. Most Gemini image models accept
+   * it; Nano Banana 2.1 rejects it, Imagen does not expose it, and Gemini Omni
+   * rejects it outright.
    */
   supportsTemperature?: boolean;
   /** Most outputs one prompt may ask for. Absent means MAX_OUTPUTS. */
@@ -130,6 +131,38 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       supportedResolutions: ['1K', '2K', '4K'],
       supportedDurations: [],
       supportsTemperature: true,
+      supportsGoogleSearch: true,
+      supportsVideoReference: true,
+    },
+  },
+  {
+    value: 'gemini-nano-banana-2.1',
+    viewValue: 'Nano Banana 2.1',
+    type: 'IMAGE',
+    imageSrc: 'assets/images/banana-peel.png',
+    isImage: true,
+    capabilities: {
+      supportedModes: ['Text to Image', 'Ingredients to Image'],
+      maxReferenceImages: 14,
+      supportedAspectRatios: [
+        '1:1',
+        '16:9',
+        '9:16',
+        '3:4',
+        '4:3',
+        '2:3',
+        '3:2',
+        '4:5',
+        '5:4',
+        '21:9',
+        '1:4',
+        '4:1',
+        '1:8',
+        '8:1',
+      ],
+      supportedResolutions: ['1K', '2K', '4K'],
+      supportedDurations: [],
+      // The API errors on temperature, seed, topK and topP for this model.
       supportsGoogleSearch: true,
       supportsVideoReference: true,
     },
