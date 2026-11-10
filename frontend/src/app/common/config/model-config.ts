@@ -51,6 +51,17 @@ export interface ModelCapability {
    * them to Veo.
    */
   supportsReferenceMedia?: boolean;
+  /**
+   * Accepts a reference audio, on top of supportsReferenceMedia. Omni 1.2
+   * takes a reference video but its API has no audio input.
+   */
+  supportsAudioReference?: boolean;
+  /**
+   * Longest duration once the request carries a reference, a source video or
+   * an end frame; the API takes longer clips only for plain text or a start
+   * frame. Absent means supportedDurations is not narrowed.
+   */
+  maxConstrainedDuration?: number;
 }
 
 export interface GenerationModelConfig {
@@ -70,10 +81,35 @@ export const OMNI_MODEL_VALUES: readonly string[] = [
   'gemini-omni-generate-preview',
   'gemini-omni-flash-preview',
   'gemini-omni-1.1-flash-preview',
+  'gemini-omni-1.2-flash',
 ];
 
 export function isOmniModelValue(value?: string | null): boolean {
   return !!value && OMNI_MODEL_VALUES.includes(value);
+}
+
+/** What a video request carries that can shorten the longest allowed clip. */
+export interface DurationInputs {
+  /** A reference image, video or audio; a start frame alone is not one. */
+  hasReferences?: boolean;
+  hasSourceVideo?: boolean;
+  hasEndFrame?: boolean;
+}
+
+/** The durations `model` offers for a request carrying `inputs`. */
+export function durationsFor(
+  model: GenerationModelConfig | undefined,
+  inputs: DurationInputs = {},
+): number[] {
+  const durations = model?.capabilities?.supportedDurations ?? [];
+  const cap = model?.capabilities?.maxConstrainedDuration;
+  if (
+    cap === undefined ||
+    !(inputs.hasReferences || inputs.hasSourceVideo || inputs.hasEndFrame)
+  ) {
+    return durations;
+  }
+  return durations.filter(d => d <= cap);
 }
 
 /** The backend accepts 1 to 4 outputs per request (number_of_media). */
@@ -351,6 +387,29 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       supportedAspectRatios: ['16:9', '9:16'],
       supportedResolutions: [],
       supportedDurations: [4, 6, 8, 10],
+      supportsAudio: true,
+      supportsReferenceMedia: true,
+      supportsAudioReference: true,
+    },
+  },
+  // After 1.1: remix and Edit with Omni resolve the 'gemini-omni' prefix to the
+  // first match in this list.
+  {
+    value: 'gemini-omni-1.2-flash',
+    viewValue: 'Gemini Omni 1.2 Flash',
+    type: 'VIDEO',
+    icon: 'layers',
+    capabilities: {
+      supportedModes: [
+        'Text to Video',
+        'Ingredients to Video',
+        'Frames to Video',
+      ],
+      maxReferenceImages: 3,
+      supportedAspectRatios: ['16:9', '9:16'],
+      supportedResolutions: [],
+      supportedDurations: [4, 6, 8, 10, 12, 15],
+      maxConstrainedDuration: 10,
       supportsAudio: true,
       supportsReferenceMedia: true,
     },

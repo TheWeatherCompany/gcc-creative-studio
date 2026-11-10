@@ -44,6 +44,7 @@ import {
   MODEL_CONFIGS,
   DEFAULT_OUTPUTS,
   clampOutputs,
+  durationsFor,
   maxOutputsFor,
 } from '../common/config/model-config';
 import {JobStatus, MediaItem} from '../common/models/media-item.model';
@@ -335,6 +336,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
   }
 
   public saveState() {
+    this.applyDurationLimit();
     this.videoStateService.updateState({
       prompt: this.searchRequest.prompt,
       aspectRatio: this.searchRequest.aspectRatio,
@@ -538,6 +540,54 @@ export class VideoComponent implements OnInit, AfterViewInit {
   }
 
   /**
+   * The three inputs below mirror what searchTerm sends in the current mode;
+   * an input that is attached but not sent (a reference left over from another
+   * mode) does not count.
+   */
+  get hasReferenceInputs(): boolean {
+    return (
+      this.currentMode === 'Ingredients to Video' &&
+      (this.referenceImages.length > 0 ||
+        !!this.referenceVideo ||
+        !!this.referenceAudio)
+    );
+  }
+
+  get hasSourceVideoInput(): boolean {
+    return (
+      this.currentMode === 'Extend Video' ||
+      (this.currentMode === 'Frames to Video' && this._input1IsVideo)
+    );
+  }
+
+  get hasEndFrameInput(): boolean {
+    return (
+      this.currentMode === 'Frames to Video' &&
+      (this.endImageAssetId !== null || !!this.sourceMediaItems[1])
+    );
+  }
+
+  /**
+   * Moves a duration the API would reject for this request to the longest one
+   * it takes: Omni 1.2 allows 15s only for plain text or a start frame, so a 15s
+   * pick must drop to 10s once a reference, an end frame or a source video is
+   * added. Models with no such cap are left alone.
+   */
+  private applyDurationLimit(): void {
+    const config = this.currentModelConfig();
+    if (!config?.capabilities.maxConstrainedDuration) return;
+    const allowed = durationsFor(config, {
+      hasReferences: this.hasReferenceInputs,
+      hasSourceVideo: this.hasSourceVideoInput,
+      hasEndFrame: this.hasEndFrameInput,
+    });
+    const longest = allowed.at(-1);
+    if (longest && !allowed.includes(this.searchRequest.durationSeconds)) {
+      this.searchRequest.durationSeconds = longest;
+    }
+  }
+
+  /**
    * The attached Ingredients to Video input that `model` cannot take, or null
    * if it can take them all.
    */
@@ -551,6 +601,9 @@ export class VideoComponent implements OnInit, AfterViewInit {
       !capabilities.supportsReferenceMedia
     ) {
       return 'a reference video or audio';
+    }
+    if (this.referenceAudio && !capabilities.supportsAudioReference) {
+      return 'a reference audio';
     }
     if (
       this.referenceImages.length > 0 &&
@@ -867,6 +920,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
     // Some paths (remix, templates) set the model directly, so clamp here too.
     this.applyOutputsLimit();
     this.applyResolutionLimit();
+    this.applyDurationLimit();
     const payload: VeoRequest = {
       ...this.searchRequest,
       startImageAssetId:
