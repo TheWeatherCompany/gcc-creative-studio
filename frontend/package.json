@@ -95,7 +95,7 @@
     "d3": "^7.9.0",
     "file-saver": "^2.0.5",
     "ngx-image-cropper": "^9.1.5",
-    "ngx-markdown": "^20.1.0",
+    "ngx-markdown": "^22.1.1",
     "papaparse": "^5.5.3",
     "photoswipe": "^5.4.4",
     "rxfire": "^6.0.5",
